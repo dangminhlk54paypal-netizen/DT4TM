@@ -68,7 +68,8 @@ payload_model:
   k_W_per_mK: 50.0       # Thermal conductivity (e.g., carbon steel)
   sigma_S_per_m: 6.0e6   # Electrical conductivity (for computing eddy currents on payload)
   mu_r: 100.0            # Magnetic permeability (if magnetic material)
-  # rho, cp will be added later when solving transient simulations
+  rho_kg_per_m3: 7850.0  # carbon steel density (for thermal capacity in the demo)
+  cp_J_per_kgK: 490.0    # carbon steel specific heat
 
 # --- Thermal boundary conditions ---
 # h_bottom > h_top because hot air from coils below enhances convection

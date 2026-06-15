@@ -12,7 +12,7 @@ Region mapping (indicative, by radius/height of each triangle centroid):
     0 plate (top disc)   1 inner coil   2 outer coil   3 iron core   4 structure/base
 """
 from __future__ import annotations
-import sys, os, struct, base64, json, math
+import sys, os, struct, base64, json, math, copy
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -79,6 +79,22 @@ def physics_params(cfg):
         Vc = c["turns"] * (2 * math.pi * r_mean) * A_wire
         return 8960.0 * 385.0 * Vc
 
+    # --- payload (object sitting on the plate): one extra EM solve with the
+    #     payload enabled at a reference radius, so the browser can scale it.
+    #     Thin-disc eddy loss ~ R^4, thermal capacity & convection area ~ R^2.
+    pl = cfg.raw.get("payload_model", {})
+    R_ref_pl = float(pl.get("radius_mm", 40.0))
+    t_pl     = float(pl.get("thickness_mm", 5.0))
+    rho_pl   = float(pl.get("rho_kg_per_m3", 7850.0))
+    cp_pl    = float(pl.get("cp_J_per_kgK", 490.0))
+    cfg_pl = copy.deepcopy(cfg)
+    cfg_pl.raw["payload_model"]["enabled"]   = True
+    cfg_pl.raw["payload_model"]["radius_mm"] = R_ref_pl
+    P_payload_ref = compute_losses(cfg_pl)["P_payload_W"]
+    V_pl_ref = math.pi * (R_ref_pl * mm) ** 2 * (t_pl * mm)
+    C_pl_ref = rho_pl * cp_pl * V_pl_ref
+    hA_pl_ref = 10.0 * (math.pi * (R_ref_pl * mm) ** 2 + 2 * math.pi * (R_ref_pl * mm) * (t_pl * mm))
+
     # PROVISIONAL convection hA [W/K] chosen for plausible steady temps.
     # These are the CALIBRATION knobs to fit against real sensors (Phase 3).
     return {
@@ -88,6 +104,11 @@ def physics_params(cfg):
             "inner": {"P_ref": P_inner,        "C": coil_C(co["inner"]), "hA": 0.48, "region": 1},
             "outer": {"P_ref": P_outer,        "C": coil_C(co["outer"]), "hA": 0.44, "region": 2},
             "iron":  {"P_ref": L["P_iron_W"],  "C": 0.5 * C_plate,       "hA": 0.06, "region": 3},
+        },
+        # payload handled separately in JS (radius is a live slider)
+        "payload": {
+            "P_ref": P_payload_ref, "C_ref": C_pl_ref, "hA_ref": hA_pl_ref,
+            "R_ref_mm": R_ref_pl, "R_min_mm": 10.0, "R_max_mm": 90.0, "t_mm": t_pl,
         },
         "P_total_ref": L["P_total_W"],
     }
@@ -147,22 +168,27 @@ TEMPLATE = r"""<!DOCTYPE html>
 </style></head><body>
 <div id="ui">
  <div class="panel"><h2>Physics Controls</h2>
-  <div class="cg"><label><span>Current (I)</span><span id="vI">5.0 A</span></label>
-    <input type="range" id="sI" min="0" max="5" step="0.25" value="5"></div>
-  <div class="cg"><label><span>Time speed</span><span id="vS">60x</span></label>
-    <input type="range" id="sS" min="1" max="300" step="1" value="60"></div>
+  <div class="cg"><label><span>Current (I)</span><span id="vI">20.0 A</span></label>
+    <input type="range" id="sI" min="0" max="20" step="0.5" value="20"></div>
+  <div class="cg"><label><span>Payload radius</span><span id="vR">40 mm</span></label>
+    <input type="range" id="sR" min="10" max="90" step="1" value="40"></div>
+  <div class="cg"><label><span>Time speed</span><span id="vS">120x</span></label>
+    <input type="range" id="sS" min="1" max="500" step="1" value="120"></div>
   <button id="reset">Reset temperatures</button>
-  <p class="note">Geometry: real STL (colleague). Losses from FEM (em_solver),
-   scaled q&prop;I&sup2;. Convection hA is PROVISIONAL - calibrate to sensors.</p>
+  <p class="note">DEMO (not yet calibrated). Geometry: real STL. Losses from FEM
+   (em_solver), scaled q&prop;I&sup2;; payload eddy&prop;R&#8308;. Time speed sets how
+   fast the thermal field evolves around model, payload &amp; environment.</p>
  </div>
  <div class="panel"><h2>Thermal Telemetry</h2>
   <div class="row"><span>Sim time</span><span class="val" id="vT">0 s</span></div>
   <div class="row"><span>Total heat</span><span class="val" id="vP">0 W</span></div>
   <hr style="border:0;border-top:1px solid #333;margin:12px 0">
   <div class="row"><div><span class="box" id="bP"></span>Alu plate</div><span class="val" id="tP">25.0 &deg;C</span></div>
+  <div class="row"><div><span class="box" id="bPl"></span>Payload disc</div><span class="val" id="tPl">25.0 &deg;C</span></div>
   <div class="row"><div><span class="box" id="bI"></span>Inner coil (1000)</div><span class="val" id="tI">25.0 &deg;C</span></div>
   <div class="row"><div><span class="box" id="bO"></span>Outer coil (500)</div><span class="val" id="tO">25.0 &deg;C</span></div>
   <div class="row"><div><span class="box" id="bFe"></span>Iron core</div><span class="val" id="tFe">25.0 &deg;C</span></div>
+  <div class="row"><div><span class="box" id="bAir"></span>Ambient air</div><span class="val" id="tAir">25.0 &deg;C</span></div>
   <div id="scale"></div><div class="sl"><span>25&deg;C</span><span>150&deg;C+</span></div>
  </div>
 </div>
@@ -176,19 +202,36 @@ const positions = new Float32Array(b64ToBuf("__POS_B64__"));
 const regions   = new Uint8Array (b64ToBuf("__REG_B64__"));   // one id per triangle
 
 // ---------- lumped thermal model ----------
+// Bodies (plate/coils/iron/payload) convect into a shared AMBIENT-AIR node
+// (the environment), which in turn loses heat to a fixed far ambient. So you can
+// watch heat flow from the model + payload OUT into the surrounding environment.
 const Eng = {
- t:0, Tamb:PARAMS.T_amb,
- T:{plate:PARAMS.T_amb,inner:PARAMS.T_amb,outer:PARAMS.T_amb,iron:PARAMS.T_amb},
- step:function(I,dt){
-   const s=(I/PARAMS.I_ref); const s2=s*s;
+ t:0, Tfar:PARAMS.T_amb, Tair:PARAMS.T_amb,
+ C_air:3000.0, hA_far:40.0,                                 // illustrative environment node
+ T:{plate:PARAMS.T_amb,inner:PARAMS.T_amb,outer:PARAMS.T_amb,iron:PARAMS.T_amb,payload:PARAMS.T_amb},
+ step:function(I,R,dt){
+   const s2=(I/PARAMS.I_ref)**2;
+   let Qconv=0;
+   // fixed-region bodies (FEM-anchored, q ~ I^2)
    for(const k in PARAMS.nodes){const nd=PARAMS.nodes[k];
-     const q=nd.P_ref*s2;                                   // q ~ I^2 (FEM-anchored)
-     const out=nd.hA*(this.T[k]-this.Tamb);                 // convection to ambient
-     this.T[k]+=((q-out)/nd.C)*dt;}
+     const q=nd.P_ref*s2;
+     const out=nd.hA*(this.T[k]-this.Tair);                 // convect into local air
+     this.T[k]+=((q-out)/nd.C)*dt; Qconv+=out;}
+   // payload disc: eddy loss ~ R^4, capacity & convection area ~ R^2
+   const pl=PARAMS.payload, rr=R/pl.R_ref_mm;
+   const qPl=pl.P_ref*Math.pow(rr,4)*s2;
+   const CPl=Math.max(pl.C_ref*rr*rr,1e-3);
+   const hAPl=pl.hA_ref*rr*rr;
+   const outPl=hAPl*(this.T.payload-this.Tair);
+   this.T.payload+=((qPl-outPl)/CPl)*dt; Qconv+=outPl;
+   // environment air: gains all convection, loses to far ambient
+   this.Tair+=((Qconv-this.hA_far*(this.Tair-this.Tfar))/this.C_air)*dt;
    this.t+=dt;
  },
- power:function(I){let p=0;const s2=(I/PARAMS.I_ref)**2;
-   for(const k in PARAMS.nodes)p+=PARAMS.nodes[k].P_ref*s2;return p;}
+ power:function(I,R){let p=0;const s2=(I/PARAMS.I_ref)**2;
+   for(const k in PARAMS.nodes)p+=PARAMS.nodes[k].P_ref*s2;
+   const rr=R/PARAMS.payload.R_ref_mm; p+=PARAMS.payload.P_ref*Math.pow(rr,4)*s2;
+   return p;}
 };
 // temperature -> color (25..150 C : blue->red via HSL)
 function tcol(T){let t=(T-25)/125;t=Math.max(0,Math.min(1,t));
@@ -219,6 +262,16 @@ scene.add(new THREE.AmbientLight(0xffffff,0.5));
 const dl=new THREE.DirectionalLight(0xffffff,0.9);dl.position.set(1,1.4,0.8);scene.add(dl);
 const gh=new THREE.GridHelper(size*2,40,0x444444,0x222222);
 gh.position.y=-size*0.5;scene.add(gh);
+// ---------- payload disc (object on top of the plate; procedural, not in STL) ----------
+const PL=PARAMS.payload;
+const payGeo=new THREE.CylinderGeometry(PL.R_ref_mm,PL.R_ref_mm,PL.t_mm,48);
+payGeo.rotateX(Math.PI/2);                                  // cylinder axis Y -> model axis Z
+const payMat=new THREE.MeshStandardMaterial({roughness:0.4,metalness:0.6});
+const payload=new THREE.Mesh(payGeo,payMat);
+// sit on the plate top (model axis = original z), aligned with the recentred mesh
+payload.position.set(-ctr.x,-ctr.y,(bb.max.z-ctr.z)+PL.t_mm*0.5);
+scene.add(payload);
+const FOG_BASE=new THREE.Color(0x1a1a2e), FOG_HOT=new THREE.Color(0x3a2030);
 // update vertex colors from node temps
 function paint(){
   for(let tri=0;tri<regions.length;tri++){
@@ -230,26 +283,30 @@ function paint(){
   geo.attributes.color.needsUpdate=true;
 }
 // ---------- UI ----------
-const sI=document.getElementById('sI'),sS=document.getElementById('sS');
-sI.oninput=()=>document.getElementById('vI').innerText=(+sI.value).toFixed(2)+' A';
+const sI=document.getElementById('sI'),sS=document.getElementById('sS'),sR=document.getElementById('sR');
+sI.oninput=()=>document.getElementById('vI').innerText=(+sI.value).toFixed(1)+' A';
 sS.oninput=()=>document.getElementById('vS').innerText=sS.value+'x';
-document.getElementById('reset').onclick=()=>{for(const k in Eng.T)Eng.T[k]=Eng.Tamb;Eng.t=0;};
+sR.oninput=()=>document.getElementById('vR').innerText=sR.value+' mm';
+document.getElementById('reset').onclick=()=>{for(const k in Eng.T)Eng.T[k]=Eng.Tfar;Eng.Tair=Eng.Tfar;Eng.t=0;};
+const setTxt=(id,v)=>document.getElementById(id).innerHTML=v.toFixed(1)+' &deg;C';
+const setBox=(id,T)=>document.getElementById(id).style.background='#'+tcol(T).getHexString();
 let last=performance.now();
 function loop(){requestAnimationFrame(loop);
   const now=performance.now();let d=(now-last)/1000;last=now;if(d>0.1)d=0.1;
-  const I=+sI.value,speed=+sS.value;
+  const I=+sI.value,speed=+sS.value,R=+sR.value;
   const sub=20,dt=d*speed/sub;
-  for(let i=0;i<sub;i++)Eng.step(I,dt);
+  for(let i=0;i<sub;i++)Eng.step(I,R,dt);
+  // payload 3D: radius from slider (geometry built at R_ref), colour by temperature
+  payload.scale.set(R/PL.R_ref_mm,R/PL.R_ref_mm,1);
+  payMat.color.copy(tcol(Eng.T.payload));
+  // environment haze warms with the air node
+  scene.fog.color.copy(FOG_BASE).lerp(FOG_HOT,Math.max(0,Math.min(1,(Eng.Tair-25)/40)));
   document.getElementById('vT').innerText=Eng.t.toFixed(0)+' s';
-  document.getElementById('vP').innerText=Eng.power(I).toFixed(1)+' W';
-  document.getElementById('tP').innerHTML=Eng.T.plate.toFixed(1)+' &deg;C';
-  document.getElementById('tI').innerHTML=Eng.T.inner.toFixed(1)+' &deg;C';
-  document.getElementById('tO').innerHTML=Eng.T.outer.toFixed(1)+' &deg;C';
-  document.getElementById('tFe').innerHTML=Eng.T.iron.toFixed(1)+' &deg;C';
-  document.getElementById('bP').style.background='#'+tcol(Eng.T.plate).getHexString();
-  document.getElementById('bI').style.background='#'+tcol(Eng.T.inner).getHexString();
-  document.getElementById('bO').style.background='#'+tcol(Eng.T.outer).getHexString();
-  document.getElementById('bFe').style.background='#'+tcol(Eng.T.iron).getHexString();
+  document.getElementById('vP').innerText=Eng.power(I,R).toFixed(1)+' W';
+  setTxt('tP',Eng.T.plate); setTxt('tPl',Eng.T.payload); setTxt('tI',Eng.T.inner);
+  setTxt('tO',Eng.T.outer); setTxt('tFe',Eng.T.iron);   setTxt('tAir',Eng.Tair);
+  setBox('bP',Eng.T.plate); setBox('bPl',Eng.T.payload); setBox('bI',Eng.T.inner);
+  setBox('bO',Eng.T.outer); setBox('bFe',Eng.T.iron);   setBox('bAir',Eng.Tair);
   paint();controls.update();renderer.render(scene,camera);
 }
 addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);
