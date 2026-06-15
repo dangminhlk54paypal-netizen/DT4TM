@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Generated render outputs (regenerable from the solvers)
+em_field_loss.png
+rom_demo.png
+thermal_map.png
+thermal_2d_section.png
+thermal_3d.png
+thermal_pyvista.png
+plates_3d.png
+plates_compare.png
+stl_rz_projection.png
+
+# Generated 3D / AR artifacts (regenerable: visualize.py / build_twin_html.py)
+plate.glb
+plate.obj
+digital_twin.html
+
+# Local-only source PDFs (problem brief / Aufgabenstellung)
+*.pdf

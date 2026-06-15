@@ -1,0 +1,126 @@
+# =====================================================================
+#  Thermal Digital Twin - TEAM 28-like Levitator (TEMF), axisymmetric
+#  ALL "knobs" are here. SI units; geometry entered in mm (code converts to m).
+#  Update per teacher's email: Ø16cm plate, 1000/500 coils, WITH iron core, ~5A.
+# =====================================================================
+
+units: {length: mm, current: A, frequency: Hz, temperature: degC, power: W}
+
+# --- Electrical excitation (main knob of the twin) ---
+excitation:
+  current_A: 5.0        # AMPLITUDE î — operating condition (rig runs at 5A).
+                        # Set higher (e.g. 20A) only for an exaggerated heating demo.
+  current_ref_A: 5.0    # reference point (5A = operating condition)
+  frequency_Hz: 50.0
+  power_ref_W: 2.63     # aluminum plate eddy loss at I_ref=5A (EM solver, payload OFF).
+                        # Only used by the placeholder / --no-em path; EM path computes it.
+
+# --- Aluminum Plate ---
+plate_material:
+  name: aluminium
+  radius_mm: 80.0           # Ø16cm per teacher's email (NOT 13cm)
+  thickness_mm: 3.0         # MEASURE: benchmark 13cm is 3mm thick; MEASURE again for 16cm plate
+  z_bottom_mm: 3.8          # initial gap (bottom edge of the plate)
+  sigma_S_per_m: 3.4e7      # electrical conductivity at T_ref
+  mu_r: 1.0
+  k_W_per_mK: 237.0
+  rho_kg_per_m3: 2700.0
+  cp_J_per_kgK: 900.0
+  sigma_tempco_per_K: 3.9e-3   # α: σ(T)=σ0/(1+α(T-T0)); enabled in Phase 3
+
+# --- Copper coils (CONFIRM radii with CAD/actual measurement) ---
+coils:
+  height_mm: 52.0
+  z_top_mm: 0.0
+  z_bottom_mm: -52.0
+  wire_diameter_mm: 1.2
+  sigma_Cu_S_per_m: 5.96e7
+  inner:                    # INNER coil = 1000 turns (teacher's email: "1000 und 500")
+    turns: 1000
+    r_inner_mm: 28.0
+    r_outer_mm: 43.0
+    current_sign: +1
+  outer:                    # OUTER coil = 500 turns
+    turns: 500
+    r_inner_mm: 46.5
+    r_outer_mm: 61.5
+    current_sign: -1        # opposite winding direction -> reverse current
+
+# --- Iron core (NEW compared to TEAM28). CONFIRM geometry with real device! ---
+iron_core:
+  enabled: true
+  mu_r: 1000.0              # linear (assuming not saturated at 5A; see physics.md)
+  sigma_S_per_m: 1.0e6      # >0 if solid core (eddy loss present); set 0 if laminated
+  r_inner_mm: 0.0           # central cylindrical core (placeholder)
+  r_outer_mm: 25.0
+  z_top_mm: 0.0
+  z_bottom_mm: -52.0
+
+# --- Payload Model ---
+# PLACEHOLDER, disabled by default. When enabled, EM adds P_payload_W and the
+# thermal solver stacks the disc on top of the plate (see thermal_solver/rom which
+# now account P_payload_W). Confirm real payload geometry before trusting results.
+payload_model:
+  enabled: false
+  name: steel_disc_placeholder
+  radius_mm: 40.0        # A disc with radius smaller than the aluminum plate
+  thickness_mm: 5.0      # 5mm thick
+  k_W_per_mK: 50.0       # Thermal conductivity (e.g., carbon steel)
+  sigma_S_per_m: 6.0e6   # Electrical conductivity (for computing eddy currents on payload)
+  mu_r: 100.0            # Magnetic permeability (if magnetic material)
+  # rho, cp will be added later when solving transient simulations
+
+# --- Thermal boundary conditions ---
+# h_bottom > h_top because hot air from coils below enhances convection
+thermal_bc:
+  T_ambient_degC: 25.0
+  h_convection_W_per_m2K: 10.0    # top + side surfaces (natural convection)
+  h_bottom_W_per_m2K: 25.0        # bottom surface facing coils (hotter air)
+  emissivity: 0.0
+
+# --- Metal plate library (swap for comparison) ---
+plate_library:
+  - {name: "Al Ø50mm",  radius_mm:  50.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Al Ø65mm",  radius_mm:  65.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Al Ø80mm",  radius_mm:  80.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Al Ø100mm", radius_mm: 100.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Cu Ø80mm",  radius_mm:  80.0, thickness_mm: 3.0, material: copper}
+
+# --- Material properties (lookup by name in plate_library) ---
+material_props:
+  aluminium:
+    k_W_per_mK: 237.0
+    rho_kg_per_m3: 2700.0
+    cp_J_per_kgK: 900.0
+    sigma_S_per_m: 3.4e7
+    mu_r: 1.0
+    sigma_tempco_per_K: 3.9e-3
+  copper:
+    k_W_per_mK: 400.0
+    rho_kg_per_m3: 8960.0
+    cp_J_per_kgK: 385.0
+    sigma_S_per_m: 5.96e7
+    mu_r: 1.0
+    sigma_tempco_per_K: 3.9e-3
+
+# --- Thermal mesh (plate only) ---
+mesh: {nr: 40, nz: 16}
+
+# --- EM domain & mesh (mm). A=0 boundary placed ~3-5x device size ---
+em_domain:
+  r_max_mm: 300.0
+  z_min_mm: -220.0
+  z_max_mm: 180.0
+  fine_step_mm: 2.0         # fine step around device
+  coarse_step_mm: 12.0      # coarse step in far air region
+
+# --- Transient (Phase 2) ---
+transient: {dt_s: 1.0, t_end_s: 600.0}
+
+# --- Original benchmark (to validate EM solver; NO iron core, 20A) ---
+benchmark_team28_original:
+  current_A: 20.0
+  inner_turns: 960
+  outer_turns: 576
+  plate_radius_mm: 65.0
+  expected_levitation_height_mm: 11.3
