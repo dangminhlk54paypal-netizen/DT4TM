@@ -149,7 +149,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 <title>Digital Twin - Thermal (real STL + calibrated physics)</title>
 <style>
  body{margin:0;overflow:hidden;background:#1a1a2e;color:#fff;font-family:'Segoe UI',Tahoma,sans-serif}
- #ui{position:absolute;top:15px;left:15px;display:flex;gap:18px;pointer-events:none}
+ #ui{position:absolute;top:15px;left:15px;display:flex;gap:18px;pointer-events:none;z-index:10}
  .panel{background:rgba(15,15,30,.85);padding:18px;border-radius:12px;border:1px solid #333;
    pointer-events:auto;backdrop-filter:blur(5px);box-shadow:0 4px 6px rgba(0,0,0,.3);width:290px}
  h2{margin:0 0 12px;font-size:1.1rem;border-bottom:1px solid #444;padding-bottom:5px;color:#4facfe}
@@ -199,6 +199,8 @@ const PARAMS = __PARAMS__;
 function b64ToBuf(b64){const s=atob(b64);const a=new Uint8Array(s.length);
   for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a.buffer;}
 const positions = new Float32Array(b64ToBuf("__POS_B64__"));
+// Rotate CAD Z-up → Three.js Y-up: (x,y,z)→(x,z,−y)
+for(let i=0;i<positions.length;i+=3){const y=positions[i+1],z=positions[i+2];positions[i+1]=z;positions[i+2]=-y;}
 const regions   = new Uint8Array (b64ToBuf("__REG_B64__"));   // one id per triangle
 
 // ---------- lumped thermal model ----------
@@ -244,44 +246,85 @@ const scene=new THREE.Scene();scene.fog=new THREE.FogExp2(0x1a1a2e,0.0016);
 const camera=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.1,4000);
 const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
 renderer.setSize(innerWidth,innerHeight);document.body.appendChild(renderer.domElement);
+renderer.domElement.style.cssText='position:absolute;top:0;left:0;z-index:0;';
 const controls=new THREE.OrbitControls(camera,renderer.domElement);
-// geometry (model is in mm; centre it)
-const geo=new THREE.BufferGeometry();
-geo.setAttribute('position',new THREE.BufferAttribute(positions,3));
-geo.computeVertexNormals();geo.computeBoundingBox();
-const bb=geo.boundingBox,ctr=new THREE.Vector3();bb.getCenter(ctr);
+controls.enableDamping=true;controls.dampingFactor=0.08;
+// Sliders/buttons live in .panel (pointer-events:auto). #ui itself is
+// pointer-events:none, so enter/leave never fired on it — gate on .panel instead,
+// and swallow pointer/wheel events so a drag on a slider never reaches OrbitControls.
+document.querySelectorAll('.panel').forEach(p=>{
+  p.addEventListener('pointerenter',()=>{controls.enabled=false;});
+  p.addEventListener('pointerleave',()=>{controls.enabled=true;});
+  ['pointerdown','mousedown','wheel','touchstart'].forEach(ev=>
+    p.addEventListener(ev,e=>e.stopPropagation(),{passive:false}));
+});
+// ---------- split the STL into a LEVITATING plate (region 0) and the fixed BASE
+//            (coils/iron/structure). This lets the plate float above the coils with
+//            a visible air gap — the whole point of an electrodynamic levitator. ----------
+function buildSub(keep){
+  const P=[],G=[];
+  for(let tri=0;tri<regions.length;tri++){
+    if(!keep(regions[tri])) continue;
+    for(let v=0;v<3;v++){const i=(tri*3+v)*3;P.push(positions[i],positions[i+1],positions[i+2]);}
+    G.push(regions[tri]);
+  }
+  return {pos:new Float32Array(P),reg:new Uint8Array(G)};
+}
+function makeMesh(sub){
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(sub.pos,3));
+  g.computeVertexNormals();
+  const col=new Float32Array(sub.pos.length);
+  g.setAttribute('color',new THREE.BufferAttribute(col,3));
+  const m=new THREE.Mesh(g,new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.45,metalness:0.55}));
+  return {mesh:m,geo:g,reg:sub.reg,col:col};
+}
+const baseM=makeMesh(buildSub(r=>r!==0));     // coils + iron + structure (fixed)
+const plateM=makeMesh(buildSub(r=>r===0));    // aluminium plate (levitates)
+// bounding box / centre from the full model
+const bb=new THREE.Box3();
+{const t=new THREE.BufferGeometry();t.setAttribute('position',new THREE.BufferAttribute(positions,3));
+ t.computeBoundingBox();bb.copy(t.boundingBox);}
+const ctr=new THREE.Vector3();bb.getCenter(ctr);
 const size=bb.getSize(new THREE.Vector3()).length();
-const colors=new Float32Array(positions.length);
-geo.setAttribute('color',new THREE.BufferAttribute(colors,3));
-const mat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.45,metalness:0.55});
-const mesh=new THREE.Mesh(geo,mat);scene.add(mesh);
-mesh.position.set(-ctr.x,-ctr.y,-ctr.z);                    // recenter at origin
-camera.position.set(size*0.7,size*0.5,size*0.9);
-controls.target.set(0,0,0);controls.update();
-scene.add(new THREE.AmbientLight(0xffffff,0.5));
+const modelH=bb.max.y-bb.min.y;
+const LIFT=Math.max(modelH*0.40,size*0.07);    // exaggerated levitation gap (real ~11mm)
+baseM.mesh.position.set(-ctr.x,-ctr.y,-ctr.z);
+plateM.mesh.position.set(-ctr.x,-ctr.y+LIFT,-ctr.z);
+scene.add(baseM.mesh,plateM.mesh);
+// ---- field-line hints: thin segments bridging the coil rim and the floating plate
+const rRim=Math.min(size*0.18,90), gapTop=(bb.max.y-ctr.y), gapBot=(bb.max.y-ctr.y)-modelH*0.12;
+const flPts=[];for(let a=0;a<12;a++){const th=a/12*Math.PI*2,x=Math.cos(th)*rRim,z=Math.sin(th)*rRim;
+  flPts.push(x,gapBot,z, x,gapTop+LIFT*0.9,z);}
+const flGeo=new THREE.BufferGeometry();flGeo.setAttribute('position',new THREE.Float32BufferAttribute(flPts,3));
+scene.add(new THREE.LineSegments(flGeo,new THREE.LineBasicMaterial({color:0x4facfe,transparent:true,opacity:0.28})));
+camera.position.set(size*0.78,size*0.40,size*0.78);
+controls.target.set(0,LIFT*0.55,0);controls.update();
+scene.add(new THREE.AmbientLight(0xffffff,0.55));
 const dl=new THREE.DirectionalLight(0xffffff,0.9);dl.position.set(1,1.4,0.8);scene.add(dl);
 const gh=new THREE.GridHelper(size*2,40,0x444444,0x222222);
-gh.position.y=-size*0.5;scene.add(gh);
-// ---------- payload disc (object on top of the plate; procedural, not in STL) ----------
+gh.position.y=(bb.min.y-ctr.y);scene.add(gh);
+// ---------- payload disc — rests ON the levitating plate (procedural, not in STL) ----------
 const PL=PARAMS.payload;
-const payGeo=new THREE.CylinderGeometry(PL.R_ref_mm,PL.R_ref_mm,PL.t_mm,48);
-payGeo.rotateX(Math.PI/2);                                  // cylinder axis Y -> model axis Z
-const payMat=new THREE.MeshStandardMaterial({roughness:0.4,metalness:0.6});
+const payGeo=new THREE.CylinderGeometry(PL.R_ref_mm,PL.R_ref_mm,PL.t_mm,64);
+// CylinderGeometry axis is Y by default — matches our Y-up scene, no rotation needed
+const payMat=new THREE.MeshStandardMaterial({roughness:0.3,metalness:0.7,color:0x8899aa});
 const payload=new THREE.Mesh(payGeo,payMat);
-// sit on the plate top (model axis = original z), aligned with the recentred mesh
-payload.position.set(-ctr.x,-ctr.y,(bb.max.z-ctr.z)+PL.t_mm*0.5);
+const plateTopY=(bb.max.y-ctr.y)+LIFT;         // top surface of the lifted plate
+payload.position.set(0,plateTopY+PL.t_mm*0.5,0);
 scene.add(payload);
 const FOG_BASE=new THREE.Color(0x1a1a2e), FOG_HOT=new THREE.Color(0x3a2030);
-// update vertex colors from node temps
-function paint(){
-  for(let tri=0;tri<regions.length;tri++){
-    const reg=regions[tri];
+// update vertex colors from node temps (both base + plate meshes)
+function paintMesh(M){
+  for(let tri=0;tri<M.reg.length;tri++){
+    const reg=M.reg[tri];
     const col=(reg===4)?STRUCT:tcol(Eng.T[regionTempKey[reg]]);
     for(let v=0;v<3;v++){const idx=(tri*3+v)*3;
-      colors[idx]=col.r;colors[idx+1]=col.g;colors[idx+2]=col.b;}
+      M.col[idx]=col.r;M.col[idx+1]=col.g;M.col[idx+2]=col.b;}
   }
-  geo.attributes.color.needsUpdate=true;
+  M.geo.attributes.color.needsUpdate=true;
 }
+function paint(){paintMesh(baseM);paintMesh(plateM);}
 // ---------- UI ----------
 const sI=document.getElementById('sI'),sS=document.getElementById('sS'),sR=document.getElementById('sR');
 sI.oninput=()=>document.getElementById('vI').innerText=(+sI.value).toFixed(1)+' A';
@@ -296,8 +339,8 @@ function loop(){requestAnimationFrame(loop);
   const I=+sI.value,speed=+sS.value,R=+sR.value;
   const sub=20,dt=d*speed/sub;
   for(let i=0;i<sub;i++)Eng.step(I,R,dt);
-  // payload 3D: radius from slider (geometry built at R_ref), colour by temperature
-  payload.scale.set(R/PL.R_ref_mm,R/PL.R_ref_mm,1);
+  // payload 3D: radius from slider (scale X/Z = radial; Y = height, stays 1)
+  payload.scale.set(R/PL.R_ref_mm,1,R/PL.R_ref_mm);
   payMat.color.copy(tcol(Eng.T.payload));
   // environment haze warms with the air node
   scene.fog.color.copy(FOG_BASE).lerp(FOG_HOT,Math.max(0,Math.min(1,(Eng.Tair-25)/40)));
