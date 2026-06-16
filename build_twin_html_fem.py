@@ -128,10 +128,17 @@ def revolve(meridian, n_theta: int) -> np.ndarray:
 def build_disc_mesh(cfg, rom, z_bottom_mm: float):
     """Generate ONE flat solid disc matching the physical plate radius and map the
     FEM ΔT_ref field onto every vertex. Physics unchanged (FEM solved on Ø160×3mm);
-    display thickness is exaggerated so the 3mm disc reads clearly in 3D."""
+    display thickness is exaggerated so the 3mm disc reads clearly in 3D.
+
+    Returns (V, dT_eddy, dT_air): two per-vertex ΔT fields sharing the FEM radial
+    shape. dT_eddy is uniform through the thickness (eddy currents heat the whole
+    slab); dT_air is weighted toward the BOTTOM face (hot air rises off the coils),
+    via g(f)=1+grad·(0.5−f). The thickness mean of g is 1, so the combined steady
+    field equals the original FEM field — only its top/bottom split is new."""
     disc    = cfg.raw["levitating_disc"]
     n_theta = int(disc.get("n_theta", 96))
     zex     = float(disc.get("display_z_exaggeration", 1.0))
+    grad    = float(disc.get("bottom_heating_gradient", 0.0))
 
     plate_r = float(cfg.plate["radius_mm"])   # e.g. 80mm — single disc, one radius
     t_phys  = float(cfg.plate["thickness_mm"])  # 3mm (physics)
@@ -164,7 +171,44 @@ def build_disc_mesh(cfg, rom, z_bottom_mm: float):
     m   = np.isnan(dT)
     if m.any():
         dT[m] = nn(pts[m])
-    return V.astype(np.float32), dT.astype(np.float32)
+
+    # Split into eddy (through-thickness uniform) and hot-air (bottom-weighted).
+    # f = 0 at the bottom face → g = 1 + grad/2 (hottest); f = 1 at the top → 1 − grad/2.
+    g       = 1.0 + grad * (0.5 - f)
+    dT_eddy = dT
+    dT_air  = dT * g
+    return (V.astype(np.float32),
+            dT_eddy.astype(np.float32),
+            dT_air.astype(np.float32))
+
+
+# ─── Disc heat-source decomposition (eddy vs hot-air fraction) ────────────────
+
+def compute_eddy_fraction(cfg, em: dict, rom) -> float:
+    """Fraction of the disc's steady ΔT_mean that comes from its OWN eddy currents
+    (vs. convective heating by the hot coil air). Re-solve the SAME steady FEM at
+    I_ref but with the coil→air coupling switched off (Tinf_bot = T_amb): that
+    isolates the eddy-driven field. The heat equation is linear, so
+    f_eddy = ΔT_mean(eddy only) / ΔT_mean(full)."""
+    from thermal_solver import solve_steady
+
+    # em scaled to I_ref (mirror ThermalROM.build's internal scaling): keep the
+    # original dict (incl. the "res" q_e spatial map) and override the P_* scalars.
+    I_ref, I_cur = float(cfg.I_ref), float(cfg.I)
+    scale = (I_ref / I_cur) ** 2
+    em_ref = dict(em)
+    for k in ("P_plate_W", "P_payload_W", "P_iron_W", "P_coil_W", "P_total_W"):
+        if k in em:
+            em_ref[k] = em[k] * scale
+
+    cfg_eddy = copy.deepcopy(cfg)
+    cfg_eddy.raw["excitation"]["current_A"] = I_ref
+    cfg_eddy.raw["thermal_bc"]["k_coil_coupling_K_per_W"] = 0.0   # no hot-air BC
+
+    res_eddy = solve_steady(cfg_eddy, em_losses=em_ref)
+    dT_eddy_mean = float((res_eddy["T"] - rom.T_amb).mean())
+    f_eddy = dT_eddy_mean / rom.dT_mean_ref
+    return float(min(max(f_eddy, 0.0), 1.0))
 
 
 # ─── Main build function ──────────────────────────────────────────────────────
@@ -182,6 +226,18 @@ def build(stl_path: str, out_path: str) -> None:
     rom = ThermalROM().build(cfg, em_losses=em, verbose=False)
     print(f"done.  τ={rom.tau/60:.2f} min  "
           f"ΔT_max={rom.dT_ref.max():.3f} K  ΔT_mean={rom.dT_mean_ref:.3f} K")
+
+    # 1b. Split the disc's steady rise into its two physical sources so the twin
+    #     can give each its own time response (see the JS romStep):
+    #       (a) eddy Joule heating IN the disc  → instantaneous with I²
+    #       (b) hot air from the coils below     → gated by the copper's thermal
+    #           inertia (coils take ~25 min to warm the gap air).
+    #     dT_ref(full) = dT_eddy + dT_air  (heat eqn is linear in the source AND in
+    #     the bottom-air ambient), so one extra eddy-only solve gives the fraction.
+    f_eddy = compute_eddy_fraction(cfg, em, rom)
+    f_air  = 1.0 - f_eddy
+    print(f"[SPLIT] disc heat sources: eddy {f_eddy*100:.0f}% (instant)  "
+          f"hot-air {f_air*100:.0f}% (coil-inertia gated)")
 
     # 2. Parse STL → keep only the BASE (coils + iron + structure). The thin flat
     #    STL "plate" is discarded and replaced by a procedural solid stepped disc.
@@ -201,17 +257,20 @@ def build(stl_path: str, out_path: str) -> None:
 
     # 3. Procedural solid stepped disc + FEM ΔT_ref mapped onto its vertices
     print("[DISC] Building solid stepped disc + FEM field ...", end=" ", flush=True)
-    V_disc, dT_disc = build_disc_mesh(cfg, rom, z_disc_bot)
+    V_disc, dTe_disc, dTa_disc = build_disc_mesh(cfg, rom, z_disc_bot)
     nTri_disc = len(V_disc)
     print(f"{nTri_disc} tris, z_bot={z_disc_bot:.1f}mm  "
-          f"dT range {dT_disc.min():.3f}..{dT_disc.max():.3f} K")
+          f"dT_eddy {dTe_disc.min():.3f}..{dTe_disc.max():.3f} K  "
+          f"dT_air {dTa_disc.min():.3f}..{dTa_disc.max():.3f} K")
 
     # 4. Splice base + disc into single per-triangle / per-vertex arrays.
     #    Disc tris are region 0 (plate); base verts carry dT=0 (lumped in JS).
-    V       = np.concatenate([V_base, V_disc], axis=0)
-    region  = np.concatenate([reg_base, np.zeros(nTri_disc, dtype=np.uint8)])
-    dT_base = np.zeros(len(V_base) * 3, dtype=np.float32)
-    dT_vtx  = np.concatenate([dT_base, dT_disc]).astype(np.float32)
+    #    Two fields: eddy (uniform, β_eddy) and hot-air (bottom-weighted, β_air).
+    V        = np.concatenate([V_base, V_disc], axis=0)
+    region   = np.concatenate([reg_base, np.zeros(nTri_disc, dtype=np.uint8)])
+    zero_base = np.zeros(len(V_base) * 3, dtype=np.float32)
+    dTe_vtx  = np.concatenate([zero_base, dTe_disc]).astype(np.float32)
+    dTa_vtx  = np.concatenate([zero_base, dTa_disc]).astype(np.float32)
     nTri = len(V)
 
     # 4. Collect all physics data for JS
@@ -232,6 +291,8 @@ def build(stl_path: str, out_path: str) -> None:
         "P_ref":       float(rom.P_ref),
         "k_coil":      k_coil,
         "Tinf_bot_ref": Tinf_bot,
+        "f_eddy":      round(f_eddy, 4),   # disc heat from its own eddy currents
+        "f_air":       round(f_air, 4),    # disc heat from the hot coil air (lagged)
         "B_max_iron":  round(B_max_iron, 3),
         "B_sat":       B_sat,
         "saturated":   bool(B_max_iron > B_sat),
@@ -240,15 +301,17 @@ def build(stl_path: str, out_path: str) -> None:
     params = {"rom": rom_params, "lumped": lumped}
 
     # 5. Encode binary data as base64
-    pos_b64 = base64.b64encode(V.reshape(-1).astype("<f4").tobytes()).decode()
-    reg_b64 = base64.b64encode(region.tobytes()).decode()
-    dT_b64  = base64.b64encode(dT_vtx.tobytes()).decode()
+    pos_b64   = base64.b64encode(V.reshape(-1).astype("<f4").tobytes()).decode()
+    reg_b64   = base64.b64encode(region.tobytes()).decode()
+    dT_b64    = base64.b64encode(dTe_vtx.tobytes()).decode()
+    dtair_b64 = base64.b64encode(dTa_vtx.tobytes()).decode()
 
     html = (TEMPLATE
-            .replace("__POS_B64__", pos_b64)
-            .replace("__REG_B64__", reg_b64)
-            .replace("__DT_B64__",  dT_b64)
-            .replace("__PARAMS__",  json.dumps(params)))
+            .replace("__POS_B64__",   pos_b64)
+            .replace("__REG_B64__",   reg_b64)
+            .replace("__DT_B64__",    dT_b64)
+            .replace("__DTAIR_B64__", dtair_b64)
+            .replace("__PARAMS__",    json.dumps(params)))
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -334,10 +397,11 @@ hr.div{border:0;border-top:1px solid #2a3050;margin:8px 0}
       <span>🔥 Coils (Ohmic)</span>
       <span class="val" id="vPcoil" style="color:#ff8844">0.0 W</span></div>
     <p class="note">
-      The disc heats up from <b>2 sources</b>:<br>
-      ① <b>Foucault eddy currents</b> (~4K) induced in the disc by the alternating magnetic field.<br>
-      ② <b>Hot air from the coils</b> (~8K) — coils sit only 3.8mm below the disc, heating the bottom air to ~36°C.<br>
-      Total ΔT_ss ≈ 11K — hot air is the <i>dominant heat source for the disc</i>.
+      The disc heats up from <b>2 sources</b>, each with its OWN speed:<br>
+      ① <b>Foucault eddy currents</b> (~4K) induced in the disc — appear <i>instantly</i> with I².<br>
+      ② <b>Hot air from the coils</b> (~8K) — coils sit only 3.8mm below the disc. This part is
+      <i>slow</i>: the copper mass takes ~25min to warm, so the bottom air lags behind I².<br>
+      Total ΔT_ss ≈ 11K — hot air is the <i>dominant</i> (but delayed) heat source for the disc.
     </p>
   </div>
 
@@ -361,6 +425,9 @@ hr.div{border:0;border-top:1px solid #2a3050;margin:8px 0}
     <div class="row">
       <div><span>Plate T_ss (target)</span></div>
       <span class="val" id="tPss" style="color:#44ff88">25.0 °C</span></div>
+    <div class="row" style="font-size:.68rem;color:#7788aa;line-height:1.3">
+      <span>Disc colours = <i>relative</i> scale (cool→hot within plate).
+      Bottom face runs hotter than the top as the coils' hot air builds up.</span></div>
     <hr class="div">
     <div class="row">
       <div><span class="box" id="bIn"></span>Inner coil (1000t)</div>
@@ -404,9 +471,10 @@ function b64Buf(b64){
   const s=atob(b64),a=new Uint8Array(s.length);
   for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a.buffer;
 }
-const positions  = new Float32Array(b64Buf("__POS_B64__"));  // CAD mm Z-up
-const regions    = new Uint8Array  (b64Buf("__REG_B64__"));  // per triangle
-const dT_ref_vtx = new Float32Array(b64Buf("__DT_B64__"));   // per STL vertex [K]
+const positions  = new Float32Array(b64Buf("__POS_B64__"));    // CAD mm Z-up
+const regions    = new Uint8Array  (b64Buf("__REG_B64__"));    // per triangle
+const dT_ref_vtx = new Float32Array(b64Buf("__DT_B64__"));     // eddy field [K], uniform thru-thickness
+const dT_air_vtx = new Float32Array(b64Buf("__DTAIR_B64__"));  // hot-air field [K], bottom-weighted
 
 // Rotate CAD Z-up → Three.js Y-up: (x,y,z)→(x,z,−y)
 for(let i=0;i<positions.length;i+=3){
@@ -416,13 +484,42 @@ for(let i=0;i<positions.length;i+=3){
 
 // ── Simulation state (mirrors digital_twin.py DigitalTwin) ───────────────────
 const sim = {
-  beta: 0.0,                     // ROM amplitude coefficient β
+  beta:      0.0,                // total disc amplitude β = f_eddy·β_eddy + f_air·β_air
+  beta_eddy: 0.0,               // eddy-driven part — responds to I² instantly
+  beta_air:  0.0,               // hot-air part — gated by the coils' thermal inertia
   t:    0.0,                     // sim time [s]
-  T: { inner: ROM.T_amb, outer: ROM.T_amb, iron: ROM.T_amb },
+  // inner/outer/iron = body nodes; air = shared LOCAL air node they all heat up.
+  // The bodies convect into `air`, and `air` sheds heat to the far ambient ROM.T_amb.
+  T: { inner: ROM.T_amb, outer: ROM.T_amb, iron: ROM.T_amb, air: ROM.T_amb },
   hist_t:    [0.0],
   hist_Tmax: [ROM.T_amb],
   hist_I:    [0.0],
 };
+
+// Shared LOCAL air node — the bodies (coils/iron) convect into this small pocket
+// of air, which in turn loses heat to the far ambient. Illustrative environment
+// values (same intent as the lumped-only build_twin_html.py).
+const AIR = { C_air: 3000.0, hA_far: 40.0 };
+
+// Steady over-temperature of the air node above the far ambient at I_ref: it
+// receives ALL body convection (Σ P_ref) and sheds it through hA_far.
+let AIR_P_SUM_REF = 0.0;
+for (const k in LUMPED.nodes) AIR_P_SUM_REF += LUMPED.nodes[k].P_ref;
+const AIR_DT_SS_REF = AIR_P_SUM_REF / AIR.hA_far;
+
+// Power-weighted coil steady over-temperature (vs far ambient) at I_ref — the
+// denominator for the hot-air drive. Each coil sits at its own rise above the air
+// node (P_ref/hA) PLUS the air node's rise above ambient, so coilAirDrive() still
+// → (I/I_ref)² at steady state and the plate's β_air_ss is unchanged.
+const COIL_DT_SS_REF =
+  LUMPED.nodes.inner.P_ref * (LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF) +
+  LUMPED.nodes.outer.P_ref * (LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF);
+function coilAirDrive() {
+  const ai = LUMPED.nodes.inner, ao = LUMPED.nodes.outer;
+  const num = ai.P_ref * (sim.T.inner - ROM.T_amb) +
+              ao.P_ref * (sim.T.outer - ROM.T_amb);
+  return Math.max(0.0, num / COIL_DT_SS_REF);
+}
 
 // ── I(t) scenarios (same as digital_twin.py) ─────────────────────────────────
 const SCENARIOS = {
@@ -435,27 +532,48 @@ let curScenario = 'step';
 let targetI = 5.0;   // from slider
 function getI() { return SCENARIOS[curScenario](targetI, sim.t); }
 
-// ── ROM step — exact copy of DigitalTwin.step() from digital_twin.py ─────────
+// ── ROM step — two-source disc model + coil thermal inertia ──────────────────
+// The disc is heated by (a) its OWN eddy currents (instantaneous with I²) and
+// (b) the hot air rising from the coils. (b) cannot appear before the copper mass
+// warms up, so it is driven by the coil node temperature (which carries the
+// inertia) instead of the instantaneous I². β_ss is unchanged → same steady state.
 function romStep(I, dt) {
   const s2 = (I / ROM.I_ref) ** 2;
-  // σ(T) correction: P_actual = P_ref / (1 + α·ΔT_mean)
+  // σ(T) correction: P_actual = P_ref / (1 + α·ΔT_mean)   (disc aluminium)
   const dT_mean = sim.beta * ROM.dT_mean_ref;
   const s = 1.0 / (1.0 + ROM.alpha * Math.max(dT_mean, 0.0));
-  // Euler: τ·dβ/dt = s2·s − β
-  const dbeta = (s2 * s - sim.beta) / ROM.tau;
-  sim.beta = Math.max(0.0, sim.beta + dbeta * dt);
-  // Lumped ODE for coils / iron
+
+  // (1) Lumped ODE for coils / iron — integrate FIRST so the disc's hot-air
+  //     drive below reads this step's coil temperature (the source of inertia).
+  //     Each body convects into the SHARED LOCAL air node (sim.T.air), not the
+  //     far field — they heat up a common pocket of air around themselves.
+  let Qconv = 0.0;
   for (const k in LUMPED.nodes) {
     const nd = LUMPED.nodes[k];
     const q   = nd.P_ref * s2;
-    const out = nd.hA * (sim.T[k] - ROM.T_amb);
+    const out = nd.hA * (sim.T[k] - sim.T.air);   // convect into local air
     sim.T[k] += (q - out) / nd.C * dt;
+    Qconv += out;
   }
+  // Local air node: gains all body convection, loses to the far ambient ROM.T_amb.
+  sim.T.air += (Qconv - AIR.hA_far * (sim.T.air - ROM.T_amb)) / AIR.C_air * dt;
+
+  // (2a) eddy part — instantaneous source, fast disc time constant τ
+  const tgt_eddy = s2 * s;
+  sim.beta_eddy = Math.max(0.0,
+    sim.beta_eddy + (tgt_eddy - sim.beta_eddy) / ROM.tau * dt);
+  // (2b) hot-air part — target tracks the (inertia-laden) coil temperature.
+  //      coilAirDrive() → s2 at steady state, so β_air_ss = s2·s as before.
+  const tgt_air = coilAirDrive() * s;
+  sim.beta_air = Math.max(0.0,
+    sim.beta_air + (tgt_air - sim.beta_air) / ROM.tau * dt);
+
+  sim.beta = ROM.f_eddy * sim.beta_eddy + ROM.f_air * sim.beta_air;
   sim.t += dt;
 }
 
 function resetSim() {
-  sim.beta = 0.0; sim.t = 0.0;
+  sim.beta = 0.0; sim.beta_eddy = 0.0; sim.beta_air = 0.0; sim.t = 0.0;
   for (const k in sim.T) sim.T[k] = ROM.T_amb;
   sim.hist_t    = [0.0];
   sim.hist_Tmax = [ROM.T_amb];
@@ -514,17 +632,19 @@ document.querySelectorAll('.panel').forEach(p => {
 
 // Build sub-meshes (plate levitates, base is fixed)
 function buildSub(keepFn) {
-  const P = [], G = [], DT = [];
+  const P = [], G = [], DT = [], DTA = [];
   for (let tri = 0; tri < regions.length; tri++) {
     if (!keepFn(regions[tri])) continue;
     for (let v = 0; v < 3; v++) {
       const i = (tri * 3 + v) * 3;
       P.push(positions[i], positions[i+1], positions[i+2]);
-      DT.push(dT_ref_vtx[tri * 3 + v]);   // FEM ΔT_ref for this vertex
+      DT.push(dT_ref_vtx[tri * 3 + v]);    // eddy ΔT (uniform through thickness)
+      DTA.push(dT_air_vtx[tri * 3 + v]);   // hot-air ΔT (bottom-weighted)
     }
     G.push(regions[tri]);
   }
-  return {pos: new Float32Array(P), reg: new Uint8Array(G), dT: new Float32Array(DT)};
+  return {pos: new Float32Array(P), reg: new Uint8Array(G),
+          dT: new Float32Array(DT), dTa: new Float32Array(DTA)};
 }
 function makeMesh(sub) {
   const g = new THREE.BufferGeometry();
@@ -535,19 +655,31 @@ function makeMesh(sub) {
   const m = new THREE.Mesh(g,
     new THREE.MeshStandardMaterial({vertexColors:true, roughness:0.4, metalness:0.6,
                                     side:THREE.DoubleSide}));
-  return {mesh:m, geo:g, reg:sub.reg, dT:sub.dT, col};
+  return {mesh:m, geo:g, reg:sub.reg, dT:sub.dT, dTa:sub.dTa, col};
+}
+
+// Per-disc-vertex live temperature: eddy part (fast β_eddy, uniform) + hot-air part
+// (slow β_air, bottom-weighted). The two time constants differ, so the top/bottom
+// gradient GROWS over time as the coils' hot air builds up — not a frozen pattern.
+function discVtxT(M, vi) {
+  return ROM.T_amb + ROM.f_eddy * sim.beta_eddy * M.dT[vi]
+                   + ROM.f_air  * sim.beta_air  * M.dTa[vi];
 }
 const baseM  = makeMesh(buildSub(r => r !== 0));  // coils + iron + structure
 const plateM = makeMesh(buildSub(r => r === 0));  // aluminium disc (levitates)
 
-// Plate FEM field spans a small range (center hotter than rim); precompute its
-// ΔT min/max so the disc can be coloured on its OWN adaptive scale — otherwise
-// the radial gradient is invisible against the absolute 25–125 °C scale.
-let plateDTmin = Infinity, plateDTmax = -Infinity;
-for (let i = 0; i < plateM.dT.length; i++) {
-  const v = plateM.dT[i];
-  if (v < plateDTmin) plateDTmin = v;
-  if (v > plateDTmax) plateDTmax = v;
+// Live min/max of the disc temperature field (radial + top/bottom gradient).
+// Recomputed each frame because the field SHAPE changes over time (β_eddy vs β_air).
+// Used both for the disc's relative colour scale and for telemetry.
+let discTlo = ROM.T_amb, discThi = ROM.T_amb;
+function updateDiscRange() {
+  let lo = Infinity, hi = -Infinity;
+  for (let vi = 0; vi < plateM.dT.length; vi++) {
+    const T = discVtxT(plateM, vi);
+    if (T < lo) lo = T;
+    if (T > hi) hi = T;
+  }
+  discTlo = lo; discThi = hi;
 }
 
 // Bounding box from full model
@@ -598,21 +730,21 @@ function paintMesh(M) {
   const tnOuter = (sim.T.outer - T_COLOR_LO) / TRANGE;
   const tnIron  = (sim.T.iron  - T_COLOR_LO) / TRANGE;
   const tnByReg = [0, tnInner, tnOuter, tnIron];
-  // Disc adaptive range (live).
-  const Tlo = ROM.T_amb + sim.beta * plateDTmin;
-  const Thi = ROM.T_amb + sim.beta * plateDTmax;
-  const adaptive = (Thi - Tlo) > 0.05;
-  const invSpan  = adaptive ? 1.0 / (Thi - Tlo) : 0.0;
+  // Disc relative scale: blue = coolest part of plate (top rim), red = hottest
+  // (bottom centre). Only stretch once the in-plate spread is physically meaningful
+  // (≥0.3 K) — below that the plate is ~isothermal, so use the absolute 25–125 °C
+  // scale and it reads as a uniformly-warming blue (no fake rainbow on noise).
+  const span     = discThi - discTlo;
+  const adaptive = span > 0.3;
+  const invSpan  = adaptive ? 1.0 / span : 0.0;
   for (let tri = 0; tri < M.reg.length; tri++) {
     const reg = M.reg[tri];
     for (let v = 0; v < 3; v++) {
       const vi  = tri * 3 + v;
       const idx = vi * 3;
       if (reg === 0) {
-        // Disc FEM field: own adaptive scale reveals the small radial gradient;
-        // absolute scale until it warms (β≈0).
-        const T  = ROM.T_amb + sim.beta * M.dT[vi];
-        const tn = adaptive ? (T - Tlo) * invSpan : (T - T_COLOR_LO) / TRANGE;
+        const T  = discVtxT(M, vi);
+        const tn = adaptive ? (T - discTlo) * invSpan : (T - T_COLOR_LO) / TRANGE;
         writeRamp(col, idx, tn);
       } else if (reg === 4) {
         col[idx] = STRUCT_RGB[0]; col[idx+1] = STRUCT_RGB[1]; col[idx+2] = STRUCT_RGB[2];
@@ -624,14 +756,14 @@ function paintMesh(M) {
   M.geo.attributes.color.needsUpdate = true;
 }
 
-// ── T_max / T_mean from plate sub-mesh ───────────────────────────────────────
+// ── T_max / T_mean from plate sub-mesh (combined eddy + hot-air field) ────────
 function plateTmax() {
-  return ROM.T_amb + sim.beta * Math.max(...plateM.dT);
+  return discThi;   // hottest disc vertex — kept current by updateDiscRange()
 }
 function plateTmean() {
   let s = 0;
-  for (let i = 0; i < plateM.dT.length; i++) s += plateM.dT[i];
-  return ROM.T_amb + sim.beta * (s / plateM.dT.length);
+  for (let vi = 0; vi < plateM.dT.length; vi++) s += discVtxT(plateM, vi);
+  return s / plateM.dT.length;
 }
 // T_ss for current I (no sigma correction for speed, close enough for UI)
 function plateTss(I) {
@@ -715,9 +847,11 @@ const setBox = (id, T) => document.getElementById(id).style.background =
 document.getElementById('tauLabel').textContent =
   `τ = ${(ROM.tau/60).toFixed(2)} min  |  UA = ${ROM.UA.toFixed(4)} W/K`;
 
-// Precompute coil steady-state temperatures (at I_ref) — shown as target arrows
-const T_ss_inner = ROM.T_amb + LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA;
-const T_ss_outer = ROM.T_amb + LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA;
+// Precompute coil steady-state temperatures (at I_ref) — shown as target arrows.
+// True steady rise = own rise above the local air node + the air node's rise above
+// the far ambient (AIR_DT_SS_REF), since the coils now convect into shared air.
+const T_ss_inner = ROM.T_amb + LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF;
+const T_ss_outer = ROM.T_amb + LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF;
 document.getElementById('tInSS').textContent  = `→${T_ss_inner.toFixed(0)}°`;
 document.getElementById('tOutSS').textContent = `→${T_ss_outer.toFixed(0)}°`;
 
@@ -730,18 +864,17 @@ document.getElementById('tOutSS').textContent = `→${T_ss_outer.toFixed(0)}°`;
   if (ROM.saturated)
     document.getElementById('satRow').title = 'WARNING: iron core is magnetically saturated — μ_r=1000 is invalid!';
 }
-// Bottom air temperature visible to disc (scales with I²: P_coil ∝ I²)
-const P_coil_ref = LUMPED.nodes.inner.P_ref + LUMPED.nodes.outer.P_ref;
-function updateAirBot(I) {
-  const s2 = (I / ROM.I_ref) ** 2;
-  const Tinf_bot = ROM.T_amb + ROM.k_coil * P_coil_ref * s2;
+// Bottom air temperature seen by the disc. It is set by the LIVE coil temperature
+// (coilAirDrive), so it warms slowly with the copper mass rather than jumping with
+// I² — this is the thermal-inertia effect. Updated every frame in the loop.
+function liveAirBot() {
+  const Tinf_bot = ROM.T_amb + (ROM.Tinf_bot_ref - ROM.T_amb) * coilAirDrive();
   document.getElementById('tAirBot').textContent = Tinf_bot.toFixed(1) + ' °C';
 }
-updateAirBot(5.0);
+liveAirBot();
 sI.oninput = () => {
   targetI = +sI.value;
   document.getElementById('vI').textContent = targetI.toFixed(1)+' A';
-  updateAirBot(targetI);
 };
 
 // ── Main animation loop ───────────────────────────────────────────────────────
@@ -765,6 +898,10 @@ function loop() {
     const I_now = Math.max(0, Math.min(getI(), 20.0));
     romStep(I_now, dt);
   }
+
+  // Refresh the live disc min/max (combined eddy + hot-air field) ONCE per frame.
+  // Everything downstream (colour scale, T_max, history, telemetry) reads it.
+  updateDiscRange();
 
   // Record history every ~1 sim-second
   recordTimer += dt_sim;
@@ -810,6 +947,7 @@ function loop() {
   setBox('bIn',  sim.T.inner);
   setBox('bOut', sim.T.outer);
   setBox('bFe',  sim.T.iron);
+  liveAirBot();
 
   drawChart();
   controls.update();

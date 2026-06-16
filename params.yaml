@@ -91,7 +91,14 @@ thermal_bc:
 # height is exaggerated so the thin disc reads as a solid object.
 levitating_disc:
   n_theta: 120                 # revolve resolution (rim smoothness)
-  display_z_exaggeration: 8.0  # VISUAL ONLY: 3mm plate → 24mm display height
+  display_z_exaggeration: 2.0  # VISUAL ONLY: 3mm plate → 6mm display height
+  # VISUAL exaggeration of the through-thickness gradient. The hot air rising from
+  # the coils heats the disc's BOTTOM face; eddy currents heat it uniformly. The
+  # real Δz across a 3mm Al plate is ~0.03 K (invisible), so the hot-air component
+  # is weighted bottom>top by g(f)=1+grad·(0.5−f), f=0 bottom→1 top. grad=0 disables
+  # it; 0.5 ⇒ bottom runs ~1.7× the top of the hot-air rise. Thickness-mean is
+  # preserved, so T_mean and the validated steady state are unchanged.
+  bottom_heating_gradient: 0.5
 
 # --- Metal plate library (swap for comparison) ---
 plate_library:
