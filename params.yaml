@@ -49,12 +49,13 @@ coils:
 # --- Iron core (NEW compared to TEAM28). CONFIRM geometry with real device! ---
 iron_core:
   enabled: true
-  mu_r: 1000.0              # linear (assuming not saturated at 5A; see physics.md)
+  mu_r: 1000.0              # linear initial value; solver applies saturation correction
   sigma_S_per_m: 1.0e6      # >0 if solid core (eddy loss present); set 0 if laminated
   r_inner_mm: 0.0           # central cylindrical core (placeholder)
   r_outer_mm: 25.0
   z_top_mm: 0.0
   z_bottom_mm: -52.0
+  B_sat_T: 1.5              # saturation flux density for Lorentzian μ_r model
 
 # --- Payload Model ---
 # PLACEHOLDER, disabled by default. When enabled, EM adds P_payload_W and the
@@ -76,8 +77,21 @@ payload_model:
 thermal_bc:
   T_ambient_degC: 25.0
   h_convection_W_per_m2K: 10.0    # top + side surfaces (natural convection)
-  h_bottom_W_per_m2K: 25.0        # bottom surface facing coils (hotter air)
+  h_bottom_W_per_m2K: 25.0        # bottom surface facing coils (enhanced convection)
   emissivity: 0.0
+  # Coil→disc air coupling: Tinf_bot = T_amb + k_coil * P_coil_W.
+  # Physical estimate: 3.8mm gap, conduction+radiation → k_coil ≈ 0.10–0.30 K/W.
+  # At 5A (P_coil≈73W): k=0.15 → Tinf_bot≈36°C → disc T_ss≈36–38°C (ΔT≈11–13K).
+  # Calibrate from thermocouple measurement once sensor data is available.
+  k_coil_coupling_K_per_W: 0.15
+
+# --- Levitating disc RENDER geometry (visual only; physics uses plate_material) ---
+# ONE flat solid disc whose radius is taken from plate_material.radius_mm above.
+# Physics (eddy loss + thermal mass) stays at Ø160mm x 3mm; only the 3D display
+# height is exaggerated so the thin disc reads as a solid object.
+levitating_disc:
+  n_theta: 120                 # revolve resolution (rim smoothness)
+  display_z_exaggeration: 8.0  # VISUAL ONLY: 3mm plate → 24mm display height
 
 # --- Metal plate library (swap for comparison) ---
 plate_library:

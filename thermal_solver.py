@@ -127,6 +127,13 @@ def solve_steady(cfg, P_total_override=None, em_losses=None):
     h      = float(cfg.bc["h_convection_W_per_m2K"])
     h_bot  = float(cfg.bc.get("h_bottom_W_per_m2K", h))   # bottom surface facing coils
     Tinf = float(cfg.bc["T_ambient_degC"])
+    
+    # Coil→disc air coupling: coils heat the air gap below the disc (Joule heating from coils)
+    Tinf_bot = Tinf
+    if em_losses is not None:
+        # k_coil [K/W]: each watt of coil loss raises bottom air temperature by this amount (calibrate from sensor)
+        k_coil = float(cfg.bc.get("k_coil_coupling_K_per_W", 0.3))
+        Tinf_bot = Tinf + k_coil * em_losses.get("P_coil_W", 0.0)
 
     pl_cfg = cfg.raw.get("payload_model", {})
     if pl_cfg.get("enabled", False):
@@ -221,12 +228,13 @@ def solve_steady(cfg, P_total_override=None, em_losses=None):
         # Bottom surface (z ≈ 0) uses h_bot; remaining surfaces use h
         on_bottom = (za < tol_z) and (zb < tol_z)
         h_eff = h_bot if on_bottom else h
+        T_eff = Tinf_bot if on_bottom else Tinf
         L = np.hypot(rb - ra, zb - za)
         # edge mass matrix with 2*pi*r weighting (see derivation in README)
         Kedge = 2 * np.pi * h_eff * (L / 12.0) * np.array([[3 * ra + rb, ra + rb],
                                                              [ra + rb, ra + 3 * rb]])
-        fa = 2 * np.pi * h_eff * Tinf * L * (2 * ra + rb) / 6.0
-        fb = 2 * np.pi * h_eff * Tinf * L * (ra + 2 * rb) / 6.0
+        fa = 2 * np.pi * h_eff * T_eff * L * (2 * ra + rb) / 6.0
+        fb = 2 * np.pi * h_eff * T_eff * L * (ra + 2 * rb) / 6.0
         K[a, a] += Kedge[0, 0]; K[a, bb] += Kedge[0, 1]
         K[bb, a] += Kedge[1, 0]; K[bb, bb] += Kedge[1, 1]
         F[a] += fa; F[bb] += fb
@@ -237,7 +245,7 @@ def solve_steady(cfg, P_total_override=None, em_losses=None):
         "coords": coords, "tris": tris, "T": T,
         "p_e": p_e, "area_e": area_e, "rc_e": rc_e,
         "boundary_edges": boundary_edges, "R": R, "t": t,
-        "h": h, "h_bot": h_bot, "Tinf": Tinf, "P_total": P_total,
+        "h": h, "h_bot": h_bot, "Tinf": Tinf, "Tinf_bot": Tinf_bot, "P_total": P_total,
         "source": source_label,
     }
 
@@ -249,7 +257,9 @@ def energy_balance(res):
     Q_in = np.sum(res["p_e"] * 2 * np.pi * res["rc_e"] * res["area_e"])
     coords, T = res["coords"], res["T"]
     r, z = coords[:, 0], coords[:, 1]
-    h, h_bot, Tinf = res["h"], res["h_bot"], res["Tinf"]
+    h, h_bot = res["h"], res["h_bot"]
+    Tinf     = res["Tinf"]
+    Tinf_bot = res.get("Tinf_bot", Tinf)   # bottom may be warmer (coil coupling)
     tol_z = res["t"] * 0.02
     Q_out = 0.0
     for (a, b) in res["boundary_edges"]:
@@ -258,8 +268,10 @@ def energy_balance(res):
         if abs(ra) < 1e-12 and abs(rb) < 1e-12:
             continue
         L = np.hypot(rb - ra, zb - za)
-        Ta, Tb = T[a] - Tinf, T[b] - Tinf
-        h_eff = h_bot if (za < tol_z and zb < tol_z) else h
+        on_bottom = (za < tol_z) and (zb < tol_z)
+        h_eff  = h_bot if on_bottom else h
+        T_eff  = Tinf_bot if on_bottom else Tinf
+        Ta, Tb = T[a] - T_eff, T[b] - T_eff
         Q_out += 2 * np.pi * h_eff * L / 6.0 * (
             Ta * (2 * ra + rb) + Tb * (ra + 2 * rb))
     return Q_in, Q_out

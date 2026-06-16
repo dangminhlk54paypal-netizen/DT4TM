@@ -98,7 +98,13 @@ def material(cfg, rc, zc):
 # --------------------------------------------------------------------------
 # 3) ASSEMBLY & SOLVE (complex system)
 # --------------------------------------------------------------------------
-def solve_em(cfg):
+def solve_em(cfg, nu_e_override=None):
+    """Solve EM phasor system.
+
+    nu_e_override: optional list/array of length len(tris).  Each entry is
+    either None (use material()) or a float ν value that overrides material()
+    for that element — used by solve_em_saturating for nonlinear iron ν.
+    """
     coords, tris, rs, zs = make_mesh_em(cfg)
     nN = coords.shape[0]
     r, z = coords[:, 0], coords[:, 1]
@@ -119,6 +125,9 @@ def solve_em(cfg):
         rc = (ri + rj + rm) / 3.0
         zc = (zi + zj + zm) / 3.0
         nu, sigma, Js = material(cfg, rc, zc)
+        # Per-element ν override (for nonlinear iron saturation)
+        if nu_e_override is not None and nu_e_override[e] is not None:
+            nu = float(nu_e_override[e])
         ridge[e] = [rc, area, sigma, Js]
 
         b = np.array([zj - zm, zm - zi, zi - zj]) / (2 * area)  # dN/dr
@@ -156,11 +165,153 @@ def solve_em(cfg):
 
 
 # --------------------------------------------------------------------------
+# 3b) B-FIELD PER ELEMENT  (used by saturation check and Picard solver)
+# --------------------------------------------------------------------------
+def _compute_B_per_element(res):
+    """Return RMS |B| [T] at each element centroid from the A_φ solution.
+
+    Axisymmetric relations:
+        B_r = -∂A_φ/∂z          B_z = A_φ/r + ∂A_φ/∂r
+    RMS from peak phasor: |B|_rms = sqrt(|B_r|² + |B_z|²) / sqrt(2).
+    """
+    A_sol = res["A"]
+    coords, tris = res["coords"], res["tris"]
+    r_all, z_all = coords[:, 0], coords[:, 1]
+    B_e = np.zeros(len(tris))
+    for e, (i, j, m) in enumerate(tris):
+        ri, rj, rm = r_all[i], r_all[j], r_all[m]
+        zi, zj, zm = z_all[i], z_all[j], z_all[m]
+        area = 0.5 * abs((rj - ri) * (zm - zi) - (rm - ri) * (zj - zi))
+        if area <= 0:
+            continue
+        rc = (ri + rj + rm) / 3.0
+        # Shape-function gradients: b=dN/dr, c=dN/dz  (same as assembly)
+        b = np.array([zj - zm, zm - zi, zi - zj]) / (2 * area)
+        c = np.array([rm - rj, ri - rm, rj - ri]) / (2 * area)
+        Ai, Aj, Am = A_sol[i], A_sol[j], A_sol[m]
+        dAdr = b[0] * Ai + b[1] * Aj + b[2] * Am
+        dAdz = c[0] * Ai + c[1] * Aj + c[2] * Am
+        A_c  = (Ai + Aj + Am) / 3.0
+        B_r  = -dAdz                                    # complex phasor
+        B_z  = (A_c / max(rc, 1e-12)) + dAdr           # complex phasor
+        B_e[e] = math.sqrt(abs(B_r) ** 2 + abs(B_z) ** 2) / math.sqrt(2)
+    return B_e
+
+
+def check_saturation(res, cfg=None):
+    """Compute max RMS |B| in the iron core region.
+
+    Returns (B_max_iron, B_e) where:
+        B_max_iron  [T]  — peak RMS B inside iron region (0 if iron disabled)
+        B_e         [T]  — per-element RMS B array over all elements
+    """
+    if cfg is None:
+        from config import load_config
+        cfg = load_config()
+
+    B_e = _compute_B_per_element(res)
+
+    fe = cfg.iron
+    B_max_iron = 0.0
+    if fe.get("enabled", False):
+        coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
+        z_all = coords[:, 1]
+        mm = 1e-3
+        r0, r1 = fe["r_inner_mm"] * mm, fe["r_outer_mm"] * mm
+        z0, z1 = fe["z_bottom_mm"] * mm, fe["z_top_mm"] * mm
+        for e in range(len(tris)):
+            rc = ridge[e, 0]
+            zc = (z_all[tris[e, 0]] + z_all[tris[e, 1]] + z_all[tris[e, 2]]) / 3.0
+            if r0 <= rc <= r1 and z0 <= zc <= z1:
+                if B_e[e] > B_max_iron:
+                    B_max_iron = B_e[e]
+    return B_max_iron, B_e
+
+
+# --------------------------------------------------------------------------
+# 3c) NONLINEAR SOLVE — Picard iteration for iron saturation
+# --------------------------------------------------------------------------
+def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
+                        relax: float = 0.5):
+    """EM solve with iron saturation via Picard (fixed-point) iteration.
+
+    Saturation model (Lorentzian):
+        μ_r_eff(B) = 1 + (μ_r_lin − 1) / (1 + (B / B_sat)²)
+
+    Gives μ_r_eff → μ_r_lin for B → 0 and μ_r_eff → 1 for B >> B_sat.
+    Under-relaxation (relax=0.5) stabilises convergence.
+
+    Falls back to linear solve() if iron is disabled or not saturating.
+    Returns the same dict as solve_em().
+    """
+    fe = cfg.iron
+    if not fe.get("enabled", False):
+        return solve_em(cfg)
+
+    B_sat    = float(fe.get("B_sat_T", 1.5))
+    mu_r_lin = float(fe.get("mu_r", 1000.0))
+    mm = 1e-3
+    r0_fe = fe["r_inner_mm"] * mm
+    r1_fe = fe["r_outer_mm"] * mm
+    z0_fe = fe["z_bottom_mm"] * mm
+    z1_fe = fe["z_top_mm"] * mm
+
+    # Initial linear solve
+    res = solve_em(cfg)
+    coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
+    z_all = coords[:, 1]
+
+    # Identify iron element indices once
+    iron_idx = [
+        e for e in range(len(tris))
+        if (r0_fe <= ridge[e, 0] <= r1_fe and
+            z0_fe <= (z_all[tris[e, 0]] + z_all[tris[e, 1]] + z_all[tris[e, 2]]) / 3.0 <= z1_fe)
+    ]
+    if not iron_idx:
+        return res
+
+    nu_e_override = [None] * len(tris)
+    nu_iron = np.full(len(iron_idx), 1.0 / (mu_r_lin * MU0))  # start from linear ν
+
+    for it in range(max_iter):
+        B_e = _compute_B_per_element(res)
+        B_iron = np.array([B_e[e] for e in iron_idx])
+        B_max  = B_iron.max() if len(B_iron) > 0 else 0.0
+
+        # New μ_r from Lorentzian saturation model
+        mu_r_eff    = 1.0 + (mu_r_lin - 1.0) / (1.0 + (B_iron / B_sat) ** 2)
+        nu_iron_new = 1.0 / (mu_r_eff * MU0)
+
+        # Under-relaxation: blend old and new ν
+        nu_iron = (1.0 - relax) * nu_iron + relax * nu_iron_new
+        for ii, e in enumerate(iron_idx):
+            nu_e_override[e] = nu_iron[ii]
+
+        res_new = solve_em(cfg, nu_e_override=nu_e_override)
+
+        # Convergence: relative change in A field
+        dA_rel = float(np.abs(res_new["A"] - res["A"]).max() /
+                       (np.abs(res_new["A"]).max() + 1e-30))
+        mu_r_mean = float(mu_r_eff.mean())
+        print(f"    [SAT {it+1:2d}] B_max={B_max:.3f}T  μ_r_mean={mu_r_mean:.0f}"
+              f"  ΔA_rel={dA_rel:.4f}", flush=True)
+        res = res_new
+
+        if dA_rel < tol and it >= 1:
+            print(f"    Saturation converged after {it + 1} iterations.")
+            break
+    else:
+        print(f"    Warning: saturation did not converge in {max_iter} iterations.")
+
+    return res
+
+
+# --------------------------------------------------------------------------
 # 4) POST-PROCESSING: loss map + total loss by region
 # --------------------------------------------------------------------------
 def compute_losses(cfg, res=None):
     if res is None:
-        res = solve_em(cfg)
+        res = solve_em_saturating(cfg)  # handles saturation when iron enabled
     A, tris, ridge, omega = res["A"], res["tris"], res["ridge"], res["omega"]
     coords = res["coords"]
     mm = 1e-3
@@ -314,6 +465,13 @@ if __name__ == "__main__":
     print(f"  IRON CORE losses (eddy)     : {L['P_iron_W']:8.3f} W")
     print(f"  COIL losses      (ohmic)    : {L['P_coil_W']:8.3f} W")
     print(f"  TOTAL heat source           : {L['P_total_W']:8.3f} W")
+    
+    B_max_iron, _ = check_saturation(L["res"], cfg)
+    B_sat = float(cfg.iron.get("B_sat_T", 1.5))
+    print(f"  MAX B in iron (RMS)         : {B_max_iron:.3f} T  (B_sat={B_sat} T)")
+    if B_max_iron > B_sat:
+        print(f"  !!! SATURATED: B_max={B_max_iron:.2f}T > B_sat={B_sat}T. "
+              "Nonlinear μ_r correction applied by solve_em_saturating().")
 
     # I² rule check
     cfg.raw["excitation"]["current_A"] = 2 * cfg.I
