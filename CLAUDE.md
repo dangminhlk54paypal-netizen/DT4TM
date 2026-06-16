@@ -65,12 +65,12 @@ Absolute values need benchmark calibration. (Enabling payload raises plate eddy 
       compute_losses(cfg) → P_plate/P_iron/P_coil + q_e map. I²-check passes.
       compute_lift_force() + run_benchmark_validation(): z_eq=10.9mm vs 11.3mm (3.5% err).
 - [x] rom.py — ThermalROM: build() FEM once at I_ref, T_steady(I) scalar multiply,
-      simulate(I_arr, t_arr) ODE bậc nhất, calibrate_UA() từ sensor.
-      τ=3.4 phút | σ(T) correction lặp | I²-scaling verified 4.000000.
+      simulate(I_arr, t_arr) first-order ODE, calibrate_UA() from sensor.
+      τ=3.4 min | σ(T) correction iterative | I²-scaling verified 4.000000.
 - [x] digital_twin.py — DigitalTwin(rom): step() Euler, run_live() matplotlib animation.
-      Kịch bản: step/ramp/sine/pulse/manual. Slider I, Slider tốc độ (1×–200×, log),
-      RadioButtons chọn tấm (plate_library), Space=pause. ROM rebuild on-demand + cache.
-      Sensor integration để sau (calibrate_UA() đã sẵn trong ROM).
+      Scenarios: step/ramp/sine/pulse/manual. Slider I, speed slider (1×–200×, log),
+      RadioButtons plate selector (plate_library), Space=pause. ROM rebuild on-demand + cache.
+      Sensor integration pending (calibrate_UA() already wired in ROM).
 - [x] visualize.py — make_plate_3d(): revolve FEM 2D→3D surface (top+bot cap+rim),
       matplotlib 3D render (z_scale exaggeration), GLB export via trimesh.
       Outputs: thermal_3d.png, thermal_2d_section.png, plate.glb (247 KB).

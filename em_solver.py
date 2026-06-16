@@ -10,7 +10,7 @@ Solves the magnetic vector potential equation (azimuthal component A_φ only, CO
 - Boundary: A_φ = 0 on axis r=0 (symmetry) and on outer boundary (field vanishes far away).
 
 CYCLE-AVERAGED Joule losses (½ factor from sin²):
-    q(r,z) = ½ · σ · ω² · |A_φ|²              [W/m³]   (trong vật dẫn)
+    q(r,z) = ½ · σ · ω² · |A_φ|²              [W/m³]   (in conductor)
 
 Since system is LINEAR (constant μ_r): A_φ ∝ î  ->  q ∝ î²  ->  preserves I² rule for real-time.
 Coil ohmic losses are computed separately via I²R (more physical for multi-turn thin wire coils).
@@ -41,7 +41,7 @@ def make_mesh_em(cfg):
     fs, cs = em["fine_step_mm"], em["coarse_step_mm"]
     rmax, zmin, zmax = em["r_max_mm"], em["z_min_mm"], em["z_max_mm"]
     rs = _graded([(0, 110, fs), (110, rmax, cs)]) * 1e-3
-    # Fine mesh covers từ -60mm đến max(15, z_plate_top+10)mm để theo vị trí tấm
+    # Fine mesh covers from -60mm to max(15, z_plate_top+10)mm to track plate position
     p = cfg.plate
     z_fine_top = max(15.0, p["z_bottom_mm"] + p["thickness_mm"] + 10.0)
     zs = _graded([(zmin, -60, cs), (-60, z_fine_top, fs), (z_fine_top, zmax, cs)]) * 1e-3
@@ -125,12 +125,12 @@ def solve_em(cfg):
         c = np.array([rm - rj, ri - rm, rj - ri]) / (2 * area)  # dN/dz
         # curl-curl (gradient) :  ν (b bᵀ + c cᵀ) · r_c·area
         Ke = nu * (np.outer(b, b) + np.outer(c, c)) * rc * area
-        # số hạng A/r² (regularize) :  ν/r_c · area · Mhat
+        # A/r² term (regularize): ν/r_c · area · Mhat
         Ke += nu / rc * area * Mhat
         # eddy currents :  jωσ · r_c·area · Mhat
         Ke = Ke.astype(complex)
         Ke += 1j * omega * sigma * rc * area * Mhat
-        # source :  J_s · r_c · area/3 cho mỗi node
+        # source: J_s · r_c · area/3 per node
         fe = Js * rc * area / 3.0
         idx = [i, j, m]
         for a in range(3):
@@ -204,7 +204,7 @@ def compute_losses(cfg, res=None):
 # --------------------------------------------------------------------------
 # 5) LIFT FORCE: cycle-averaged Lorentz force integration over z
 #    F_z = -½ Re[ ∫ J_φ · B_r* · 2π r dA ]
-#    J_φ = -jωσ A_φ  (dòng xoáy),  B_r = -∂A_φ/∂z  (từ trường hướng r)
+#    J_φ = -jωσ A_φ  (eddy current),  B_r = -∂A_φ/∂z  (radial magnetic field)
 # --------------------------------------------------------------------------
 def compute_lift_force(cfg, res=None):
     """Cycle-averaged lift force [N] on all conductors (plate + core).
@@ -228,9 +228,9 @@ def compute_lift_force(cfg, res=None):
 
         # Gradient dN/dz cho P1: [rm-rj, ri-rm, rj-ri] / (2·area)
         cz = np.array([rm - rj, ri - rm, rj - ri]) / (2.0 * area)
-        dAdz = cz[0] * A[i] + cz[1] * A[j] + cz[2] * A[m]   # ∂A_φ/∂z phức
+        dAdz = cz[0] * A[i] + cz[1] * A[j] + cz[2] * A[m]   # ∂A_φ/∂z (complex)
 
-        A_c = (A[i] + A[j] + A[m]) / 3.0        # A tại tâm phần tử (phức)
+        A_c = (A[i] + A[j] + A[m]) / 3.0        # A at element centroid (complex)
         J_phi = -1j * omega * sigma * A_c         # J_φ = -jωσA_φ
         B_r   = -dAdz                             # B_r = -∂A_φ/∂z
 

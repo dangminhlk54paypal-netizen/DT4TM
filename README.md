@@ -1,4 +1,4 @@
-# Thermal Digital Twin — TEAM 28 (Electrodynamic Levitation Device)
+# Thermal Digital Twin — (Electrodynamic Levitation Device)
 
 A digital twin that predicts the **temperature field in real time** for the
 aluminium plate of the TEAM 28 electrodynamic levitation device (at TEMF).

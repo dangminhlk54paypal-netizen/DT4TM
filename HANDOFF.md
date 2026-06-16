@@ -1,39 +1,40 @@
-# HANDOFF — Digital Twin nhiệt TEAM 28
+# HANDOFF — Digital Twin for Thermal Management
 
-> **Nguồn sự thật chính là [CLAUDE.md](CLAUDE.md) + [README.md](README.md).**
-> File này chỉ tóm tắt nhanh trạng thái bàn giao. Cập nhật: 2026-06-15.
+> **Primary source of truth is [CLAUDE.md](CLAUDE.md) + [README.md](README.md).**
+> This file is a quick handoff status summary. Last updated: 2026-06-15.
 
-## Mục tiêu
-Digital twin dự đoán **trường nhiệt độ real-time** của tấm nhôm trên hệ nâng
-điện động TEAM 28 (TEMF). Validate với thiết bị thật → trực quan 3D → AR app → QR.
+## Goal
+A digital twin that predicts the **real-time temperature field** of the aluminium plate
+in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the real rig
+→ 3D visualization → AR app → QR code.
 
-## Quyết định kiến trúc (đã chốt)
-- **Không FEMM** (máy dev macOS). Pure Python: `numpy + scipy + pyyaml + matplotlib`
-  (+ `trimesh` cho GLB). Bài toán **đối xứng trục** → giải 2D (r,z), quay thành 3D.
-- **Real-time:** tổn hao ~ I², phân bố cố định → giải FEM 1 lần ở I_ref=5A,
-  online chỉ nhân (I/I_ref)². Đã kiểm chứng I²-scaling = 4.000000.
-- Mọi tham số trong [params.yaml](params.yaml). Code nằm **phẳng ở repo root**.
+## Architecture decisions (finalized)
+- **No FEMM** (dev machine is macOS). Pure Python: `numpy + scipy + pyyaml + matplotlib`
+  (+ `trimesh` for GLB export). Problem is **axisymmetric** → solve in 2D (r, z), revolve to 3D.
+- **Real-time:** losses scale as I², spatial pattern stays fixed → run FEM once at I_ref=5A,
+  online inference is just a multiply by (I/I_ref)². I²-scaling verified: 4.000000.
+- All parameters live in [params.yaml](params.yaml). All source files are **flat in the repo root**.
 
-## Số liệu thiết bị (trong params.yaml)
-- Tấm nhôm: **R=80mm (Ø16cm)**, dày 3mm (placeholder — cần ĐO lại), σ=3.4e7 S/m.
-- Dòng: **î = 5 A** vận hành, f = 50 Hz (benchmark gốc dùng 20A).
-- Số vòng: **inner=1000, outer=500**.
-- **Có lõi sắt** (μ_r=1000, placeholder geometry — CẦN xác nhận với rig thật).
-- payload_model (đĩa thép): placeholder, **tắt mặc định**.
+## Device numbers (in params.yaml)
+- Aluminium plate: **R=80mm (Ø16cm)**, thickness 3mm (placeholder — needs to be MEASURED), σ=3.4e7 S/m.
+- Current: **î = 5 A** operating point, f = 50 Hz (original benchmark used 20A).
+- Turns: **inner=1000, outer=500**.
+- **Iron cores present** (μ_r=1000, placeholder geometry — CONFIRM with the real rig).
+- payload_model (steel disc): placeholder, **disabled by default**.
 
-## Trạng thái (đã xong gần hết)
+## Status (mostly done)
 - [x] config.py, params.yaml, thermal_solver.py (energy balance 0.000%)
-- [x] em_solver.py — eddy AC + lift force, benchmark **z_eq=10.9mm vs 11.3mm (3.5%)**
-- [x] rom.py — ROM real-time (I² + transient τ≈3.4 phút + σ(T))
-- [x] digital_twin.py — twin tương tác (slider I, chọn tấm, kịch bản)
+- [x] em_solver.py — AC eddy currents + lift force, benchmark **z_eq=10.9mm vs 11.3mm (3.5%)**
+- [x] rom.py — real-time ROM (I² + transient τ≈3.4 min + σ(T) correction)
+- [x] digital_twin.py — interactive twin (current slider, plate selector, scenarios)
 - [x] visualize.py — revolve 2D→3D, export plate.glb
-- [x] sim_plates.py — so sánh các tấm trong plate_library
-- [x] build_twin_html.py — Phase 5: digital_twin.html standalone (double-click chạy)
-- [ ] data_io.py — đọc sensor CSV → calibrate_UA() (**chờ dữ liệu nhiệt thật**)
+- [x] sim_plates.py — compare plates across plate_library
+- [x] build_twin_html.py — Phase 5: standalone digital_twin.html (double-click to run)
+- [ ] data_io.py — read sensor CSV → calibrate_UA() (**waiting on real thermal sensor data**)
 
 ## Validation
-1. EM tái tạo benchmark gốc (960/576, 20A, R=65mm, no iron) → lực cân bằng z≈11.3mm. ✓
-2. Đổi sang rig (1000/500, iron, 5A) → loss maps.
-3. Loss → thermal → trường T. **Validate nhiệt với cảm biến: khi có dữ liệu.**
+1. EM reproduces original benchmark (960/576, 20A, R=65mm, no iron) → lift force balances at z≈11.3mm. ✓
+2. Switch to real rig (1000/500, iron, 5A) → loss maps.
+3. Losses → thermal solver → T field. **Thermal validation against sensors: pending real data.**
 
-## Lệnh chạy — xem [README.md](README.md) (lưu ý: `python config.py`, KHÔNG phải `src/`).
+## Run commands — see [README.md](README.md) (note: `python config.py`, NOT `src/`).

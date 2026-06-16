@@ -1,13 +1,13 @@
-"""digital_twin.py — Vòng lặp twin thời gian thực với giao diện tương tác.
+"""digital_twin.py — Real-time twin loop with interactive GUI.
 
-Tính năng:
-  • Heatmap T(r,z) cập nhật real-time
-  • Slider dòng điện I (0–5A)
-  • Slider tốc độ thời gian (1×–200×)
-  • Chọn tấm kim loại từ plate_library (Al Ø50/65/80/100, Cu Ø80)
-    → tự rebuild ROM cho tấm mới khi chọn
-  • Kịch bản I(t): step / ramp / sine / pulse / manual
-  • Space = tạm dừng
+Features:
+  • Real-time T(r,z) heatmap
+  • Current slider I (0–5A)
+  • Time-speed slider (1×–200×)
+  • Metal plate selector from plate_library (Al Ø50/65/80/100, Cu Ø80)
+    → automatically rebuilds ROM when a new plate is selected
+  • I(t) scenarios: step / ramp / sine / pulse / manual
+  • Space = pause/resume
 """
 from __future__ import annotations
 import sys, os, copy, math, time
@@ -23,10 +23,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 # ---------------------------------------------------------------------------
-# Kịch bản I(t)
+# I(t) scenarios
 # ---------------------------------------------------------------------------
 def scenario_step(I: float = 5.0):
-    return (lambda t: I), f"Bước I={I}A"
+    return (lambda t: I), f"Step I={I}A"
 
 def scenario_ramp(I: float = 5.0, t_r: float = 60.0):
     return (lambda t: min(t / t_r, 1.0) * I), f"Ramp 0→{I}A/{t_r:.0f}s"
@@ -36,17 +36,17 @@ def scenario_sine(I: float = 5.0):
     return (lambda t: max(0.0, Im + Ia * math.sin(2*math.pi*t/120))), f"Sin {Im:.1f}±{Ia:.1f}A"
 
 def scenario_pulse(I: float = 5.0):
-    return (lambda t: I if (t % 120) < 60 else 0.0), f"Xung {I}A ON60/OFF60s"
+    return (lambda t: I if (t % 120) < 60 else 0.0), f"Pulse {I}A ON60/OFF60s"
 
 SCENARIOS = {"step": scenario_step, "ramp": scenario_ramp,
              "sine": scenario_sine,  "pulse": scenario_pulse}
 
 
 # ---------------------------------------------------------------------------
-# DigitalTwin — máy trạng thái tích phân Euler
+# DigitalTwin — Euler integration state machine
 # ---------------------------------------------------------------------------
 class DigitalTwin:
-    """Giữ β(t); T(r,z,t) = T_amb + β(t)·ΔT_ref(r,z)."""
+    """Holds β(t); T(r,z,t) = T_amb + β(t)·ΔT_ref(r,z)."""
 
     def __init__(self, rom, sigma_correction: bool = True):
         self.rom = rom
@@ -84,7 +84,7 @@ class DigitalTwin:
 
 
 # ---------------------------------------------------------------------------
-# Hàm xây ROM cho một spec tấm từ plate_library
+# Build ROM for a plate spec from plate_library
 # ---------------------------------------------------------------------------
 def _build_rom_for_plate(cfg_base, spec: dict, em_base=None, verbose=True):
     """Clone config, override plate, run EM+thermal → ThermalROM."""
@@ -111,7 +111,7 @@ def _build_rom_for_plate(cfg_base, spec: dict, em_base=None, verbose=True):
     if em_base is not None:
         from em_solver import compute_losses
         if verbose:
-            print(f"  [EM] Giải cho {spec['name']}... ", end="", flush=True)
+            print(f"  [EM] Solving for {spec['name']}... ", end="", flush=True)
         em = compute_losses(cfg)
         if verbose:
             print(f"P={em['P_plate_W']*1e3:.1f} mW")
@@ -121,7 +121,7 @@ def _build_rom_for_plate(cfg_base, spec: dict, em_base=None, verbose=True):
 
 
 # ---------------------------------------------------------------------------
-# run_live — vòng lặp chính
+# run_live — main animation loop
 # ---------------------------------------------------------------------------
 def run_live(
     rom_default,
@@ -139,17 +139,17 @@ def run_live(
     plate_names = [s["name"] for s in plate_lib]
     default_name = f"Al Ø{int(cfg.geometry.plate_radius_m*2e3)}mm"
 
-    # Cache ROM theo tên tấm; điền sẵn tấm mặc định
+    # Cache ROM by plate name; pre-populate with default plate
     _rom_cache: dict[str, object] = {}
     for spec in plate_lib:
         if spec["name"] == default_name:
             _rom_cache[default_name] = rom_default
             break
     if not _rom_cache:
-        # fallback: gán tên đầu tiên
+        # fallback: assign first plate name
         _rom_cache[plate_names[0] if plate_names else "default"] = rom_default
 
-    # Trạng thái chia sẻ (mutable)
+    # Shared mutable state
     state = {
         "rom":       rom_default,
         "twin":      DigitalTwin(rom_default),
@@ -192,8 +192,8 @@ def run_live(
             lbl.set_color(TEXT_CLR)
         if title: ax.set_title(title, fontsize=9, color=TITLE_CLR)
 
-    for ax, t_ in [(ax_T, "T(r,z) — mặt cắt tấm"), (ax_t, "Nhiệt độ theo thời gian"),
-                   (ax_I, "Dòng điện I(t)"), (ax_info, "")]:
+    for ax, t_ in [(ax_T, "T(r,z) — plate cross-section"), (ax_t, "Temperature vs. time"),
+                   (ax_I, "Current I(t)"), (ax_info, "")]:
         _style_ax(ax, t_)
 
     ax_info.axis("off")
@@ -215,10 +215,10 @@ def run_live(
             state["I_func"] = lambda t: state["I_manual"]
 
     # -----------------------------------------------------------------------
-    # Slider tốc độ (1× – 200×, log scale)
+    # Speed slider (1× – 200×, log scale)
     # -----------------------------------------------------------------------
     _log_min, _log_max = 0.0, math.log10(200)
-    sl_spd = Slider(ax_slSp, "Tốc độ", _log_min, _log_max,
+    sl_spd = Slider(ax_slSp, "Speed", _log_min, _log_max,
                     valinit=math.log10(max(speed_init, 1.0)),
                     color="#335533", track_color="#223322")
     sl_spd.label.set_color(TEXT_CLR)
@@ -239,7 +239,7 @@ def run_live(
     # Plate selector
     # -----------------------------------------------------------------------
     ax_plate.set_facecolor(DARK_AX)
-    ax_plate.set_title("Tấm kim loại", fontsize=8, color=TITLE_CLR, pad=2)
+    ax_plate.set_title("Metal plate", fontsize=8, color=TITLE_CLR, pad=2)
     disp_names = plate_names if plate_names else ["(none)"]
     init_idx = disp_names.index(state["plate_name"]) if state["plate_name"] in disp_names else 0
     radio_plate = RadioButtons(ax_plate, disp_names, active=init_idx)
@@ -251,7 +251,7 @@ def run_live(
             return
         state["building"] = True
         state["paused"]   = True
-        fig.suptitle("⏳ Đang xây dựng ROM...", color="#ffaa44", fontsize=11)
+        fig.suptitle("Building ROM...", color="#ffaa44", fontsize=11)
         fig.canvas.draw()
         fig.canvas.flush_events()
 
@@ -266,7 +266,7 @@ def run_live(
         state["plate_name"] = name
         state["twin"] = DigitalTwin(state["rom"])
 
-        # Reset lưới và colormap cho tấm mới
+        # Reset mesh and colormap for new plate
         _reinit_heatmap()
 
         state["building"] = False
@@ -279,7 +279,7 @@ def run_live(
     # Scenario selector
     # -----------------------------------------------------------------------
     ax_sc.set_facecolor(DARK_AX)
-    ax_sc.set_title("Kịch bản", fontsize=8, color=TITLE_CLR, pad=2)
+    ax_sc.set_title("Scenario", fontsize=8, color=TITLE_CLR, pad=2)
     sc_list = list(SCENARIOS.keys()) + ["manual"]
     init_sc = sc_list.index(scenario_name) if scenario_name in sc_list else 0
     radio_sc = RadioButtons(ax_sc, sc_list, active=init_sc)
@@ -302,9 +302,9 @@ def run_live(
     radio_sc.on_clicked(_on_sc)
 
     # -----------------------------------------------------------------------
-    # Heatmap — khởi tạo & reinit khi đổi tấm
+    # Heatmap — init & reinit on plate change
     # -----------------------------------------------------------------------
-    _hmap = {}   # chứa state của heatmap
+    _hmap = {}   # holds heatmap state
 
     def _reinit_heatmap():
         rom  = state["rom"]
@@ -325,7 +325,7 @@ def run_live(
     _reinit_heatmap()
     cmap_hot = plt.colormaps["hot"]
 
-    # Colorbar — tạo một lần, update norm khi đổi tấm
+    # Colorbar — created once, norm updated on plate change
     T0 = state["twin"].T_field
     ax_T.tricontourf(_hmap["triang"], T0, levels=_hmap["levels"],
                      cmap=cmap_hot, norm=_hmap["norm"])
@@ -348,16 +348,16 @@ def run_live(
     line_Tmean, = ax_t.plot([], [], "--", color="#ffaa44", lw=1.2, label="T_mean")
     line_Tss,   = ax_t.plot([], [], ":",  color="#44ff88", lw=1.0, label="T_ss(I)")
     hline_Tamb  = ax_t.axhline(state["rom"].T_amb, color="#445566", lw=0.7, ls=":")
-    ax_t.set_ylabel("Nhiệt độ (°C)", color=TEXT_CLR)
-    ax_t.set_xlabel("Thời gian (phút)", color=TEXT_CLR)
-    ax_t.set_title("Nhiệt độ theo thời gian", fontsize=9, color=TITLE_CLR)
+    ax_t.set_ylabel("Temperature (°C)", color=TEXT_CLR)
+    ax_t.set_xlabel("Time (min)", color=TEXT_CLR)
+    ax_t.set_title("Temperature vs. time", fontsize=9, color=TITLE_CLR)
     ax_t.legend(fontsize=7, loc="upper left",
                 facecolor=DARK_BG, edgecolor="#445566", labelcolor=TEXT_CLR)
 
     line_I, = ax_I.plot([], [], "-", color="#44aaff", lw=1.5)
     ax_I.set_ylabel("I (A)", color=TEXT_CLR)
-    ax_I.set_xlabel("Thời gian (phút)", color=TEXT_CLR)
-    ax_I.set_title("Dòng điện I(t)", fontsize=9, color=TITLE_CLR)
+    ax_I.set_xlabel("Time (min)", color=TEXT_CLR)
+    ax_I.set_title("Current I(t)", fontsize=9, color=TITLE_CLR)
 
     # -----------------------------------------------------------------------
     # Title & helpers
@@ -365,8 +365,8 @@ def run_live(
     def _update_title():
         rom = state["rom"]
         fig.suptitle(
-            f"Digital Twin Nhiệt — {state['plate_name']}  |  "
-            f"τ={rom.tau/60:.1f} phút  |  {state['sc_label']}",
+            f"Thermal Digital Twin — {state['plate_name']}  |  "
+            f"τ={rom.tau/60:.1f} min  |  {state['sc_label']}",
             color=TITLE_CLR, fontsize=11, y=0.99)
 
     _update_title()
@@ -389,7 +389,7 @@ def run_live(
         I_fn = state["I_func"]
         spd  = state["speed"]
 
-        # Tích phân vài bước
+        # Integrate several steps
         n_steps = max(1, int(round(spd)))
         dt_eff  = dt_sim * spd / n_steps
         for _ in range(n_steps):
@@ -404,7 +404,7 @@ def run_live(
 
         # --- Heatmap ---
         ax_T.cla()
-        _style_ax(ax_T, "T(r,z) — mặt cắt tấm")
+        _style_ax(ax_T, "T(r,z) — plate cross-section")
         ax_T.tricontourf(_hmap["triang"], T_cur,
                          levels=_hmap["levels"], cmap=cmap_hot, norm=_hmap["norm"])
         ax_T.set_xlabel("r (mm)", color=TEXT_CLR)
@@ -418,7 +418,7 @@ def run_live(
         ax_T.text(0.04, 0.82, f"t = {twin.t/60:.2f} min\nI = {twin.hist_I[-1]:.2f} A",
                   transform=ax_T.transAxes, fontsize=9, color="#88aaff", va="top")
 
-        # --- Trục thời gian (cửa sổ trượt) ---
+        # --- Time axis (sliding window) ---
         t_now  = twin.t / 60.0
         x_lo   = max(0.0, t_now - t_window / 60.0)
         x_hi   = max(t_window / 60.0, t_now)
@@ -445,12 +445,12 @@ def run_live(
         dT_ss  = T_ss_now - rom.T_amb
         ratio  = dT_cur / dT_ss * 100 if dT_ss > 0.01 else 0.0
         txt_info.set_text(
-            f"Tấm: {state['plate_name']}   R={rom.cfg.geometry.plate_radius_m*1e3:.0f}mm  "
+            f"Plate: {state['plate_name']}   R={rom.cfg.geometry.plate_radius_m*1e3:.0f}mm  "
             f"t={rom.cfg.geometry.plate_thickness_m*1e3:.1f}mm  "
             f"mat={rom.cfg.plate['name']}\n"
             f"τ={rom.tau/60:.1f} min   UA={rom.UA:.4f} W/K   "
             f"ΔT_max={dT_cur:.2f}K  →  {ratio:.0f}% of T_ss   "
-            f"[Space]=pause  Tốc độ={state['speed']:.0f}×"
+            f"[Space]=pause  Speed={state['speed']:.0f}×"
         )
 
     ani = FuncAnimation(fig, update, interval=interval_ms, cache_frame_data=False)
@@ -463,16 +463,16 @@ def run_live(
 # ---------------------------------------------------------------------------
 def _parse():
     import argparse
-    p = argparse.ArgumentParser(description="Digital Twin Nhiệt — TEAM 28-like")
+    p = argparse.ArgumentParser(description="Thermal Digital Twin — TEAM 28-like")
     p.add_argument("--scenario", default="step",
                    choices=list(SCENARIOS.keys()) + ["manual"])
-    p.add_argument("--I",      type=float, default=5.0, help="Dòng điện [A]")
-    p.add_argument("--speed",  type=float, default=1.0, help="Tốc độ ban đầu (1–200)")
-    p.add_argument("--window", type=float, default=600.0, help="Cửa sổ thời gian [s]")
-    p.add_argument("--dt",     type=float, default=1.0,   help="Bước tích phân [s]")
+    p.add_argument("--I",      type=float, default=5.0, help="Current [A]")
+    p.add_argument("--speed",  type=float, default=1.0, help="Initial speed (1–200)")
+    p.add_argument("--window", type=float, default=600.0, help="Time window [s]")
+    p.add_argument("--dt",     type=float, default=1.0,   help="Integration step [s]")
     p.add_argument("--no-em",  action="store_true",
-                   help="Bỏ qua EM, dùng placeholder (khởi động nhanh)")
-    p.add_argument("--interval", type=int, default=100, help="Khoảng cách frame [ms]")
+                   help="Skip EM solve, use placeholder (fast startup)")
+    p.add_argument("--interval", type=int, default=100, help="Frame interval [ms]")
     return p.parse_args()
 
 
@@ -486,17 +486,17 @@ if __name__ == "__main__":
     em = None
     if not args.no_em:
         from em_solver import compute_losses
-        print(f"[EM] Giải tại î={cfg.I}A... ", end="", flush=True)
+        print(f"[EM] Solving at î={cfg.I}A... ", end="", flush=True)
         em = compute_losses(cfg)
         print(f"P_plate={em['P_plate_W']*1e3:.1f} mW  P_coil={em['P_coil_W']:.1f}W")
 
     rom = ThermalROM().build(cfg, em_losses=em, verbose=True)
 
-    print(f"\nKhởi động Digital Twin:")
-    print(f"  Kịch bản : {args.scenario}  (I={args.I}A)")
-    print(f"  Tốc độ   : {args.speed}×  (slider để thay đổi)")
-    print(f"  [Space]  : tạm dừng / tiếp tục")
-    print(f"  Chọn tấm : click radio → tự rebuild ROM (~5-10s nếu có EM)")
+    print(f"\nStarting Digital Twin:")
+    print(f"  Scenario : {args.scenario}  (I={args.I}A)")
+    print(f"  Speed    : {args.speed}×  (use slider to change)")
+    print(f"  [Space]  : pause / resume")
+    print(f"  Plate    : click radio → auto-rebuild ROM (~5-10s with EM)")
 
     run_live(
         rom,
