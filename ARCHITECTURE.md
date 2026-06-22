@@ -1,6 +1,7 @@
 # DT4TM — File Architecture & Data Flow
 
-> Last updated: 2026-06-16. Single-source-of-truth for file relationships.
+> Last updated: 2026-06-22 (Professor feedback Juni 2026).
+> Single-source-of-truth for file relationships.
 > All files live **flat in repo root** (no src/ subfolder).
 
 ---
@@ -24,11 +25,16 @@ DT4TM/
 ├── build_twin_html_fem.py       ← Bake FEM+STL+ROM → standalone digital_twin_fem.html
 ├── build_twin_html.py           ← Older bake script (lumped ROM only, no FEM disc)
 │
+├── data_io.py                   ← SensorReader (serial/mock) → calibrate_from_file() → rom.calibrate_UA()
+├── arduino/thermal_sensor/
+│   └── thermal_sensor.ino       ← MAX31855×2 firmware, 1Hz CSV over serial (see SENSOR_PLAN.md)
+│
 ├── digital_twin_fem.html        ← [GENERATED] Full AR twin — double-click to run
 ├── digital_twin.html            ← [GENERATED] Older version (lumped only)
 │
 ├── 3D_model.stl                 ← CAD geometry (meters, axisymmetric, ~467 KB)
 ├── levitation_height_team28.csv ← Benchmark Table I: t_ms, z_mm (levitation height)
+├── mock_sensor_data.csv         ← Synthetic sensor log for testing data_io.py without hardware
 │
 ├── params.yaml                  (already listed above)
 ├── physics.md                   ← Full physics derivations + formulas
@@ -36,6 +42,7 @@ DT4TM/
 ├── README.md                    ← Setup, run commands, FEM math reference
 ├── HANDOFF.md                   ← Quick status handoff for team members
 └── ARCHITECTURE.md              ← This file
+└── SENSOR_PLAN.md               ← Hardware shopping list + sensor architecture
 ```
 
 ---
@@ -193,7 +200,8 @@ ThermalROM
   .build(cfg, em_losses)                ← FEM solve at I_ref → τ, ΔT_max
   .T_steady(I)                          ← scalar: ΔT_ss × (I/I_ref)² × σ(T) factor
   .simulate(I_arr, t_arr)               ← Euler ODE: τ dβ/dt = (I/I_ref)² − β
-  .calibrate_UA(T_meas, t_meas, I_meas) ← fit τ to real sensor data (pending)
+  .calibrate_UA(I_meas, dT_meas)        ← fit UA/τ from one steady-state sensor reading
+                                           (called by data_io.py::calibrate_from_file())
 ```
 
 ---
@@ -201,9 +209,23 @@ ThermalROM
 ## What's Next (Pending)
 
 ```
-[ ] data_io.py
-      Read thermocouple CSV → calibrate_UA() in rom.py
-      Calibrate k_coil_coupling_K_per_W from actual bottom temperature measurement
+[ ] Domain validation (Session 2)
+      Run Dirichlet vs Neumann BC comparison at 1×1m box
+      Confirm boundary is far enough (professor's suggestion)
+
+[ ] Re-run pipeline with T_amb=20°C (Session 3)
+      em_solver → thermal_solver → rom → regenerate digital_twin_fem.html
+
+[x] data_io.py + arduino/thermal_sensor/thermal_sensor.ino
+      SensorReader (serial or mock) → calibrate_from_file() → rom.calibrate_UA()
+      Tested end-to-end against mock_sensor_data.csv; no real hardware yet.
+
+[ ] Sensor hardware (Session 5 — see SENSOR_PLAN.md)
+      Build the real Arduino rig (MAX31855×2 + thermocouples + IR thermometer)
+      Shopping list → professor purchases (Reichelt/Conrad)
+      Log a real run → re-run calibrate_from_file() on actual data
+      Calibrate k_coil_coupling_K_per_W from actual core+disc readings (needs
+      multiple I levels — calibrate_UA() alone only fits UA/τ from one reading)
 
 [ ] Confirm real device geometry
       Iron core shape (currently: central cylinder placeholder)
@@ -212,3 +234,31 @@ ThermalROM
 [ ] QR code (optional)
       Point to hosted digital_twin_fem.html / plate.glb
 ```
+
+---
+
+## Sensor Data Pipeline (implemented 2026-06-22, real hardware pending)
+
+```
+Arduino + 2× MAX31855 (Thermocouple Typ K)          [arduino/thermal_sensor/thermal_sensor.ino]
+    │  reads T at copper core + disc bottom, 1 Hz
+    │  Serial: "millis,T_core_degC,T_disc_degC\n"  (fault → "nan" + "# FAULT ..." line)
+    │
+    ▼
+data_io.py :: SensorReader(port)                    [port=None/"mock" → no hardware needed]
+    │  read_stream() → (t_s, T_core, T_disc) generator
+    │  save_csv() → log to CSV  |  load_csv() → numpy arrays
+    │
+    ▼
+data_io.py :: calibrate_from_file(csv_path, target="disc"|"core")
+    │  trailing-window mean → (I_meas=cfg.I, dT_meas) → rom.calibrate_UA(I_meas, dT_meas)
+    │  fits UA (W/K) and τ = C/UA — does NOT fit k_coil_coupling_K_per_W
+    │  (that needs separate core/disc readings across several I, still manual)
+    │
+    ▼
+digital_twin.py / build_twin_html_fem.py
+    │  use the calibrated ROM for live predictions
+    └─► digital_twin_fem.html (regenerate after calibrating)
+```
+Tested against `mock_sensor_data.csv` (`python data_io.py --mode calibrate`); the real
+Arduino rig still needs to be built (see SENSOR_PLAN.md, Session 5 above).

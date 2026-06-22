@@ -25,6 +25,13 @@ phasor it satisfies
 - Boundary conditions: A_φ = 0 on the axis r=0 (symmetry) and on the far outer
   boundary (field decays; place it ~3–5× the device size away).
 
+### Domain size (1×1×1 m bounding box)
+Professor (Juni 2026): a 1×1 m box should be sufficient for the 2D axisymmetric
+domain (r_max=500mm, z ∈ [−500, 500] mm). **Validation method**: run the same
+problem with (a) Dirichlet BC (A_φ=0 on boundary) and (b) Neumann BC (∂A_φ/∂n=0).
+If the field near the device is identical in both cases, the boundary is far enough
+away. If not, enlarge the box.
+
 Magnetic flux density: B_r = -∂A_φ/∂z, B_z = (1/r)∂(r A_φ)/∂r.
 
 ### Joule loss density (the heat source)
@@ -126,3 +133,18 @@ Online (ms): given î and last T̄, scale by (î/î_ref)²·σ-factor → feed t
 Plate eddy ≈ 3.0 W, iron eddy ≈ 0.6 W, coil ohmic ≈ 73 W → **coils dominate the
 heating**. Coil loss depends strongly on the true wire gauge/turns — confirm those.
 I²-scaling verified exactly (P(2î)/P(î) = 4.000). Absolute values await benchmark calibration.
+
+## 10. Sensor validation plan (Juni 2026)
+Professor: team designs own measurement solution for thermal validation.
+
+**Hardware:**
+- Arduino (e.g. Uno/Nano) + thermocouple breakout (MAX6675 / MAX31855) or RTD (PT100)
+- Infrared thermometer (handheld or USB) for surface temperature
+- Measure: (a) copper core temperature, (b) bottom surface of the levitating disc
+
+**Data pipeline:**
+- Arduino reads sensor(s), sends CSV via serial USB to laptop
+- `data_io.py` ingests CSV → T_meas(t) → feeds `rom.calibrate_UA()` to fit τ
+- Shopping list (Reichelt/Conrad) → professor purchases
+
+See `SENSOR_PLAN.md` for the detailed component list and wiring plan.

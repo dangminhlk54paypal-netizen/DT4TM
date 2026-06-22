@@ -7,9 +7,12 @@
 units: {length: mm, current: A, frequency: Hz, temperature: degC, power: W}
 
 # --- Electrical excitation (main knob of the twin) ---
+# Professor (Juni 2026): Spannung auf ~220V hochgedreht → 5A Stromstärke gemessen.
+# Für Phase 1: konstante gemessene Werte nutzen. Echtzeit-Messgerät → spätere Phase.
 excitation:
-  current_A: 5.0        # AMPLITUDE î — operating condition (rig runs at 5A).
+  current_A: 5.0        # MEASURED operating current (rig: 220V → 5A). NOT a guess.
                         # Set higher (e.g. 20A) only for an exaggerated heating demo.
+  voltage_V: 220.0      # MEASURED operating voltage (professor: "auf ca. 220V hochgedreht")
   current_ref_A: 5.0    # reference point (5A = operating condition)
   frequency_Hz: 50.0
   power_ref_W: 2.63     # aluminum plate eddy loss at I_ref=5A (EM solver, payload OFF).
@@ -75,13 +78,14 @@ payload_model:
 # --- Thermal boundary conditions ---
 # h_bottom > h_top because hot air from coils below enhances convection
 thermal_bc:
-  T_ambient_degC: 25.0
+  T_ambient_degC: 20.0   # Professor (Juni 2026): "nehmt einfach 20°C an".
+                          # Upgrade to real lab sensor data later if results are inaccurate.
   h_convection_W_per_m2K: 10.0    # top + side surfaces (natural convection)
   h_bottom_W_per_m2K: 25.0        # bottom surface facing coils (enhanced convection)
   emissivity: 0.0
   # Coil→disc air coupling: Tinf_bot = T_amb + k_coil * P_coil_W.
   # Physical estimate: 3.8mm gap, conduction+radiation → k_coil ≈ 0.10–0.30 K/W.
-  # At 5A (P_coil≈73W): k=0.15 → Tinf_bot≈36°C → disc T_ss≈36–38°C (ΔT≈11–13K).
+  # At 5A (P_coil≈73W): k=0.15 → Tinf_bot≈31°C → disc T_ss≈31–33°C (ΔT≈11–13K).
   # Calibrate from thermocouple measurement once sensor data is available.
   k_coil_coupling_K_per_W: 0.15
 
@@ -128,13 +132,15 @@ material_props:
 # --- Thermal mesh (plate only) ---
 mesh: {nr: 40, nz: 16}
 
-# --- EM domain & mesh (mm). A=0 boundary placed ~3-5x device size ---
+# --- EM domain & mesh (mm). Professor (Juni 2026): 1×1m box should be enough.
+# Validate: compare Dirichlet vs Neumann BC — if results match, domain is large enough.
+# If edge effects appear, increase further.
 em_domain:
-  r_max_mm: 300.0
-  z_min_mm: -220.0
-  z_max_mm: 180.0
+  r_max_mm: 500.0           # 1m box (professor: "1x1m box sollte reichen")
+  z_min_mm: -500.0
+  z_max_mm: 500.0
   fine_step_mm: 2.0         # fine step around device
-  coarse_step_mm: 12.0      # coarse step in far air region
+  coarse_step_mm: 15.0      # coarse step in far air region (slightly larger for 1m box)
 
 # --- Transient (Phase 2) ---
 transient: {dt_s: 1.0, t_end_s: 600.0}

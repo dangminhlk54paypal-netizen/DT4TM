@@ -21,10 +21,25 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   EM reports P_payload_W and thermal/rom now account it (P_plate_W + P_payload_W).
 - params.yaml uses e-notation (3.4e7); config.py coerces these to float (PyYAML quirk).
 
+## Professor Feedback — Juni 2026 (locked)
+- **Simulation domain**: 1×1×1 m bounding box is sufficient. Validate by comparing
+  Dirichlet vs Neumann BC — if results match, domain is large enough. Enlarge if edge
+  effects appear. (em_domain now ±500 mm in params.yaml.)
+- **Ambient temperature**: Use constant T_amb = 20°C. Do NOT integrate real lab sensor
+  data yet. Upgrade only if results are inaccurate. ("Nehmt erst mal alles so einfach
+  wie möglich an.")
+- **Excitation data**: Measured constant values: 220 V → 5 A. No real-time current
+  measurement device yet (needs purchase). Use constant I=5A for Phase 1.
+- **Sensors for validation**: Team designs own solution. Arduino + thermocouple/RTD
+  sensors + IR thermometer. Create shopping list (Reichelt/Conrad) → professor buys.
+  See SENSOR_PLAN.md.
+- **Scope (Prof 2)**: Can start with disc-only simulation first, then expand to full
+  device. Current full-device approach is also OK.
+
 ## Device numbers — UPDATED per teacher's email (in params.yaml)
 - Plate aluminium: **Ø16cm → R=80mm** (NOT 13cm/65mm). thickness=3mm is a
   placeholder — TEAM MUST MEASURE the real 16cm plate. sigma=3.4e7 S/m.
-- Current: **î ≈ 5 A** (rig runs at 5A, not the benchmark's 20A), f=50Hz.
+- Current: **î ≈ 5 A** MEASURED (rig: 220V → 5A), f=50Hz. voltage_V=220 in params.
 - Turns: **inner=1000, outer=500** (teacher: "1000 und 500"; matches Gemini demo).
 - **IRON CORES present** (not in TEAM 28). Modeled linear μ_r=1000; geometry is a
   PLACEHOLDER central cylinder — CONFIRM real core geometry with the rig.
@@ -39,10 +54,13 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   coil ohmic ∝ 1/σ.
 - Skin depth in Al @50Hz ≈ 12mm ≫ 3mm plate → no fine through-thickness mesh.
 
-## First quantitative result (î=5A, payload OFF, placeholder geometry)
-Plate eddy ≈ 2.6 W, iron eddy ≈ 0.6 W, **coil ohmic ≈ 73 W → coils dominate heating.**
-Plate-only ΔT_max ≈ 3.8 K (T_max ≈ 28.8°C). I²-scaling verified exactly (4.000).
-Absolute values need benchmark calibration. (Enabling payload raises plate eddy to ≈5.4 W.)
+## First quantitative result (î=5A, T_amb=20°C, payload OFF, domain ±500mm, re-run 2026-06-22)
+Plate eddy ≈ 2.61 W, iron eddy ≈ 0.63 W, **coil ohmic ≈ 72.8 W → coils dominate heating.**
+With coil→air coupling (k_coil_coupling_K_per_W=0.15, thermal_bc): **T_max ≈ 31.4°C, ΔT_max ≈
+11.4 K** (disc bottom is warmed by coil heat, not just plate eddy — this dominates over the
+T_amb shift alone). ROM: τ≈10.6 min, UA=0.231 W/K. I²-scaling verified (3.999–4.000000).
+Energy balance error 0.000%. Absolute values need benchmark calibration. (Enabling payload
+raises plate eddy to ≈5.4 W — not re-verified after this T_amb/domain update.)
 
 ## Data (repo root)
 - levitation_height_team28.csv — Table I from the problem PDF.
@@ -63,10 +81,13 @@ Absolute values need benchmark calibration. (Enabling payload raises plate eddy 
       EM q_e interpolated in; h_bot fix done; normalization fix done.
 - [x] em_solver.py — axisymmetric AC eddy-current solve (complex A_phi, iron region);
       compute_losses(cfg) → P_plate/P_iron/P_coil + q_e map. I²-check passes.
-      compute_lift_force() + run_benchmark_validation(): z_eq=10.9mm vs 11.3mm (3.5% err).
+      validate_domain_size(cfg): Dirichlet vs Neumann outer BC, PASS (diffs <0.06% at ±500mm).
+      compute_lift_force() + run_benchmark_validation(): z_eq≈3.4mm vs 11.3mm — REGRESSED
+      after em_domain enlarged to ±500mm (was z_eq=10.9mm/3.5% err at the old ±300mm domain).
+      Needs mesh/domain re-tuning for the no-iron 20A benchmark case (see NEXT below).
 - [x] rom.py — ThermalROM: build() FEM once at I_ref, T_steady(I) scalar multiply,
       simulate(I_arr, t_arr) first-order ODE, calibrate_UA() from sensor.
-      τ=3.4 min | σ(T) correction iterative | I²-scaling verified 4.000000.
+      τ=10.6 min | σ(T) correction iterative | I²-scaling verified 4.000000.
 - [x] digital_twin.py — DigitalTwin(rom): step() Euler, run_live() matplotlib animation.
       Scenarios: step/ramp/sine/pulse/manual. Slider I, speed slider (1×–200×, log),
       RadioButtons plate selector (plate_library), Space=pause. ROM rebuild on-demand + cache.
@@ -79,7 +100,19 @@ Absolute values need benchmark calibration. (Enabling payload raises plate eddy 
       3D revolve + bar/profile charts). --no-em fast path via σ·R² scaling.
 - [x] build_twin_html.py — Phase 5: bake STL geometry + EM losses + lumped thermal
       network into ONE standalone digital_twin.html (no server, double-click to run).
-- [ ] NEXT: data_io.py — read sensor CSV → calibrate_UA() (waiting on real sensors).
+- [x] data_io.py + arduino/thermal_sensor/thermal_sensor.ino — SensorReader (serial or
+      port="mock" synthetic source) → calibrate_from_file() → rom.calibrate_UA(I_meas,
+      dT_meas); live_compare() animation. Tested end-to-end against mock_sensor_data.csv
+      (no real hardware yet) — see SENSOR_PLAN.md.
+- [ ] NEXT: Sensor hardware — build the real Arduino rig (MAX31855×2 + thermocouples,
+      shopping list in SENSOR_PLAN.md), log a real run, re-run calibrate_from_file() on it.
+- [x] Domain validation — Dirichlet vs Neumann BC comparison: validate_domain_size() in
+      em_solver.py; PASS, diffs <0.06% at ±500mm domain → domain is large enough.
+- [x] Re-ran full pipeline with T_amb=20°C, ±500mm domain (2026-06-22): config → em_solver →
+      thermal_solver → rom → visualize → build_twin_html_fem, all outputs regenerated.
+- [ ] NEXT: Fix TEAM28 benchmark regression — z_eq≈3.4mm vs 11.3mm expected, introduced by the
+      ±500mm em_domain enlargement (was 10.9mm/3.5% err at ±300mm). Re-tune mesh for the
+      no-iron 20A case before trusting the EM solver's absolute lift-force calibration again.
 - [ ] Optional: QR code generation pointing to a hosted digital_twin.html / plate.glb.
 
 ## Conventions

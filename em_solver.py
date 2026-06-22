@@ -98,12 +98,24 @@ def material(cfg, rc, zc):
 # --------------------------------------------------------------------------
 # 3) ASSEMBLY & SOLVE (complex system)
 # --------------------------------------------------------------------------
-def solve_em(cfg, nu_e_override=None):
+def solve_em(cfg, nu_e_override=None, outer_bc: str = "dirichlet"):
     """Solve EM phasor system.
 
     nu_e_override: optional list/array of length len(tris).  Each entry is
     either None (use material()) or a float ν value that overrides material()
     for that element — used by solve_em_saturating for nonlinear iron ν.
+
+    outer_bc: boundary condition on the FAR outer domain edge (r=r_max, z=z_min,
+    z=z_max). The axis r=0 is ALWAYS A_φ=0 (physical symmetry condition, not a
+    domain-size choice).
+        "dirichlet" (default) — A_φ=0 on the outer edge (field vanishes far away).
+        "neumann"              — ∂A_φ/∂n=0 on the outer edge. Achieved by leaving
+                                  those DOFs unconstrained: in the FEM weak form,
+                                  not imposing a Dirichlet condition is exactly the
+                                  natural (zero-flux) boundary condition.
+    Used by validate_domain_size() to check the 1x1m em_domain is large enough
+    (professor, Juni 2026): if Dirichlet and Neumann agree near the device, the
+    domain does not influence the result and is big enough.
     """
     coords, tris, rs, zs = make_mesh_em(cfg)
     nN = coords.shape[0]
@@ -147,11 +159,19 @@ def solve_em(cfg, nu_e_override=None):
             for bb in range(3):
                 K[idx[a], idx[bb]] += Ke[a, bb]
 
-    # --- Dirichlet A=0: axis r=0 + outer boundaries ---
+    # --- axis r=0: ALWAYS Dirichlet A=0 (physical symmetry, not a domain choice) ---
     tol = 1e-9
     rmax = rs[-1]; zmin, zmax = zs[0], zs[-1]
-    bnd = np.where((r < tol) | (np.abs(r - rmax) < tol) |
-                   (np.abs(z - zmin) < tol) | (np.abs(z - zmax) < tol))[0]
+    bnd = np.where(r < tol)[0]
+    # --- far outer edge (r=r_max, z=z_min, z=z_max): Dirichlet or Neumann ---
+    if outer_bc == "dirichlet":
+        outer = np.where((np.abs(r - rmax) < tol) |
+                          (np.abs(z - zmin) < tol) | (np.abs(z - zmax) < tol))[0]
+        bnd = np.union1d(bnd, outer)
+    elif outer_bc == "neumann":
+        pass  # leave outer DOFs free -> natural (zero-flux) BC
+    else:
+        raise ValueError(f"outer_bc must be 'dirichlet' or 'neumann', got {outer_bc!r}")
     K = K.tocsr()
     for n in bnd:
         K.data[K.indptr[n]:K.indptr[n + 1]] = 0.0
@@ -232,7 +252,7 @@ def check_saturation(res, cfg=None):
 # 3c) NONLINEAR SOLVE — Picard iteration for iron saturation
 # --------------------------------------------------------------------------
 def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
-                        relax: float = 0.5):
+                        relax: float = 0.5, outer_bc: str = "dirichlet"):
     """EM solve with iron saturation via Picard (fixed-point) iteration.
 
     Saturation model (Lorentzian):
@@ -246,7 +266,7 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
     """
     fe = cfg.iron
     if not fe.get("enabled", False):
-        return solve_em(cfg)
+        return solve_em(cfg, outer_bc=outer_bc)
 
     B_sat    = float(fe.get("B_sat_T", 1.5))
     mu_r_lin = float(fe.get("mu_r", 1000.0))
@@ -257,7 +277,7 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
     z1_fe = fe["z_top_mm"] * mm
 
     # Initial linear solve
-    res = solve_em(cfg)
+    res = solve_em(cfg, outer_bc=outer_bc)
     coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
     z_all = coords[:, 1]
 
@@ -287,7 +307,7 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
         for ii, e in enumerate(iron_idx):
             nu_e_override[e] = nu_iron[ii]
 
-        res_new = solve_em(cfg, nu_e_override=nu_e_override)
+        res_new = solve_em(cfg, nu_e_override=nu_e_override, outer_bc=outer_bc)
 
         # Convergence: relative change in A field
         dA_rel = float(np.abs(res_new["A"] - res["A"]).max() /
@@ -309,9 +329,9 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
 # --------------------------------------------------------------------------
 # 4) POST-PROCESSING: loss map + total loss by region
 # --------------------------------------------------------------------------
-def compute_losses(cfg, res=None):
+def compute_losses(cfg, res=None, outer_bc: str = "dirichlet"):
     if res is None:
-        res = solve_em_saturating(cfg)  # handles saturation when iron enabled
+        res = solve_em_saturating(cfg, outer_bc=outer_bc)  # handles saturation when iron enabled
     A, tris, ridge, omega = res["A"], res["tris"], res["ridge"], res["omega"]
     coords = res["coords"]
     mm = 1e-3
@@ -453,6 +473,73 @@ def run_benchmark_validation():
     print(f"{'='*60}\n")
 
 
+# --------------------------------------------------------------------------
+# 7) DOMAIN SIZE VALIDATION: Dirichlet vs Neumann outer BC
+#    Professor (Juni 2026): run the same EM problem with (a) A_φ=0 on the far
+#    outer edge and (b) ∂A_φ/∂n=0 there. If results near the device agree, the
+#    1x1m em_domain is large enough; if they diverge, enlarge em_domain (params.yaml).
+# --------------------------------------------------------------------------
+def validate_domain_size(cfg, tol_percent: float = 1.0, verbose: bool = True):
+    """Compare Dirichlet vs Neumann outer BC to check the EM domain is large enough.
+
+    Runs compute_losses() twice (outer_bc="dirichlet" and "neumann") and compares
+    P_plate_W / P_iron_W / P_coil_W / P_total_W, plus |A_φ| sampled near the plate.
+    Small differences mean the far-field boundary doesn't influence the
+    near-device solution -> domain is big enough. Large differences mean the
+    boundary is too close and em_domain should be enlarged.
+
+    Returns True (pass, diffs < tol_percent) / False (fail -> enlarge domain).
+    """
+    L_dir = compute_losses(cfg, outer_bc="dirichlet")
+    L_neu = compute_losses(cfg, outer_bc="neumann")
+
+    def pct(a, b):
+        denom = max(abs(a), abs(b), 1e-30)
+        return abs(a - b) / denom * 100.0
+
+    diffs = {
+        "P_plate_W": pct(L_dir["P_plate_W"], L_neu["P_plate_W"]),
+        "P_iron_W":  pct(L_dir["P_iron_W"],  L_neu["P_iron_W"]),
+        "P_coil_W":  pct(L_dir["P_coil_W"],  L_neu["P_coil_W"]),
+        "P_total_W": pct(L_dir["P_total_W"], L_neu["P_total_W"]),
+    }
+
+    # Near-field comparison: |A_φ| at the mesh node closest to the plate centroid.
+    coords = L_dir["res"]["coords"]
+    mm = 1e-3
+    p = cfg.plate
+    r_probe = 0.5 * p["radius_mm"] * mm
+    z_probe = (p["z_bottom_mm"] + 0.5 * p["thickness_mm"]) * mm
+    node = int(np.argmin(np.hypot(coords[:, 0] - r_probe, coords[:, 1] - z_probe)))
+    A_dir = abs(L_dir["res"]["A"][node])
+    A_neu = abs(L_neu["res"]["A"][node])
+    diffs["|A_phi|_near_plate"] = pct(A_dir, A_neu)
+
+    passed = all(d < tol_percent for d in diffs.values())
+
+    if verbose:
+        em = cfg.em
+        print(f"\n{'='*60}")
+        print("DOMAIN SIZE VALIDATION: Dirichlet vs Neumann outer BC")
+        print(f"  em_domain: r_max={em['r_max_mm']:.0f}mm  "
+              f"z=[{em['z_min_mm']:.0f}, {em['z_max_mm']:.0f}]mm")
+        print(f"{'='*60}")
+        print(f"  {'quantity':>20}  {'Dirichlet':>12}  {'Neumann':>12}  {'diff %':>8}")
+        print(f"  {'-'*58}")
+        print(f"  {'P_plate_W':>20}  {L_dir['P_plate_W']:12.6f}  {L_neu['P_plate_W']:12.6f}  {diffs['P_plate_W']:8.3f}")
+        print(f"  {'P_iron_W':>20}  {L_dir['P_iron_W']:12.6f}  {L_neu['P_iron_W']:12.6f}  {diffs['P_iron_W']:8.3f}")
+        print(f"  {'P_coil_W':>20}  {L_dir['P_coil_W']:12.6f}  {L_neu['P_coil_W']:12.6f}  {diffs['P_coil_W']:8.3f}")
+        print(f"  {'P_total_W':>20}  {L_dir['P_total_W']:12.6f}  {L_neu['P_total_W']:12.6f}  {diffs['P_total_W']:8.3f}")
+        print(f"  {'|A_phi|_near_plate':>20}  {A_dir:12.3e}  {A_neu:12.3e}  {diffs['|A_phi|_near_plate']:8.3f}")
+        print(f"  {'-'*58}")
+        verdict = "PASS" if passed else "FAIL"
+        print(f"  -> {verdict} (tolerance {tol_percent:.1f}%): "
+              f"{'domain is large enough' if passed else 'ENLARGE em_domain in params.yaml'}")
+        print(f"{'='*60}\n")
+
+    return passed
+
+
 if __name__ == "__main__":
     import sys, os
     sys.path.insert(0, os.path.dirname(__file__))
@@ -479,3 +566,8 @@ if __name__ == "__main__":
     print(f"  I² Check: P(2î)/P(î) = {L2['P_plate_W']/L['P_plate_W']:.3f} (expected 4.000)")
 
     run_benchmark_validation()
+
+    # Domain size validation (professor, Juni 2026): Dirichlet vs Neumann outer BC.
+    # Fresh load: the I² check above mutated cfg.raw's current_A to 2*î.
+    cfg_domain = load_config()
+    validate_domain_size(cfg_domain)
