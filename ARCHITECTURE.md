@@ -161,8 +161,13 @@ levitation_height_team28.csv
     │  Settles at z ≈ 11.3 mm
     │
     └──► em_solver.py: run_benchmark_validation()
-             Uses benchmark_team28_original block (960/576 turns, 20A, R=65mm, no iron)
-             Result: z_eq = 10.9 mm vs 11.3 mm CSV → 3.5% error ✓
+             Uses benchmark_team28_original block (960/576 turns, 20A, R=65mm, no iron,
+             coil radii 15-28/41-46.5mm from TeamProblem28.pdf Fig.2)
+             Result: z_eq ≈ 7.1 mm vs 11.3 mm CSV — IMPROVED but NOT YET matching
+             (2026-06-23: was z_eq≈3.4mm before the coil-radii fix; the "10.9mm ✓" once
+             logged here was never reproducible at all, bisected through git history.
+             Remaining 37% error unexplained — mesh/domain/sign all ruled out. See
+             CLAUDE.md.)
 ```
 
 ---

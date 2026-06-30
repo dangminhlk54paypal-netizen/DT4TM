@@ -27,7 +27,7 @@ pip install -r requirements.txt
 All source lives flat in the repo root (no `src/` subfolder).
 ```bash
 python config.py            # print normalized parameters
-python em_solver.py         # AC eddy losses + I² check + benchmark (z_eq≈10.9mm vs 11.3)
+python em_solver.py         # AC eddy losses + I² check + benchmark (z_eq≈7.1mm vs 11.3 expected — improved, not yet matching, see CLAUDE.md)
 python thermal_solver.py    # solve heat + energy balance (expect "error=0.000%")
 python rom.py               # real-time ROM demo (I² scaling + transient)
 python digital_twin.py      # interactive live twin (slider I, plate selector)
@@ -58,7 +58,9 @@ physics.md                      # full formulation / derivations
 
 ## Roadmap
 - [x] **Phase 1a** — Axisymmetric heat solver, verified by energy balance.
-- [x] **Phase 1b** — EM solver (AC eddy currents) — real losses + benchmark z_eq≈10.9mm.
+- [x] **Phase 1b** — EM solver (AC eddy currents) — real losses computed; original-benchmark
+      lift-force check improved (z_eq≈7.1mm vs 11.3mm expected, was 3.4mm) after fixing
+      the benchmark's coil geometry — not yet fully matching, see CLAUDE.md.
 - [x] **Phase 2** — Real-time ROM (I² + first-order transient + σ(T) correction).
 - [x] **Phase 3** — Twin loop (interactive). Measured-data ingestion: pending real sensors.
 - [x] **Phase 4** — Revolve 2D→3D, export GLB/OBJ.

@@ -430,6 +430,18 @@ def run_benchmark_validation():
     cfg.raw["plate_material"]["radius_mm"] = float(bm["plate_radius_mm"])
     cfg.raw["coils"]["inner"]["turns"]  = int(bm["inner_turns"])
     cfg.raw["coils"]["outer"]["turns"]  = int(bm["outer_turns"])
+    # Original problem's OWN coil geometry (TeamProblem28.pdf Fig.2) -- much
+    # narrower than this rig's coils, so it needs its own radii (NOT the rig's).
+    cfg.raw["coils"]["inner"]["r_inner_mm"] = float(bm["inner_r_inner_mm"])
+    cfg.raw["coils"]["inner"]["r_outer_mm"] = float(bm["inner_r_outer_mm"])
+    cfg.raw["coils"]["outer"]["r_inner_mm"] = float(bm["outer_r_inner_mm"])
+    cfg.raw["coils"]["outer"]["r_outer_mm"] = float(bm["outer_r_outer_mm"])
+    # The benchmark's coils are much narrower (13mm / 5.5mm wide) than the rig's --
+    # the rig's default fine_step_mm=2.0 under-resolves them badly (mesh-convergence
+    # tested 2026-06-23: F at z=11.3mm jumps 0.50N->0.73N going from 2.0mm->1.0mm,
+    # then settles ~0.70N by 0.2mm). Override just for this benchmark; the rig's own
+    # EM solves don't need this finer (slower) mesh.
+    cfg.raw["em_domain"]["fine_step_mm"] = 0.2
 
     R  = float(bm["plate_radius_mm"]) * 1e-3
     t  = float(cfg.raw["plate_material"]["thickness_mm"]) * 1e-3
@@ -441,13 +453,15 @@ def run_benchmark_validation():
     print(f"Original TEAM 28 Benchmark: I={bm['current_A']}A  "
           f"R={bm['plate_radius_mm']}mm  "
           f"coils {bm['inner_turns']}/{bm['outer_turns']}  NO iron core")
+    print(f"Coil geometry from TeamProblem28.pdf Fig.2: inner r={bm['inner_r_inner_mm']}-"
+          f"{bm['inner_r_outer_mm']}mm, outer r={bm['outer_r_inner_mm']}-{bm['outer_r_outer_mm']}mm")
     print(f"m_plate = {m_plate*1e3:.2f} g   →   F_gravity = {F_grav:.4f} N")
     print(f"Expected equilibrium height ≈ {bm['expected_levitation_height_mm']} mm")
     print(f"{'='*60}")
     print(f"  {'z_bottom (mm)':>14}  {'F_z (N)':>10}  {'F_z/mg':>8}  {'note'}")
     print(f"  {'-'*50}")
 
-    z_sweep = np.array([2, 5, 8, 9, 10, 11, 12, 13, 15, 18, 22])   # mm
+    z_sweep = np.array([3, 4, 5, 6, 7, 8, 9, 10, 11, 11.3, 13, 15, 18])   # mm
     F_vals  = []
     for z_mm in z_sweep:
         cfg.raw["plate_material"]["z_bottom_mm"] = float(z_mm)

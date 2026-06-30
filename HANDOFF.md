@@ -33,7 +33,13 @@ in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the rea
 
 ## Status (mostly done)
 - [x] config.py, params.yaml, thermal_solver.py (energy balance 0.000%)
-- [x] em_solver.py — AC eddy currents + lift force, benchmark **z_eq=10.9mm vs 11.3mm (3.5%)**
+- [x] em_solver.py — AC eddy currents + lift force computed; original-benchmark check
+      **IMPROVED but not yet matching** (z_eq≈7.1mm vs 11.3mm expected, was 3.4mm before
+      2026-06-23 — the "10.9mm/PASS" once logged here was never actually reproduced,
+      bisected through git history. Fixed root cause: benchmark was reusing the rig's
+      coil radii instead of the original 960/576-turn problem's own geometry from
+      TeamProblem28.pdf — now uses the real radii, halving the error. Remaining 37% gap
+      unexplained — see CLAUDE.md)
 - [x] rom.py — real-time ROM (I² + transient τ≈3.4 min + σ(T) correction)
 - [x] digital_twin.py — interactive twin (current slider, plate selector, scenarios)
 - [x] visualize.py — revolve 2D→3D, export plate.glb
@@ -45,7 +51,7 @@ in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the rea
       actual data.
 
 ## Validation
-1. EM reproduces original benchmark (960/576, 20A, R=65mm, no iron) → lift force balances at z≈11.3mm. ✓
+1. EM reproduces original benchmark (960/576, 20A, R=65mm, no iron) → lift force balances at z≈11.3mm. **NOT YET** (z_eq≈7.1mm after fixing the coil geometry, see CLAUDE.md) — 37% error remains, unexplained.
 2. Switch to real rig (1000/500, iron, 5A) → loss maps.
 3. Losses → thermal solver → T field. **Thermal validation: Arduino + thermocouple + IR thermometer (see SENSOR_PLAN.md).**
 4. Domain validation: Dirichlet vs Neumann BC comparison (Session 2).
