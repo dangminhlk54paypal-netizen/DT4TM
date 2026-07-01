@@ -40,9 +40,17 @@ def make_mesh_em(cfg):
     em = cfg.em
     fs, cs = em["fine_step_mm"], em["coarse_step_mm"]
     rmax, zmin, zmax = em["r_max_mm"], em["z_min_mm"], em["z_max_mm"]
-    rs = _graded([(0, 110, fs), (110, rmax, cs)]) * 1e-3
-    # Fine mesh covers from -60mm to max(15, z_plate_top+10)mm to track plate position
     p = cfg.plate
+    # Fine mesh must cover the full device (outer coil now at r=124mm).
+    co = cfg.coils
+    r_device_mm = max(
+        co["outer"]["r_outer_mm"],
+        co["inner"]["r_outer_mm"],
+        p["radius_mm"],
+    ) + 20.0   # 20mm margin beyond outermost component
+    r_fine_mm = max(110.0, r_device_mm)
+    rs = _graded([(0, r_fine_mm, fs), (r_fine_mm, rmax, cs)]) * 1e-3
+    # Fine mesh covers from -60mm to max(15, z_plate_top+10)mm to track plate position
     z_fine_top = max(15.0, p["z_bottom_mm"] + p["thickness_mm"] + 10.0)
     zs = _graded([(zmin, -60, cs), (-60, z_fine_top, fs), (z_fine_top, zmax, cs)]) * 1e-3
     RR, ZZ = np.meshgrid(rs, zs, indexing="ij")
@@ -76,12 +84,18 @@ def material(cfg, rc, zc):
         pz_top = pz_bot + pl["thickness_mm"] * mm
         if rc <= pl["radius_mm"] * mm and pz_bot <= zc <= pz_top:
             return 1.0 / (pl["mu_r"] * MU0), pl.get("sigma_S_per_m", 0.0), 0.0
-    # --- iron core ---
+    # --- iron core (center, r=0..25mm, CONFIRMED non-ferromagnetic) ---
     fe = cfg.iron
     if fe.get("enabled", False):
         if (fe["r_inner_mm"] * mm <= rc <= fe["r_outer_mm"] * mm and
                 fe["z_bottom_mm"] * mm <= zc <= fe["z_top_mm"] * mm):
             return 1.0 / (fe["mu_r"] * MU0), fe.get("sigma_S_per_m", 0.0), 0.0
+    # --- outer iron ring (r=81..101mm, between inner and outer coil; magnet test PENDING) ---
+    oir = cfg.raw.get("outer_iron_ring", {})
+    if oir.get("enabled", False):
+        if (oir["r_inner_mm"] * mm <= rc <= oir["r_outer_mm"] * mm and
+                oir["z_bottom_mm"] * mm <= zc <= oir["z_top_mm"] * mm):
+            return 1.0 / (oir["mu_r"] * MU0), oir.get("sigma_S_per_m", 0.0), 0.0
     # --- coils (source) ---
     co = cfg.coils
     zt, zb = co["z_top_mm"] * mm, co["z_bottom_mm"] * mm
@@ -488,6 +502,67 @@ def run_benchmark_validation():
 
 
 # --------------------------------------------------------------------------
+# 6b) REAL-RIG LIFT-FORCE VALIDATION
+#     Sweep plate height for the actual rig (1000/500 turns, 5A, R=80mm).
+#     User observation (2026-07-01): Al disc ~150-200g levitates at ~7-8mm
+#     gap above the coil top at 5A/190V.  Validates the EM solver on the
+#     real device (independently of the TEAM28 benchmark, which uses
+#     different coil geometry and 20A — see run_benchmark_validation()).
+# --------------------------------------------------------------------------
+def run_rig_validation():
+    """Compute F_z vs plate height for the actual rig and find z_eq."""
+    import copy, sys, os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from config import load_config, Geometry
+
+    cfg = load_config()
+    p   = cfg.plate
+    R   = p["radius_mm"]    * 1e-3
+    t   = p["thickness_mm"] * 1e-3
+    rho = p["rho_kg_per_m3"]
+    m_plate = rho * math.pi * R ** 2 * t
+    F_grav  = m_plate * 9.81
+    co = cfg.coils
+
+    print(f"\n{'='*60}")
+    print(f"RIG LIFT-FORCE SWEEP: I={cfg.I}A  R={p['radius_mm']}mm  "
+          f"coils {co['inner']['turns']}/{co['outer']['turns']}")
+    print(f"Plate: m={m_plate*1e3:.1f}g  F_gravity={F_grav:.4f}N")
+    print(f"Coil top z={co['z_top_mm']}mm  (z_bottom = gap above coil top)")
+    print(f"Observed: disc levitates at ~7-8 mm at 5A/190V (2026-07-01)")
+    print(f"{'='*60}")
+    print(f"  {'z_bottom (mm)':>14}  {'F_z (N)':>10}  {'F_z/mg':>8}  note")
+    print(f"  {'-'*50}")
+
+    z_sweep = np.array([1, 2, 3, 3.8, 5, 6, 7, 8, 9, 10, 12, 15, 18])
+    F_vals  = []
+    for z_mm in z_sweep:
+        cfg.raw["plate_material"]["z_bottom_mm"] = float(z_mm)
+        cfg.geometry = Geometry(plate_radius_m=R, plate_thickness_m=t,
+                                plate_z_bottom_m=float(z_mm) * 1e-3)
+        F_z = compute_lift_force(cfg)
+        F_vals.append(F_z)
+        ratio = F_z / F_grav
+        note = "<-- balanced" if abs(ratio - 1.0) < 0.12 else ""
+        print(f"  {z_mm:>14.1f}  {F_z:>10.4f}  {ratio:>8.3f}  {note}")
+
+    F_arr = np.array(F_vals)
+    mask  = np.isfinite(F_arr) & (F_arr > 0)
+    if mask.sum() >= 2:
+        z_ok = z_sweep[mask];  F_ok = F_arr[mask]
+        if F_ok.max() >= F_grav >= F_ok.min():
+            z_eq = float(np.interp(F_grav, F_ok[::-1], z_ok[::-1].astype(float)))
+            err  = abs(z_eq - 7.5)          # target midpoint of 7-8mm range
+            print(f"\n  → Predicted z_eq ≈ {z_eq:.1f} mm")
+            print(f"  → Observed ~7-8 mm:  {'MATCH ✓' if err < 2.0 else f'MISMATCH (Δ={err:.1f} mm)'}")
+        else:
+            lo, hi = F_ok.min(), F_ok.max()
+            print(f"\n  → F_z = [{lo:.3f}, {hi:.3f}] N does not bracket "
+                  f"F_gravity={F_grav:.3f} N — sweep range too small.")
+    print(f"{'='*60}\n")
+
+
+# --------------------------------------------------------------------------
 # 7) DOMAIN SIZE VALIDATION: Dirichlet vs Neumann outer BC
 #    Professor (Juni 2026): run the same EM problem with (a) A_φ=0 on the far
 #    outer edge and (b) ∂A_φ/∂n=0 there. If results near the device agree, the
@@ -580,6 +655,7 @@ if __name__ == "__main__":
     print(f"  I² Check: P(2î)/P(î) = {L2['P_plate_W']/L['P_plate_W']:.3f} (expected 4.000)")
 
     run_benchmark_validation()
+    run_rig_validation()
 
     # Domain size validation (professor, Juni 2026): Dirichlet vs Neumann outer BC.
     # Fresh load: the I² check above mutated cfg.raw's current_A to 2*î.

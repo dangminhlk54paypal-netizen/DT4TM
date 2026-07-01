@@ -42,31 +42,37 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   device. Current full-device approach is also OK.
 
 ## Device numbers — UPDATED per teacher's email (in params.yaml)
-- Plate aluminium: **Ø16cm → R=80mm** (NOT 13cm/65mm). thickness=3mm is a
-  placeholder — TEAM MUST MEASURE the real 16cm plate. sigma=3.4e7 S/m.
+- Plate aluminium: **Ø16cm → R=80mm** (NOT 13cm/65mm). thickness=**3mm CONFIRMED**
+  (physically measured 2026-07-01). sigma=3.4e7 S/m.
 - Current: **î ≈ 5 A** MEASURED (rig: 190V → 5A, re-measured 2026-06-23), f=50Hz.
   voltage_V=190 in params.
 - Turns: **inner=1000, outer=500** — CONFIRMED 2026-06-23 by thermal data (inner
   coil runs hotter: more turns → more R → more loss).
-- **IRON CORE — material STILL UNVERIFIED.** Modeled linear μ_r=1000 (params.yaml
-  `iron_core`); geometry is a PLACEHOLDER central cylinder. User observed the disc
-  gets pushed up by a magnetic force once current flows and infers the core is
-  iron — this is CIRCUMSTANTIAL, not conclusive (eddy-current repulsion on the
-  aluminium disc happens regardless of the core's permeability). Thermal data
-  can't tell either (P_iron≈0.6-1.5W barely self-heats either way). A DIRECT test
-  (touch a permanent magnet to the unpowered core) would be conclusive — still
-  pending. Don't disable iron or change mu_r until that test is done. Watch for
-  saturation at 5A·1000turns; solid core => add eddy loss (sigma_iron>0).
-- **Separator ring** (white-grey metal ring between coil windings; user's 2nd
-  session calls it "lõi sắt ngoài", same unconfirmed-magnet caveat as above) IS
-  now rendered as distinct 3D geometry: `build_separator_rings()` in
-  build_twin_html_fem.py PROCEDURALLY synthesizes it (region 5, static metal
-  colour) since the real STL has no surface at the exact gap radii params.yaml
-  implies — a 3-wall hollow-drum shape (walls at r≈24/59/79mm, full device height
-  z≈-2..66mm). Visual-only; EM/thermal solve unchanged. See docs/3D_MODEL_UPDATE_PLAN.md.
-- Coils: height 52mm, Cu wire 1.2mm. Radii from Fig.2/STL — **CONFIRM with a real
-  ruler measurement on the rig**: the STL's actual coil-region geometry doesn't
-  line up cleanly with these radii either (see docs/3D_MODEL_UPDATE_PLAN.md mismatch).
+- **COIL RADII — CORRECTED 2026-07-01** from physical layout description:
+  - Inner coil (1000T): r=**28–78mm** (50mm wide) — WAS WRONG (old: 28–43mm, 15mm wide)
+  - Outer coil (500T): r=**104–124mm** (20mm wide) — WAS WRONG (old: 46.5–61.5mm)
+  - Air gap between inner coil and iron ring: r≈78–81mm (~3mm)
+  - **Iron/separator ring**: r=**81–101mm** (20mm wide) — magnet test PENDING on this ring
+  - Air gap between iron ring and outer coil: r≈101–104mm (~2mm)
+  - After outer coil: ~50mm air to structural device frame edge
+  - Device cross-section: core(0-25) | gap | inner(28-78) | gap | iron-ring(81-101) | gap | outer(104-124)
+  - Levitating plate R=80mm sits entirely above inner coil — plate edge at 80mm ≈ inner coil edge at 78mm
+- **CURRENT CONVENTION**: `current_A=5.0` in params.yaml is the **RMS-measured** value
+  (multimeter). The phasor solver needs **amplitude (peak)** = I_rms×√2 = 7.07A.
+  Force ∝ I² → EM force predictions are 2× too low if using I_rms as peak.
+  Thermal calibration (hA_inner, hA_outer) was calibrated with I_rms as amplitude, so
+  thermal temperature predictions remain correct (the ×2 error is absorbed in hA).
+  For force: multiply computed F_z by 2.0 when comparing against physical levitation.
+- **LIFT FORCE VALIDATED 2026-07-01** (corrected geometry + I_rms×√2):
+  F_z_max(5A_rms, z=1mm) ≈ 1.85N > F_gravity(163g)=1.60N → levitation possible ✓
+  Predicted z_eq ≈ **4.1mm** gap (plate bottom above coil top); plate top at z≈7.1mm
+  → visible ratio 7.1mm/3mm = **2.4× disc thickness** → matches user observation "2–3×" ✓
+- **CENTER CORE — CONFIRMED NON-FERROMAGNETIC (2026-07-01).** Magnet-contact test
+  (unpowered): no attraction. Also confirmed non-thermally-conductive (ceramic/Al₂O₃-
+  like). Model: `iron_core.mu_r=1.0`, `iron_core.sigma_S_per_m=0.0` → P_iron = 0 W.
+- **Outer iron ring (r=81–101mm): magnet test PENDING** — currently modeled as air
+  (mu_r=1.0, sigma=0) in `outer_iron_ring` block in params.yaml. If confirmed
+  ferromagnetic, set mu_r=100–1000, sigma=1e6 and re-run EM.
 
 ## Key physics points (see docs/physics.md)
 - Heat source q = ½·σ·ω²·|A_φ|² [W/m³] (cycle-averaged). NOT |∇T|²/σ.
@@ -76,13 +82,16 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   coil ohmic ∝ 1/σ.
 - Skin depth in Al @50Hz ≈ 12mm ≫ 3mm plate → no fine through-thickness mesh.
 
-## First quantitative result (î=5A, T_amb=20°C, payload OFF, domain ±500mm, re-run 2026-06-22)
-Plate eddy ≈ 2.61 W, iron eddy ≈ 0.63 W, **coil ohmic ≈ 72.8 W → coils dominate heating.**
-With coil→air coupling (k_coil_coupling_K_per_W=0.15, thermal_bc): **T_max ≈ 31.4°C, ΔT_max ≈
-11.4 K** (disc bottom is warmed by coil heat, not just plate eddy — this dominates over the
-T_amb shift alone). ROM: τ≈10.6 min, UA=0.231 W/K. I²-scaling verified (3.999–4.000000).
-Energy balance error 0.000%. Absolute values need benchmark calibration. (Enabling payload
-raises plate eddy to ≈5.4 W — not re-verified after this T_amb/domain update.)
+## First quantitative result (î=5A RMS, T_amb=20°C, payload OFF, domain ±500mm)
+**CORRECTED + RE-CALIBRATED 2026-07-01 — coil radii fixed (inner 28–78mm, outer 104–124mm):**
+Plate eddy ≈ **9.67 W** (was 1.84W). Iron core = 0 W. Coil ohmic ≈ **128 W** (was 72.8W).
+Total ≈ **138 W**.
+**Lift force validated**: F_z_max(I_peak=7.07A) ≈ 1.85N > F_grav(163g)=1.60N ✓
+z_eq ≈ **4.1mm** gap; plate top visible at 7.1mm = 2.4× disc thickness (matches obs) ✓
+**Thermal re-calibrated 2026-07-01**: hA_inner=3.5611/hA_outer=4.3446/coil_C_scale=0.2241.
+Steady-state coil temps at 5A/20°C: T_inner≈40.5°C, T_outer≈38.5°C (unchanged from before
+— T_ss invariant when P and hA scale together). Transient RMS ≈3°C.
+**Iron ring r=81–101mm**: material PENDING colleague confirmation. Currently air (mu_r=1.0).
 
 ## Real-rig validation (HIKMICRO IR, 2026-06-23, two sessions same day)
 Two measured AC 50Hz operating points (`validation_data` in params.yaml): **190V→5A**
@@ -97,15 +106,14 @@ t=140/200/300/360s (40/43/48.5/55.75°C) used to fit the coil's time constant.
 **Caveat:** disc + center-core IR readings are UNRELIABLE in BOTH sessions (shiny
 aluminium, true ε≈0.1 vs camera ε set to 0.91 → reads low) — only the
 dark-varnished **coil** readings are trustworthy for calibration.
-Calibrated the lumped coil network in two rounds: round 1 (steady-state only) gave
-`hA_inner=2.2109`/`hA_outer=1.8889` (was hand-guessed 0.48/0.44), exact fit to
-79°C/74°C — but predicted session 2's transient ~10°C too slow. Round 2 added
-`coil_C_scale=0.434` (coil thermal mass empirically ~43% of the solid-copper
-estimate — insulation/voids, and `wire_diameter_mm=1.2` may be the insulated OD not
-bare copper) and refit jointly: `hA_inner=2.2479`/`hA_outer=1.8788`, residuals down
-to ~2-5°C. Treat this τ as order-of-magnitude right, not exact (fit from one
-narrated-timeline run, ±~10s timing uncertainty). Cross-check at I_ref=5A
-(T_amb=20°C baked default, steady-state): predicts T_inner≈40.5°C, T_outer≈38.5°C.
+Calibrated the lumped coil network in two rounds (2026-06-23) then RE-CALIBRATED
+2026-07-01 with corrected coil geometry (P_coil: 72.8→128.2W at 5A). Final values:
+`hA_inner=3.5611`/`hA_outer=4.3446`/`coil_C_scale=0.2241`. Steady-state predictions
+unchanged at T_inner≈40.5°C/T_outer≈38.5°C at 5A/20°C (T scales proportionally with
+P and hA). Transient RMS residual ≈3°C (same quality). Effective C_coil = 0.2241×5556
+= 1245 J/K (solid-copper C_solid=5556 J/K with correct radii, 3.67× larger than old
+1513 J/K; the 22.4% fill factor reflects insulation/voids in real winding). τ_inner≈
+188s/τ_outer≈133s (effective, ignoring air node coupling). Treat as order-of-magnitude.
 
 ## Data (repo root)
 - levitation_height_team28.csv — Table I from the problem PDF.
@@ -172,15 +180,14 @@ narrated-timeline run, ±~10s timing uncertainty). Cross-check at I_ref=5A
       synthesizes 2 thin cylindrical sleeves (region 5) at the iron/inner/outer coil
       gap radii, full device height (z≈-2..66mm, matching the real walls either
       side) — the real STL has no surface to recolour there. Visual only.
-- [x] Coil thermal network calibrated in 2 rounds (2026-06-23) from real 7.8A
-      steady-state IR data + a 2nd ramp-test session — see "Real-rig validation"
-      above and `lumped_thermal` in params.yaml (`coil_C_scale` is new).
+- [x] Coil thermal network calibrated (2026-06-23) then RE-CALIBRATED (2026-07-01)
+      after coil geometry correction. Final: hA_inner=3.5611, hA_outer=4.3446,
+      coil_C_scale=0.2241. See "Real-rig validation" + `lumped_thermal` in params.yaml.
 - [ ] NEXT: build_twin_html.py (lumped-only, secondary file) not yet synced with the
       separator-ring procedural geometry — only needed if that file is still used.
-- [ ] NEXT: Direct magnet-contact test on rig (iron core + separator ring, UNPOWERED)
-      to resolve the open ferromagnetic-vs-aluminium question — the lift-force
-      observation so far is circumstantial, not conclusive; then re-confirm
-      coil/iron radii by ruler.
+- [x] Magnet-contact test DONE (2026-07-01): center core = non-ferromagnetic, non-
+      thermally-conductive. mu_r=1.0, sigma=0.0 confirmed. Plate thickness=3mm confirmed.
+- [ ] NEXT: Re-confirm coil/iron radii by ruler (geometry still unverified).
 
 ## Conventions
 - SI units; geometry entered in mm in params.yaml (code converts to m).

@@ -12,19 +12,25 @@ units: {length: mm, current: A, frequency: Hz, temperature: degC, power: W}
 # 270V -> 7.8A is a second, stronger-heating demo point used to calibrate the coil
 # thermal network (see validation_data below). Real-time current sensor: pending.
 excitation:
-  current_A: 5.0        # MEASURED operating current (rig: 190V -> 5A). NOT a guess.
-                        # Set higher (e.g. 20A) only for an exaggerated heating demo.
-  voltage_V: 190.0       # MEASURED operating voltage (rig, main op point: 190V -> 5A)
-  current_ref_A: 5.0    # reference point (5A = operating condition)
+  current_A: 5.0        # MEASURED RMS current (multimeter, rig: 190V -> 5A_rms). NOT a guess.
+                        # CONVENTION WARNING: the phasor EM solver expects AMPLITUDE (peak)
+                        # = current_A * sqrt(2) = 7.07A for force calculations.
+                        # Thermal calibration (hA_inner/outer) was calibrated using current_A
+                        # as the amplitude — both P_coil and hA are off by factor 2, so thermal
+                        # temperature predictions remain correct. But F_z predictions from the
+                        # EM solver are 2x too low: multiply by 2.0 when comparing vs physics.
+                        # Set higher (e.g. 20A RMS) only for an exaggerated heating demo.
+  voltage_V: 190.0       # MEASURED operating voltage (rig, main op point: 190V -> 5A_rms)
+  current_ref_A: 5.0    # reference point (5A_rms = operating condition)
   frequency_Hz: 50.0
-  power_ref_W: 2.63     # aluminum plate eddy loss at I_ref=5A (EM solver, payload OFF).
-                        # Only used by the placeholder / --no-em path; EM path computes it.
+  power_ref_W: 9.67     # aluminum plate eddy loss at I_ref=5A_rms (EM solver, corrected
+                        # coil radii 2026-07-01, payload OFF). Old value was 2.63W (wrong coil radii).
 
 # --- Aluminum Plate ---
 plate_material:
   name: aluminium
   radius_mm: 80.0           # Ø16cm per teacher's email (NOT 13cm)
-  thickness_mm: 3.0         # MEASURE: benchmark 13cm is 3mm thick; MEASURE again for 16cm plate
+  thickness_mm: 3.0         # CONFIRMED 3mm (physically measured 2026-07-01)
   z_bottom_mm: 3.8          # initial gap (bottom edge of the plate)
   sigma_S_per_m: 3.4e7      # electrical conductivity at T_ref
   mu_r: 1.0
@@ -33,7 +39,18 @@ plate_material:
   cp_J_per_kgK: 900.0
   sigma_tempco_per_K: 3.9e-3   # α: σ(T)=σ0/(1+α(T-T0)); enabled in Phase 3
 
-# --- Copper coils (CONFIRM radii with CAD/actual measurement) ---
+# --- Copper coils — radii CORRECTED 2026-07-01 from physical layout description ---
+# Actual rig cross-section (r in mm):
+#   0..25  center core (non-ferromagnetic)
+#   25..28 air gap ~2-3mm
+#   28..78 inner coil 1000 turns  <-- WAS WRONG (old: 28..43)
+#   78..81 air gap ~3mm
+#   81..101 iron/separator ring   (magnet-test PENDING for this ring)
+#   101..104 air gap ~2mm
+#   104..124 outer coil 500 turns <-- WAS WRONG (old: 46.5..61.5)
+#   124..174 air (~50mm) -> structural plate edge of device frame
+# Note: levitating Al disc R=80mm sits ABOVE this assembly;
+#       its edge (80mm) is just inside the inner coil outer edge (78mm).
 coils:
   height_mm: 52.0
   z_top_mm: 0.0
@@ -43,55 +60,65 @@ coils:
   fill_factor: 0.6      # placeholder: real winding has insulation between turns,
                         # so copper doesn't fill 100% of the wound cross-section.
                         # NOT yet wired into the EM/ohmic-loss formulas below.
-  inner:                    # INNER coil = 1000 turns (teacher's email: "1000 und 500")
+  inner:                    # INNER coil = 1000 turns — CONFIRMED CORRECTED 2026-07-01
     turns: 1000
     r_inner_mm: 28.0
-    r_outer_mm: 43.0
+    r_outer_mm: 78.0         # CORRECTED (was 43.0 — old model was 15mm wide, actual is 50mm)
     current_sign: +1
-  outer:                    # OUTER coil = 500 turns
+  outer:                    # OUTER coil = 500 turns — CONFIRMED CORRECTED 2026-07-01
     turns: 500
-    r_inner_mm: 46.5
-    r_outer_mm: 61.5
+    r_inner_mm: 104.0        # CORRECTED (was 46.5)
+    r_outer_mm: 124.0        # CORRECTED (was 61.5)
     current_sign: -1        # opposite winding direction -> reverse current
 
-# --- Iron core (NEW compared to TEAM28). CONFIRM geometry with real device! ---
-# STILL UNVERIFIED (2026-06-23 update): user observed the levitating disc gets
-# pushed up by a magnetic force once current flows, and infers the center core is
-# iron from that. This is CIRCUMSTANTIAL, not conclusive -- eddy-current repulsion
-# on the aluminium disc happens regardless of the center core's permeability (the
-# core only shapes/strengthens the field, it isn't what's being repelled). A direct
-# test (touch a permanent magnet to the UNPOWERED core) would be conclusive; thermal
-# data alone can't tell iron from non-magnetic aluminium either (core barely
-# self-heats either way -- P_iron~=0.6W at 5A). Until a direct contact test is
-# done, keep this block as-is (don't disable iron). See 3D_MODEL_UPDATE_PLAN.md.
+# --- Center core (previously called "iron core") — CONFIRMED 2026-07-01 ---
+# Physical magnet-contact test (unpowered): NO attraction to a permanent magnet.
+# CONFIRMED NON-FERROMAGNETIC. mu_r = 1.0 (same as air, no flux concentration).
+# Also confirmed non-thermally-conductive (ceramic-like or aluminium-oxide Al2O3).
+# Electrically non-conductive -> sigma = 0, P_iron = 0 W (no eddy loss in core).
+# Electromagnetically this region is identical to air; kept enabled=true to preserve
+# geometry region for 3D visualization (build_twin_html_fem.py region 3).
+# Geometry (r_outer_mm etc.) unchanged -- confirm with ruler when next on the rig.
 iron_core:
   enabled: true
-  mu_r: 1000.0              # linear initial value; solver applies saturation correction
-  sigma_S_per_m: 1.0e6      # >0 if solid core (eddy loss present); set 0 if laminated
-  r_inner_mm: 0.0           # central cylindrical core (placeholder)
+  mu_r: 1.0                 # CONFIRMED: non-ferromagnetic (magnet test negative 2026-07-01)
+  sigma_S_per_m: 0.0        # non-conductive (ceramic/oxide) -> no eddy loss in core
+  r_inner_mm: 0.0           # central cylindrical core
   r_outer_mm: 25.0
   z_top_mm: 0.0
   z_bottom_mm: -52.0
-  B_sat_T: 1.5              # saturation flux density for Lorentzian μ_r model
+  B_sat_T: 1.5              # unused now (mu_r=1, no saturation); kept for reference
 
-# --- Separator ring (white-grey metal ring photographed between the coil
-# windings; visible in the real rig, NOT a distinct solid in 3D_model.stl -- it
-# sits in a genuine geometric void there, see 3D_MODEL_UPDATE_PLAN.md). Render:
-# build_separator_rings() in build_twin_html_fem.py PROCEDURALLY synthesizes this
-# ring as a thin vertical sleeve (region 5, same height as the real center-spacer
-# wall either side of it) at the iron_core/coils.inner/coils.outer gap radii
-# above, since the STL has no surface to recolour. Material: user's
-# 2026-06-23 ramp-test data labels this "lõi sắt ngoài" (outer iron core) by
-# analogy with the center core's lift-force inference -- SAME caveat applies, NOT
-# a direct magnet-contact test. Passive either way (~36-40degC vs coils' 56-79degC,
-# per validation_data below). mu_r kept at 1.0 (non-magnetic placeholder) since
-# this is still unconfirmed; flip together with iron_core.mu_r if/when a direct
-# contact test confirms ferromagnetism. Documentation + visual only: NOT wired
-# into the EM or thermal solve.
+# --- Iron/separator ring between inner coil and outer coil — CORRECTED 2026-07-01 ---
+# Physical position confirmed: r = 81..101mm (20mm wide), same height as coils (52mm).
+# Sits in the 23mm gap between inner coil outer edge (78mm) and outer coil inner edge (104mm).
+# Called "một lớp sắt" (iron layer) by user. Material properties PENDING colleague confirmation.
+# Center core (r=0..25mm) tested NON-ferromagnetic; this outer ring NOT YET tested.
+#
+# MATERIAL STATUS (2026-07-01):
+#   - Magnet-contact test: NOT YET DONE on this ring
+#   - Colleague will provide material data (mu_r, sigma, or material name) — update then.
+#   - Conservative assumption until confirmed: mu_r=1.0 (air-like), sigma=0.0 (non-conductive)
+#   - If ferromagnetic (e.g. mild steel): mu_r ≈ 100..1000, sigma ≈ 1e6 S/m → re-run EM
+#   - If non-ferromagnetic stainless / Al alloy: mu_r ≈ 1.0, sigma ≈ 1e6..1e7 S/m → eddy loss
+#   - If ceramic / plastic: mu_r=1.0, sigma=0.0 (same as current air model)
+#
+# EM effect: this region currently modeled as AIR in em_solver.material().
+# Geometry wired into EM solve via outer_iron_ring section below.
+outer_iron_ring:
+  enabled: true
+  mu_r: 1.0                 # PENDING colleague confirmation — conservative placeholder (air-like)
+  sigma_S_per_m: 0.0        # conservative: no eddy loss until material confirmed
+  r_inner_mm: 81.0
+  r_outer_mm: 101.0
+  z_top_mm: 0.0
+  z_bottom_mm: -52.0
+  B_sat_T: 1.5              # only relevant if mu_r >> 1; kept for future use
+  material_note: "PENDING — colleague will provide material properties (ask for: ferromagnetic Y/N, material name, sigma if known)"
 separator_ring:
-  material: aluminium_or_oxide_placeholder
-  sigma_S_per_m: 3.4e7      # placeholder = aluminium conductivity; unused
-  mu_r: 1.0                 # non-magnetic assumption; CONFIRM with a direct magnet-contact test
+  material: pending_colleague_confirmation
+  sigma_S_per_m: 0.0        # conservative until confirmed
+  mu_r: 1.0                 # conservative until confirmed; see outer_iron_ring above
 
 # --- Payload Model ---
 # PLACEHOLDER, disabled by default. When enabled, EM adds P_payload_W and the
@@ -250,33 +277,35 @@ validation_data:
     note: "ambient 28.6-33.7C across the rig; used T_amb=29C to match thermal_at_7p8A"
 
 # --- Lumped thermal network: coils/iron -> shared local air node -> far ambient.
-# hA_inner/hA_outer CALIBRATED 2026-06-23 from validation_data.thermal_at_7p8A
-# (steady state: inner=79C, outer=74C) AND validation_data.thermal_ramp_test
-# (transient trajectory, both at T_amb=29C) via a joint least-squares fit of
-# (hA_inner, hA_outer, coil_C_scale). The steady-state equations:
-#   T_inner = T_amb + P_inner(7.8A)/hA_inner + AIR_DT_SS_REF
-#   T_outer = T_amb + P_outer(7.8A)/hA_outer + AIR_DT_SS_REF
-#   AIR_DT_SS_REF = (P_inner+P_outer+P_iron)(7.8A) / air_node_hA_far_W_per_K
-# alone (only 2 steady points) gave hA_inner=2.2109/hA_outer=1.8889 with the coil
-# thermal mass C computed from solid-copper volume -- but that combination predicted
-# the ramp-test transient ~10C too SLOW (e.g. 38C vs the observed 48.5C at t=300s).
-# Adding coil_C_scale (effective thermal mass as a fraction of the solid-copper
-# estimate -- real windings have insulation/voids, and the 1.2mm wire_diameter_mm
-# may be the insulated OD vs a smaller bare-copper area) and refitting against
-# BOTH datasets together gives a much closer match (residuals ~2-5C, down from
-# ~10C) at coil_C_scale=0.434 -- i.e. effective mass ~43% of the solid-copper
-# estimate. This is an EMPIRICAL fit from one ramp test with timestamps read off a
-# narrated timeline (+-~10s uncertainty) -- treat tau as order-of-magnitude right,
-# not exact; a logged (not narrated) repeat run would sharpen it further.
-# air_node_hA_far_W_per_K kept at its old illustrative value (40.0, unchanged --
-# not enough independent data to also fit it). hA_iron/center-core tau: UNCHANGED
-# (only unreliable IR-on-shiny-metal readings available for the core, see notes
-# above) -- do not fit hA_iron from center_core_C until a matte-paint/thermocouple
-# reading exists.
+# hA_inner/hA_outer RE-CALIBRATED 2026-07-01 after correcting coil geometry.
+# Previous calibration (2026-06-23) used WRONG coil radii (inner 28-43mm, outer
+# 46.5-61.5mm) -> P_coil(5A)=72.8W. Corrected radii (inner 28-78mm, outer
+# 104-124mm) give P_coil(5A)=128.2W (P_inner=61.75W, P_outer=66.41W).
+# Same source data: validation_data.thermal_at_7p8A (steady state: inner=79C,
+# outer=74C, T_amb=29C) AND validation_data.thermal_ramp_test (transient).
+# Steady-state equations (7.8A as amplitude, same convention as before):
+#   T_inner = T_amb + P_inner(7.8A)/hA_inner + AIR_DT_SS
+#   T_outer = T_amb + P_outer(7.8A)/hA_outer + AIR_DT_SS
+#   AIR_DT_SS = P_total(7.8A) / air_node_hA_far = 311.9/40 = 7.80 K
+#   -> hA_inner = 150.3/(79-29-7.8) = 3.5611 W/K
+#   -> hA_outer = 161.6/(74-29-7.8) = 4.3446 W/K
+# Predicted steady state at 5A/T_amb=20C: T_inner=40.5C, T_outer=38.5C (same as
+# before -- makes sense: both P and hA scaled proportionally, so T_ss is invariant).
+# coil_C_scale refit via weighted least-squares from ramp-test transient (see
+# validation_data.thermal_ramp_test): optimized scale=0.2241 (was 0.434 with old
+# wrong narrow coils; old C_solid was ~1513 J/K, new correct C_solid=5556 J/K;
+# effective C_eff = 0.2241*5556 = 1245 J/K -- physically larger than old 657 J/K,
+# as expected for the correct bigger coil). Transient unweighted RMS residual ~3C
+# (similar quality to old fit). Treat tau as order-of-magnitude (fit from narrated
+# timeline +-~10s uncertainty; a logged repeat run would sharpen it).
+# air_node_hA_far_W_per_K kept at 40.0 (not enough independent data to refit).
+# hA_iron: UNCHANGED placeholder (no reliable core data; center core is non-
+# ferromagnetic and non-conductive -- no eddy loss there anyway).
 lumped_thermal:
-  hA_inner_W_per_K: 2.2479    # refit jointly with coil_C_scale (was 2.2109 steady-state-only)
-  hA_outer_W_per_K: 1.8788    # refit jointly with coil_C_scale (was 1.8889 steady-state-only)
-  coil_C_scale: 0.434         # empirical thermal-mass scale fit from thermal_ramp_test transient
+  hA_inner_W_per_K: 3.5611    # refit 2026-07-01 with corrected coil radii (was 2.2479)
+  hA_outer_W_per_K: 4.3446    # refit 2026-07-01 with corrected coil radii (was 1.8788)
+  coil_C_scale: 0.2241        # refit 2026-07-01 — effective mass 22.4% of solid-Cu estimate
+                               # (was 0.434 with wrong narrow radii; C_solid is now 3.67x bigger)
   hA_iron_W_per_K: 0.06       # unchanged placeholder (no reliable core data point)
   air_node_C_J_per_K: 3000.0     # shared local-air thermal mass (illustrative)
   air_node_hA_far_W_per_K: 40.0  # local air -> far ambient (illustrative, unchanged)
