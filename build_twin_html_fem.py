@@ -232,16 +232,74 @@ def revolve(meridian, n_theta: int) -> np.ndarray:
     return np.array(tris, dtype=np.float32)
 
 
+def revolve_ring(r_in_mm: float, r_out_mm: float, z_bot_mm: float, z_top_mm: float,
+                 n_theta: int) -> np.ndarray:
+    """Solid annular ring (toroid cross-section = rectangle) via revolve()."""
+    mer = [(r_in_mm, z_bot_mm), (r_out_mm, z_bot_mm),
+           (r_out_mm, z_top_mm), (r_in_mm, z_top_mm), (r_in_mm, z_bot_mm)]
+    return revolve(mer, n_theta)
+
+
+def build_octagonal_base(r_outer_mm: float, z_bot_mm: float, z_top_mm: float,
+                          n_sides: int = 8) -> np.ndarray:
+    """Solid n-sided polygonal disc (flat floor plate from center to r_outer)."""
+    angles = np.linspace(0, 2 * np.pi, n_sides, endpoint=False)
+    ox = r_outer_mm * np.cos(angles)
+    oy = r_outer_mm * np.sin(angles)
+    tris = []
+    for i in range(n_sides):
+        j = (i + 1) % n_sides
+        tris.append([(0.0, 0.0, z_top_mm), (ox[i], oy[i], z_top_mm), (ox[j], oy[j], z_top_mm)])
+        tris.append([(0.0, 0.0, z_bot_mm), (ox[j], oy[j], z_bot_mm), (ox[i], oy[i], z_bot_mm)])
+        tris.append([(ox[i], oy[i], z_bot_mm), (ox[j], oy[j], z_bot_mm), (ox[i], oy[i], z_top_mm)])
+        tris.append([(ox[j], oy[j], z_bot_mm), (ox[j], oy[j], z_top_mm), (ox[i], oy[i], z_top_mm)])
+    return np.array(tris, dtype=np.float32)
+
+
+def build_octagonal_frame(r_inner_mm: float, r_outer_mm: float,
+                           z_bot_mm: float, z_top_mm: float,
+                           n_sides: int = 8) -> np.ndarray:
+    """Hollow n-sided polygonal prism: outer walls + inner walls + top/bottom ring caps.
+    Used for the plywood octagonal device housing that wraps around the coil assembly."""
+    angles = np.linspace(0, 2 * np.pi, n_sides, endpoint=False)
+    ox = r_outer_mm * np.cos(angles); oy = r_outer_mm * np.sin(angles)
+    ix = r_inner_mm * np.cos(angles); iy = r_inner_mm * np.sin(angles)
+    tris = []
+    for i in range(n_sides):
+        j = (i + 1) % n_sides
+        # Outer side wall panel
+        tris += [
+            [(ox[i], oy[i], z_bot_mm), (ox[j], oy[j], z_bot_mm), (ox[i], oy[i], z_top_mm)],
+            [(ox[j], oy[j], z_bot_mm), (ox[j], oy[j], z_top_mm), (ox[i], oy[i], z_top_mm)],
+        ]
+        # Inner side wall panel (normal flipped — facing inward)
+        tris += [
+            [(ix[i], iy[i], z_bot_mm), (ix[i], iy[i], z_top_mm), (ix[j], iy[j], z_bot_mm)],
+            [(ix[j], iy[j], z_bot_mm), (ix[i], iy[i], z_top_mm), (ix[j], iy[j], z_top_mm)],
+        ]
+        # Top annular cap
+        tris += [
+            [(ix[i], iy[i], z_top_mm), (ox[i], oy[i], z_top_mm), (ix[j], iy[j], z_top_mm)],
+            [(ox[i], oy[i], z_top_mm), (ox[j], oy[j], z_top_mm), (ix[j], iy[j], z_top_mm)],
+        ]
+        # Bottom annular cap (normal flipped)
+        tris += [
+            [(ix[i], iy[i], z_bot_mm), (ix[j], iy[j], z_bot_mm), (ox[i], oy[i], z_bot_mm)],
+            [(ox[i], oy[i], z_bot_mm), (ix[j], iy[j], z_bot_mm), (ox[j], oy[j], z_bot_mm)],
+        ]
+    return np.array(tris, dtype=np.float32)
+
+
 def build_separator_rings(cfg, z_bot_mm: float, z_top_mm: float, n_theta: int) -> np.ndarray:
-    """Procedurally generate the two separator-ring gaps (region 5) as thin
-    vertical sleeves spanning [z_bot_mm, z_top_mm] -- the same height as the
-    real coil/center-spacer walls either side of them, so they read as a ring
-    standing among the windings rather than a sliver lost at the floor. The real
-    STL has NO surface at these exact radii (a genuine geometric gap -- see
-    3D_MODEL_UPDATE_PLAN.md), so they can't be produced by recolouring existing
-    triangles like the other regions; they're synthesized the same way the
-    levitating disc is. Radii come from the gaps already implied by iron_core /
-    coils in params.yaml (no new hardcoded geometry)."""
+    """Procedurally generate the two separator-ring gaps (region 5) as vertical sleeves
+    spanning [z_bot_mm, z_top_mm] (full device height from params.yaml coil z-range).
+    They render as solid rings standing among the windings, visually closing the gaps
+    between core/inner coil and inner/outer coil. The real STL has NO surface at these
+    exact radii (a genuine geometric gap -- see 3D_MODEL_UPDATE_PLAN.md), so they can't
+    be produced by recolouring existing triangles like the other regions; they're
+    synthesized the same way the levitating disc is. Radii come from params.yaml, not
+    hardcoded. These rings receive thermal coloring (tnIron) at runtime, showing heat
+    conduction from the active coils (~39-45°C passive heating)."""
     iron, inner, outer = cfg.iron, cfg.coils["inner"], cfg.coils["outer"]
     gaps = [
         (float(iron["r_outer_mm"]), float(inner["r_inner_mm"])),   # inner gap
@@ -255,6 +313,19 @@ def build_separator_rings(cfg, z_bot_mm: float, z_top_mm: float, n_theta: int) -
                (r_in, z_top_mm), (r_in, z_bot_mm)]
         tris.append(revolve(mer, n_theta))
     return np.concatenate(tris, axis=0) if tris else np.zeros((0, 3, 3), dtype=np.float32)
+
+
+def build_solid_core(r_core_mm: float, z_bot_mm: float, z_top_mm: float, n_theta: int) -> np.ndarray:
+    """Procedurally generate a complete solid cylinder (r=0..r_core_mm, z=z_bot_mm..z_top_mm).
+    The STL only contains the hollow outer surface of the device; a solid procedural fill
+    makes the center core render as a closed metallic block with full height, eliminating
+    the "hollow interior" appearance. The z-range spans the full device height from params.yaml
+    (typically z=-52..0mm for the coil assembly), making the core read as a substantial
+    conductor block. At runtime, it receives thermal coloring (tnIron) showing passive
+    heat conduction from adjacent coils."""
+    mer = [(0.0, z_bot_mm), (r_core_mm, z_bot_mm), (r_core_mm, z_top_mm),
+           (0.0, z_top_mm), (0.0, z_bot_mm)]
+    return revolve(mer, n_theta)
 
 
 def build_disc_mesh(cfg, rom, z_bottom_mm: float, je_field=None):
@@ -368,7 +439,7 @@ def compute_eddy_fraction(cfg, em: dict, rom) -> float:
 
 # ─── Main build function ──────────────────────────────────────────────────────
 
-def build(stl_path: str, out_path: str) -> None:
+def build(stl_path: str | None, out_path: str) -> None:
     cfg = load_config()
 
     # 1. EM + ROM (same pipeline as digital_twin.py __main__)
@@ -402,43 +473,79 @@ def build(stl_path: str, out_path: str) -> None:
     print(f"[SPLIT] disc heat sources: eddy {f_eddy*100:.0f}% (instant)  "
           f"hot-air {f_air*100:.0f}% (coil-inertia gated)")
 
-    # 2. Parse STL → keep only the BASE (coils + iron + structure). The thin flat
-    #    STL "plate" is discarded and replaced by a procedural solid stepped disc.
-    print("[STL] Parsing ...", end=" ", flush=True)
-    V_all   = parse_stl(stl_path)          # (nTri, 3, 3) mm
-    reg_all = classify(V_all)              # (nTri,)
-    # NOTE: region boundaries (26/45/62mm) do NOT match params.yaml's coil radii
-    # (28/43/46.5/61.5mm) -- the STL's real geometry is a 3-wall hollow drum
-    # (walls at r~24/59/79mm) with no surface at the exact cfg gap radii. The
-    # separator ring (region 5) is therefore PROCEDURALLY GENERATED below (like
-    # the disc), not carved out of the STL by recolouring. See
-    # 3D_MODEL_UPDATE_PLAN.md for the full geometry-mismatch writeup.
-    names = {0: "plate", 1: "inner coil", 2: "outer coil", 3: "center spacer",
-             4: "wood base", 5: "separator (procedural)"}
-    print(f"{len(V_all)} triangles")
-    for k in range(5):
-        print(f"   {names[k]:12s}: {(reg_all == k).sum()} tris")
+    # 2. Build device body 100% procedurally from params.yaml — STL is NOT used for
+    #    body geometry. The STL had two fundamental problems: (1) coil radii mismatched
+    #    the classify() boundaries, leaving inner coil as just 260 tris at z=-2mm;
+    #    (2) the hollow STL shell created visible empty interiors. All parts below are
+    #    synthesized as closed solid toroids and polygonal frames directly from physics params.
+    n_theta  = int(cfg.raw["levitating_disc"].get("n_theta", 96))
+    coil_h   = float(cfg.coils.get("height_mm", 52.0))
 
-    stl_plate = reg_all == 0
-    z_disc_bot = float(V_all[stl_plate][:, :, 2].min())   # place disc where plate was
-    keep = ~stl_plate
-    V_base   = V_all[keep]
-    reg_base = reg_all[keep]
+    # Coordinate system (Z-up, mm), natural device orientation:
+    #   z = 0         → bottom of wooden base plate (floor under device)
+    #   z = z_base    → bottom of coil assembly (top of base plate)
+    #   z = z_coil_top → top of coil assembly (flush with wood frame top)
+    #   z = z_disc_bot → levitating disc bottom (gap above coil top)
+    z_base      = 8.0                 # wooden base plate thickness [mm]
+    z_coil_bot  = z_base              # coil assembly starts at 8 mm
+    z_coil_top  = z_base + coil_h    # 8 + 52 = 60 mm
 
-    # 2b. Procedurally synthesize the separator-ring sleeves (region 5), spanning
-    # the same [bottom-cap, wall-top] z-range as the real center-spacer wall
-    # either side of them -- robust to whatever the STL's actual geometry is.
-    z_cap_mm  = float(V_all[reg_all == 3][:, :, 2].min())
-    z_wall_mm = float(V_all[reg_all == 3][:, :, 2].max())
-    V_sep = build_separator_rings(cfg, z_cap_mm, z_wall_mm,
-                                   n_theta=int(cfg.raw["levitating_disc"].get("n_theta", 96)))
-    nTri_sep = len(V_sep)
-    print(f"   {names[5]:12s}: {nTri_sep} tris (synthesized z={z_cap_mm:.1f}..{z_wall_mm:.1f}mm)")
-    if nTri_sep == 0:
-        print("WARNING: separator ring has 0 triangles (cfg gap radii collapsed) -- stopping.")
-        raise SystemExit(1)
-    V_base   = np.concatenate([V_base, V_sep], axis=0)
-    reg_base = np.concatenate([reg_base, np.full(nTri_sep, 5, dtype=np.uint8)])
+    # Disc: gap from params.yaml (plate_material.z_bottom_mm = gap above coil top)
+    z_disc_bot = z_coil_top + float(cfg.raw["plate_material"].get("z_bottom_mm", 3.8))
+
+    # Radii from params.yaml
+    r_core  = float(cfg.iron.get("r_outer_mm", 25.0))          # center core outer = 25 mm
+    r_i_in  = float(cfg.coils["inner"]["r_inner_mm"])           # 28 mm
+    r_i_out = float(cfg.coils["inner"]["r_outer_mm"])           # 78 mm
+    r_o_in  = float(cfg.coils["outer"]["r_inner_mm"])           # 104 mm
+    r_o_out = float(cfg.coils["outer"]["r_outer_mm"])           # 124 mm
+
+    # Outer plywood frame dimensions
+    r_frame_in  = r_o_out + 6.0       # snug air gap beyond outer coil: ~130 mm
+    r_frame_out = 165.0               # STL outer extent ≈ Ø340 mm → r ≈ 165 mm
+
+    print("[BODY] Building procedural device geometry from params.yaml:")
+
+    # Center core: solid cylinder r=0..25mm (confirmed non-ferromagnetic, ceramic/Al₂O₃)
+    V_core = build_solid_core(r_core, z_coil_bot, z_coil_top, n_theta)
+    print(f"   center core  : {len(V_core):5d} tris  r=0..{r_core:.0f}mm  z={z_coil_bot:.0f}..{z_coil_top:.0f}mm")
+
+    # Gap filler core→inner coil: r=25..28mm (visually fills 3mm air pocket, inner-coil material)
+    V_coregap = revolve_ring(r_core, r_i_in, z_coil_bot, z_coil_top, n_theta)
+    print(f"   core→inner   : {len(V_coregap):5d} tris  r={r_core:.0f}..{r_i_in:.0f}mm (seamless fill)")
+
+    # Inner coil: full solid toroid r=28..78mm, 1000 turns, dark varnished copper
+    V_inner = revolve_ring(r_i_in, r_i_out, z_coil_bot, z_coil_top, n_theta)
+    print(f"   inner coil   : {len(V_inner):5d} tris  r={r_i_in:.0f}..{r_i_out:.0f}mm (1000T solid toroid)")
+
+    # Separator ring: fills ENTIRE gap r=78..104mm (absorbs air gaps 78-81 and 101-104mm
+    # so device looks tightly packed — no visible voids between coil and iron ring)
+    V_sep = revolve_ring(r_i_out, r_o_in, z_coil_bot, z_coil_top, n_theta)
+    print(f"   separator    : {len(V_sep):5d} tris  r={r_i_out:.0f}..{r_o_in:.0f}mm (iron ring + air)")
+
+    # Outer coil: full solid toroid r=104..124mm, 500 turns, dark varnished copper
+    V_outer = revolve_ring(r_o_in, r_o_out, z_coil_bot, z_coil_top, n_theta)
+    print(f"   outer coil   : {len(V_outer):5d} tris  r={r_o_in:.0f}..{r_o_out:.0f}mm (500T solid toroid)")
+
+    # Wooden octagonal base (8-sided plywood housing):
+    #   (a) floor plate: solid octagon r=0..r_frame_out, thickness z=0..z_base
+    #   (b) outer walls: hollow octagonal ring r=r_frame_in..r_frame_out, full device height
+    V_floor = build_octagonal_base(r_frame_out, 0.0, z_base, n_sides=8)
+    V_walls = build_octagonal_frame(r_frame_in, r_frame_out, 0.0, z_coil_top, n_sides=8)
+    V_wood  = np.concatenate([V_floor, V_walls], axis=0)
+    print(f"   wood frame   : {len(V_wood):5d} tris  8-sided octagon r={r_frame_in:.0f}..{r_frame_out:.0f}mm")
+
+    # Assemble all non-disc parts
+    V_base   = np.concatenate([V_core, V_coregap, V_inner, V_sep, V_outer, V_wood], axis=0)
+    reg_base = np.concatenate([
+        np.full(len(V_core),    3, dtype=np.uint8),  # center core (ceramic)
+        np.full(len(V_coregap), 1, dtype=np.uint8),  # gap filler (inner coil material)
+        np.full(len(V_inner),   1, dtype=np.uint8),  # inner coil 1000T
+        np.full(len(V_sep),     5, dtype=np.uint8),  # separator / iron ring
+        np.full(len(V_outer),   2, dtype=np.uint8),  # outer coil 500T
+        np.full(len(V_wood),    4, dtype=np.uint8),  # octagonal wood frame
+    ])
+    print(f"   TOTAL body   : {len(V_base):5d} tris  z=0..{z_coil_top:.0f}mm  disc at z={z_disc_bot:.1f}mm")
 
     # 3. Procedural solid stepped disc + FEM ΔT_ref mapped onto its vertices
     print("[DISC] Building solid stepped disc + FEM field ...", end=" ", flush=True)
@@ -638,7 +745,7 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
   </div>
   <div class="hdr-mid">
     <span class="hdr-badge">FEM ROM (axisymmetric)</span>
-    <span class="hdr-badge">T_amb = 20 °C</span>
+    <span class="hdr-badge">T_amb = 29 °C</span>
     <span class="hdr-badge">I = 5 A, 220 V</span>
   </div>
   <div class="hdr-right">
@@ -663,8 +770,8 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
       <input type="range" id="sI" min="0" max="20" step="0.5" value="5">
     </div>
     <div class="cg">
-      <label><span>Time speed</span><span id="vS" class="val">100×</span></label>
-      <input type="range" id="sS" min="0" max="2.301" step="0.01" value="2">
+      <label><span>Time speed</span><span id="vS" class="val">1.0×</span></label>
+      <input type="range" id="sS" min="0" max="2.301" step="0.01" value="0">
     </div>
     <button id="reset">↺ Reset temperatures</button>
     <div class="badge">FEM ROM (axisymmetric)</div>
@@ -739,6 +846,9 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
     <div class="row" style="font-size:.78rem">
       <span>Bottom air T (disc)</span>
       <span class="val" id="tAirBot" style="color:#ffaa44">—</span></div>
+    <div class="row">
+      <div>Levitation Gap</div>
+      <span class="val" id="tLevGap" style="color:#aaddff">0.0 mm</span></div>
     <div class="row" style="font-size:.78rem" id="satRow">
       <span>Iron core B_max</span>
       <span class="val" id="tBmax" style="color:#88ff88">—</span></div>
@@ -760,10 +870,12 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
   <div class="panel" id="panelChart">
     <div class="panel-head"><span>Time History</span><span class="chev">▾</span></div>
     <div class="panel-body">
-    <div style="font-size:.78rem;color:var(--muted);margin-bottom:2px">T_max(t) — plate</div>
-    <canvas id="chart" width="228" height="130"></canvas>
+    <div style="font-size:.78rem;color:var(--muted);margin-bottom:2px">Temperatures vs time</div>
+    <canvas id="chart" width="228" height="150"></canvas>
     <div class="chart-legend">
-      <span><i style="border-color:#ff6644"></i>T_max</span>
+      <span><i style="border-color:#ff6644"></i>Plate T_max</span>
+      <span><i style="border-color:#ff8844"></i>Inner coil</span>
+      <span><i style="border-color:#ffcc44"></i>Outer coil</span>
       <span><i style="border-color:#44ff88;border-top-style:dashed"></i>T_ss</span>
       <span><i style="border-color:#5599ff;border-top-style:dashed"></i>T_amb</span>
     </div>
@@ -798,6 +910,12 @@ const ROM    = PARAMS.rom;    // T_amb tau I_ref dT_mean_ref dT_max_ref alpha P_
 const LUMPED = PARAMS.lumped; // {nodes:{inner,outer,iron:{P_ref,C,hA}}}
 const FIELD_LINES = PARAMS.field_lines; // [{r:[mm],z:[mm],amp:[0..1]}, ...] meridian-plane ψ=const contours
 
+// Display ambient temperature: real lab condition (measured 29°C during IR validation session).
+// Physics ΔT is still baked at FEM T_ref=20°C; only the absolute baseline shifts for display.
+// TODO (future): fetch real-time ambient from OpenWeatherMap API for Darmstadt, Germany
+//   (Zipcode: 64289) and initialise T_AMB_JS dynamically on page load.
+const T_AMB_JS = 29.0;
+
 function b64Buf(b64){
   const s=atob(b64),a=new Uint8Array(s.length);
   for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a.buffer;
@@ -822,9 +940,11 @@ const sim = {
   t:    0.0,                     // sim time [s]
   // inner/outer/iron = body nodes; air = shared LOCAL air node they all heat up.
   // The bodies convect into `air`, and `air` sheds heat to the far ambient ROM.T_amb.
-  T: { inner: ROM.T_amb, outer: ROM.T_amb, iron: ROM.T_amb, air: ROM.T_amb },
+  T: { inner: T_AMB_JS, outer: T_AMB_JS, iron: T_AMB_JS, air: T_AMB_JS },
   hist_t:    [0.0],
-  hist_Tmax: [ROM.T_amb],
+  hist_Tmax: [T_AMB_JS],
+  hist_T_inner: [T_AMB_JS],
+  hist_T_outer: [T_AMB_JS],
   hist_I:    [0.0],
 };
 
@@ -849,8 +969,8 @@ const COIL_DT_SS_REF =
   LUMPED.nodes.outer.P_ref * (LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF);
 function coilAirDrive() {
   const ai = LUMPED.nodes.inner, ao = LUMPED.nodes.outer;
-  const num = ai.P_ref * (sim.T.inner - ROM.T_amb) +
-              ao.P_ref * (sim.T.outer - ROM.T_amb);
+  const num = ai.P_ref * (sim.T.inner - T_AMB_JS) +
+              ao.P_ref * (sim.T.outer - T_AMB_JS);
   return Math.max(0.0, num / COIL_DT_SS_REF);
 }
 
@@ -889,7 +1009,7 @@ function romStep(I, dt) {
     Qconv += out;
   }
   // Local air node: gains all body convection, loses to the far ambient ROM.T_amb.
-  sim.T.air += (Qconv - AIR.hA_far * (sim.T.air - ROM.T_amb)) / AIR.C_air * dt;
+  sim.T.air += (Qconv - AIR.hA_far * (sim.T.air - T_AMB_JS)) / AIR.C_air * dt;
 
   // (2a) eddy part — instantaneous source, fast disc time constant τ
   const tgt_eddy = s2 * s;
@@ -907,16 +1027,18 @@ function romStep(I, dt) {
 
 function resetSim() {
   sim.beta = 0.0; sim.beta_eddy = 0.0; sim.beta_air = 0.0; sim.t = 0.0;
-  for (const k in sim.T) sim.T[k] = ROM.T_amb;
-  sim.hist_t    = [0.0];
-  sim.hist_Tmax = [ROM.T_amb];
-  sim.hist_I    = [0.0];
+  for (const k in sim.T) sim.T[k] = T_AMB_JS;
+  sim.hist_t      = [0.0];
+  sim.hist_Tmax   = [T_AMB_JS];
+  sim.hist_T_inner = [T_AMB_JS];
+  sim.hist_T_outer = [T_AMB_JS];
+  sim.hist_I      = [0.0];
 }
 
 // ── Color mapping ─────────────────────────────────────────────────────────────
 //  T_amb → blue (HSL 240°),  125 °C → red (HSL 0°). Floor tracks the baked
 //  ambient (20 °C per params.yaml) instead of a stale hardcoded value.
-const T_COLOR_LO = ROM.T_amb, T_COLOR_HI = 125;
+const T_COLOR_LO = T_AMB_JS, T_COLOR_HI = 125;
 const STRUCT = new THREE.Color(0x5a5a68);   // neutral grey for housing
 function tcol(T) {  // allocating version — for UI swatches / legend only
   let t = (T - T_COLOR_LO) / (T_COLOR_HI - T_COLOR_LO);
@@ -943,7 +1065,29 @@ function ramp1(t) {
   return 0;
 }
 const STRUCT_RGB = [160/255, 100/255, 55/255];   // wood base (plywood housing)
-const METAL_RGB  = [170/255, 175/255, 185/255];  // passive white-grey metal (center spacer)
+const METAL_RGB  = [170/255, 175/255, 185/255];  // passive white-grey metal
+
+// Copper/varnish ramp: dark brownish-red at cold → bright orange-yellow at hot.
+// More physically realistic than blue→red scientific ramp for varnished copper wire.
+const COPPER_COLD = [0.52, 0.18, 0.07];   // dark lacquer over copper wire (cold)
+const COPPER_HOT  = [1.00, 0.72, 0.14];   // incandescent orange-yellow (very hot)
+function writeRampCopper(col, idx, tnorm) {
+  const t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  col[idx]   = COPPER_COLD[0] + (COPPER_HOT[0] - COPPER_COLD[0]) * t;
+  col[idx+1] = COPPER_COLD[1] + (COPPER_HOT[1] - COPPER_COLD[1]) * t;
+  col[idx+2] = COPPER_COLD[2] + (COPPER_HOT[2] - COPPER_COLD[2]) * t;
+}
+
+// Metal/ceramic ramp: brushed silver at cold → warm orange at hot.
+// Used for center core and separator ring (passive parts, ~39-45°C).
+const METAL_COLD = [0.70, 0.72, 0.75];   // brushed aluminum / gray ceramic
+const METAL_HOT  = [0.95, 0.62, 0.18];   // warm orange glow (45°C looks subtle)
+function writeRampMetal(col, idx, tnorm) {
+  const t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  col[idx]   = METAL_COLD[0] + (METAL_HOT[0] - METAL_COLD[0]) * t;
+  col[idx+1] = METAL_COLD[1] + (METAL_HOT[1] - METAL_COLD[1]) * t;
+  col[idx+2] = METAL_COLD[2] + (METAL_HOT[2] - METAL_COLD[2]) * t;
+}
 
 // Eddy-current density ramp: dark purple (low |J_e|) → bright yellow (high).
 // Je_vtx is pre-normalized 0..1 at build time (spatial pattern is static — a
@@ -963,6 +1107,20 @@ function writeEddyRamp(col, idx, tnorm) {
 let vizMode = 'thermal';
 let fieldLineOpacityPct = 0.70;
 const regionKey = {1:'inner', 2:'outer', 3:'iron'};
+
+// ── Levitation gap physics ────────────────────────────────────────────────────
+// At equilibrium: EM force F_z ∝ I²/z² = F_grav  →  z_eq ∝ I.
+// Calibrated from rig: I_ref=5A → z_eq=4.1mm (CLAUDE.md 2026-07-01).
+// I_lev_min = 5A × √(F_grav/F_z_max) = 5×√(1.60/1.85) ≈ 4.64A.
+const I_LEV_MIN   = 4.64;   // [A] minimum current to levitate
+const Z_GAP_5A_MM = 4.1;    // [mm] physical gap at I=5A, z_eq
+const Z_GAP_EXAG  = 8.0;    // display exaggeration factor — raised so 4.1mm gap at 5A
+                             // maps to ~33 display-mm (≈ half the plate thickness of 3mm
+                             // scaled the same way), giving a clearly visible gap lift.
+
+function levGapPhysMm(I) {
+  return I >= I_LEV_MIN ? Z_GAP_5A_MM * (I / 5.0) : 0.0;
+}
 
 // ── Three.js scene ────────────────────────────────────────────────────────────
 const scene    = new THREE.Scene();
@@ -1023,18 +1181,15 @@ function buildSub(keepFn) {
   return {pos: new Float32Array(P), reg: new Uint8Array(G),
           dT: new Float32Array(DT), dTa: new Float32Array(DTA), je: new Float32Array(JE)};
 }
-function makeMesh(sub) {
+function makeMesh(sub, roughness=0.45, metalness=0.65) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(sub.pos, 3));
   g.computeVertexNormals();
   const col = new Float32Array(sub.pos.length);
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  // envMapIntensity tamed below the 1.0 default: on large flat low-poly faces
-  // (this procedural disc + base) a full-strength env reflection turns the whole
-  // face into one big specular blowout instead of a soft sheen.
   const m = new THREE.Mesh(g,
-    new THREE.MeshStandardMaterial({vertexColors:true, roughness:0.5, metalness:0.45,
-                                    envMapIntensity:0.5, side:THREE.DoubleSide}));
+    new THREE.MeshStandardMaterial({vertexColors:true, roughness, metalness,
+                                    envMapIntensity:0.8, side:THREE.DoubleSide}));
   return {mesh:m, geo:g, reg:sub.reg, dT:sub.dT, dTa:sub.dTa, je:sub.je, col};
 }
 
@@ -1042,16 +1197,18 @@ function makeMesh(sub) {
 // (slow β_air, bottom-weighted). The two time constants differ, so the top/bottom
 // gradient GROWS over time as the coils' hot air builds up — not a frozen pattern.
 function discVtxT(M, vi) {
-  return ROM.T_amb + ROM.f_eddy * sim.beta_eddy * M.dT[vi]
-                   + ROM.f_air  * sim.beta_air  * M.dTa[vi];
+  return T_AMB_JS + ROM.f_eddy * sim.beta_eddy * M.dT[vi]
+                  + ROM.f_air  * sim.beta_air  * M.dTa[vi];
 }
-const baseM  = makeMesh(buildSub(r => r !== 0));  // coils + iron + structure
-const plateM = makeMesh(buildSub(r => r === 0));  // aluminium disc (levitates)
+// Split base into metallic parts (coils, core, separator — shiny) and wood frame (matte).
+const baseM  = makeMesh(buildSub(r => r !== 0 && r !== 4), 0.42, 0.68);  // metallic
+const woodM  = makeMesh(buildSub(r => r === 4), 0.88, 0.02);              // plywood — rough, no metalness
+const plateM = makeMesh(buildSub(r => r === 0), 0.35, 0.75);              // aluminium disc
 
 // Live min/max of the disc temperature field (radial + top/bottom gradient).
 // Recomputed each frame because the field SHAPE changes over time (β_eddy vs β_air).
 // Used both for the disc's relative colour scale and for telemetry.
-let discTlo = ROM.T_amb, discThi = ROM.T_amb;
+let discTlo = T_AMB_JS, discThi = T_AMB_JS;
 function updateDiscRange() {
   let lo = Infinity, hi = -Infinity;
   for (let vi = 0; vi < plateM.dT.length; vi++) {
@@ -1069,12 +1226,17 @@ const bb = new THREE.Box3();
  t.computeBoundingBox(); bb.copy(t.boundingBox);}
 const ctr  = new THREE.Vector3(); bb.getCenter(ctr);
 const size = bb.getSize(new THREE.Vector3()).length();
-const modelH = bb.max.y - bb.min.y;
-const LIFT = Math.max(modelH * 0.40, size * 0.07);  // exaggerated levitation gap
+const modelH  = bb.max.y - bb.min.y;
+const LIFT_BASE = modelH * 0.20;   // base offset: disc sits visually above the coil top
+
+function levLiftY(I) {
+  return LIFT_BASE + levGapPhysMm(I) * Z_GAP_EXAG;
+}
 
 baseM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
-plateM.mesh.position.set(-ctr.x, -ctr.y + LIFT, -ctr.z);
-scene.add(baseM.mesh, plateM.mesh);
+woodM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
+plateM.mesh.position.set(-ctr.x, -ctr.y + levLiftY(targetI), -ctr.z);
+scene.add(baseM.mesh, woodM.mesh, plateM.mesh);
 
 // Field-line hints (blue arcs bridging coil rim → plate)
 const rRim = Math.min(size * 0.18, 90);
@@ -1083,7 +1245,7 @@ const gapTop = bb.max.y - ctr.y;
 const flPts = [];
 for (let a = 0; a < 12; a++) {
   const th = a / 12 * Math.PI * 2, x = Math.cos(th)*rRim, z = Math.sin(th)*rRim;
-  flPts.push(x, gapBot, z,  x, gapTop + LIFT * 0.9, z);
+  flPts.push(x, gapBot, z,  x, gapTop + LIFT_BASE * 0.9, z);
 }
 const flGeo = new THREE.BufferGeometry();
 flGeo.setAttribute('position', new THREE.Float32BufferAttribute(flPts, 3));
@@ -1155,9 +1317,9 @@ const FIELD_LINE_FLOW_SPEED = size * 0.05;   // world units/s — dash "flow" pu
 // Frame the levitating disc + coils in the clear lower area (UI panels cover the
 // top). Aim above the device centre so the whole assembly drops into the lower
 // half of the viewport, and pull back enough to keep the disc fully visible.
-const plateTopY = (bb.max.y - ctr.y) + LIFT;   // top of the lifted disc
+const plateTopY = (bb.max.y - ctr.y) + levLiftY(targetI);  // top of the lifted disc
 camera.position.set(size*0.70, size*0.42, size*0.70);
-controls.target.set(0, plateTopY*0.62, 0); controls.update();
+controls.target.set(0, plateTopY*0.55, 0); controls.update();
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 const dl = new THREE.DirectionalLight(0xffffff, 0.7);
 dl.position.set(1, 1.5, 0.8); scene.add(dl);
@@ -1189,10 +1351,11 @@ function addLabel(text, pos, cls) {
   return obj;
 }
 const plateCentroid = regionCentroid(0);
-addLabel('Aluminium Plate', new THREE.Vector3(plateCentroid.x, plateCentroid.y + LIFT + size*0.05, plateCentroid.z));
+const plateLabelObj = addLabel('Aluminium Plate',
+  new THREE.Vector3(plateCentroid.x, plateCentroid.y + levLiftY(targetI) + size*0.05, plateCentroid.z));
 addLabel('Inner Coil (1000 turns)', regionCentroid(1));
 addLabel('Outer Coil (500 turns)',  regionCentroid(2));
-addLabel('Center Spacer', regionCentroid(3), 'iron');
+addLabel('Center Core (ceramic)', regionCentroid(3), 'iron');
 addLabel('Separator Ring', regionCentroid(5), 'iron');
 
 // ── Heat particles — faint glowing motes rising from the coils, shown only
@@ -1226,7 +1389,7 @@ const particles = new THREE.Points(particleGeo, new THREE.PointsMaterial({
 particles.position.set(-ctr.x, -ctr.y, -ctr.z);
 particles.visible = false;
 scene.add(particles);
-const particleTopY = gapTop + LIFT * 0.9;
+const particleTopY = gapTop + LIFT_BASE * 0.9;
 function updateHeatParticles(dt) {
   const hot = Math.max(sim.T.inner, sim.T.outer, sim.T.iron) - ROM.T_amb > 2.0;
   particles.visible = hot;
@@ -1247,9 +1410,15 @@ const TRANGE = T_COLOR_HI - T_COLOR_LO;
 let colorScaleMode = 'auto';
 function paintMesh(M) {
   const col = M.col;
-  // Per-region uniform tnorm for coils/iron (one temperature each per frame).
-  const tnInner = (sim.T.inner - T_COLOR_LO) / TRANGE;
-  const tnOuter = (sim.T.outer - T_COLOR_LO) / TRANGE;
+  // Per-region tnorm for coils/iron — relative scale: 0 = T_amb, 1 = coil's own T_ss(I).
+  // This gives a clearly visible colour transition even at modest currents, because the
+  // colour ramp is stretched between "cold" and "fully warm for this I" rather than a
+  // fixed 29–125°C absolute scale.
+  const I_cur = getI();
+  const dT_inner_ss = Math.max(0.5, coilTss_inner(I_cur) - T_AMB_JS);
+  const dT_outer_ss = Math.max(0.5, coilTss_outer(I_cur) - T_AMB_JS);
+  const tnInner = (sim.T.inner - T_AMB_JS) / dT_inner_ss;
+  const tnOuter = (sim.T.outer - T_AMB_JS) / dT_outer_ss;
   const tnIron  = (sim.T.iron  - T_COLOR_LO) / TRANGE;
   const tnByReg = [0, tnInner, tnOuter, tnIron];
   // Disc relative scale: blue = coolest part of plate (top rim), red = hottest
@@ -1278,12 +1447,12 @@ function paintMesh(M) {
       } else if (reg === 4) {
         col[idx] = STRUCT_RGB[0]; col[idx+1] = STRUCT_RGB[1]; col[idx+2] = STRUCT_RGB[2];
       } else if (reg === 3 || reg === 5) {
-        // Center spacer (3) and separator ring (5) are PASSIVE (don't self-heat:
-        // 39-45°C vs coils' 56-79°C across both validation runs, per params.yaml)
-        // -- render as static metal, not the heat ramp.
-        col[idx] = METAL_RGB[0]; col[idx+1] = METAL_RGB[1]; col[idx+2] = METAL_RGB[2];
+        // Center Core (3) and Separator Ring (5): passive metallic parts that heat
+        // by conduction from coils (~39–45°C). Silver-gray at cold → warm orange at hot.
+        writeRampMetal(col, idx, tnIron);
       } else {
-        writeRamp(col, idx, tnByReg[reg]);   // reg 1,2: coils -- dynamic heat ramp
+        // reg 1,2: coils — dark varnished copper at cold → bright orange-yellow at hot.
+        writeRampCopper(col, idx, tnByReg[reg]);
       }
     }
   }
@@ -1302,7 +1471,16 @@ function plateTmean() {
 // T_ss for current I (no sigma correction for speed, close enough for UI)
 function plateTss(I) {
   const r2 = (I / ROM.I_ref) ** 2;
-  return ROM.T_amb + ROM.dT_max_ref * r2;
+  return T_AMB_JS + ROM.dT_max_ref * r2;
+}
+// Coil steady-state temperatures at given I — used for relative colour scale
+function coilTss_inner(I) {
+  const s2 = (I / ROM.I_ref) ** 2;
+  return T_AMB_JS + (LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF) * s2;
+}
+function coilTss_outer(I) {
+  const s2 = (I / ROM.I_ref) ** 2;
+  return T_AMB_JS + (LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF) * s2;
 }
 // Total heat power at current I
 function totalPower(I) {
@@ -1337,30 +1515,49 @@ function drawChart() {
   const N = sim.hist_t.length;
   if (N < 2) return;
   const tNow = sim.hist_t[N-1];
-  const t0 = Math.max(0, tNow - CHART_WIN);
-  // T range: from T_amb to current T_ss + buffer
-  const Tlo = ROM.T_amb - 0.5;
-  const curTss = plateTss(getI());
-  const Thi = Math.max(curTss + 2, sim.hist_Tmax[N-1] + 1, ROM.T_amb + 2);
+  const t0   = Math.max(0, tNow - CHART_WIN);
+  const curI = getI();
+  const curTss       = plateTss(curI);
+  const curInnerSS   = coilTss_inner(curI);
+  const Tlo = T_AMB_JS - 0.5;
+  const Thi = Math.max(curTss + 2, sim.hist_Tmax[N-1] + 1,
+                        curInnerSS + 2, sim.hist_T_inner[N-1] + 1, T_AMB_JS + 2);
   const tx = t => (t - t0) / CHART_WIN * W;
   const ty = T => H - (T - Tlo) / (Thi - Tlo) * H;
   drawGrid(W, H, 4);
   // T_amb line (blue dashed)
   ctx.strokeStyle = '#5599ff'; ctx.lineWidth = 1; ctx.setLineDash([5,4]);
   ctx.beginPath();
-  ctx.moveTo(0, ty(ROM.T_amb)); ctx.lineTo(W, ty(ROM.T_amb)); ctx.stroke();
-  // T_ss line (green dashed)
+  ctx.moveTo(0, ty(T_AMB_JS)); ctx.lineTo(W, ty(T_AMB_JS)); ctx.stroke();
+  // T_ss plate line (green dashed)
   ctx.strokeStyle = '#44ff88'; ctx.lineWidth = 1; ctx.setLineDash([5,4]);
   ctx.beginPath(); ctx.moveTo(0, ty(curTss)); ctx.lineTo(W, ty(curTss)); ctx.stroke();
   ctx.setLineDash([]);
-  // T_max line (orange-red)
+  // Outer coil line (bright yellow, thicker for contrast)
+  ctx.strokeStyle = '#ffdd22'; ctx.lineWidth = 2.2;
+  ctx.beginPath(); let fo = true;
+  for (let i = 0; i < N; i++) {
+    if (sim.hist_t[i] < t0) continue;
+    const x = tx(sim.hist_t[i]), y = ty(sim.hist_T_outer[i]);
+    fo ? (ctx.moveTo(x,y), fo=false) : ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+  // Inner coil line (vivid orange, thicker for contrast)
+  ctx.strokeStyle = '#ff6600'; ctx.lineWidth = 2.2;
+  ctx.beginPath(); let fi = true;
+  for (let i = 0; i < N; i++) {
+    if (sim.hist_t[i] < t0) continue;
+    const x = tx(sim.hist_t[i]), y = ty(sim.hist_T_inner[i]);
+    fi ? (ctx.moveTo(x,y), fi=false) : ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+  // Plate T_max line (red, drawn on top)
   ctx.strokeStyle = '#ff6644'; ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  let first = true;
+  ctx.beginPath(); let fp = true;
   for (let i = 0; i < N; i++) {
     if (sim.hist_t[i] < t0) continue;
     const x = tx(sim.hist_t[i]), y = ty(sim.hist_Tmax[i]);
-    first ? (ctx.moveTo(x,y), first=false) : ctx.lineTo(x,y);
+    fp ? (ctx.moveTo(x,y), fp=false) : ctx.lineTo(x,y);
   }
   ctx.stroke();
   // labels
@@ -1427,7 +1624,8 @@ function attachChartTooltip(canvas, formatFn) {
   });
   canvas.addEventListener('mouseleave', () => { chartTip.style.display = 'none'; });
 }
-attachChartTooltip(chartCanvas,  i => `t=${sim.hist_t[i].toFixed(0)}s   T_max=${sim.hist_Tmax[i].toFixed(2)}°C`);
+attachChartTooltip(chartCanvas,  i =>
+  `t=${sim.hist_t[i].toFixed(0)}s  Plate=${sim.hist_Tmax[i].toFixed(2)}°C  Inner=${sim.hist_T_inner[i].toFixed(2)}°C  Outer=${sim.hist_T_outer[i].toFixed(2)}°C`);
 attachChartTooltip(chartCanvasI, i => `t=${sim.hist_t[i].toFixed(0)}s   I=${sim.hist_I[i].toFixed(2)}A`);
 
 // ── UI wiring ─────────────────────────────────────────────────────────────────
@@ -1437,6 +1635,7 @@ sS.oninput = () => {
   const sp = Math.pow(10, +sS.value);
   document.getElementById('vS').textContent = (sp<10?sp.toFixed(1):Math.round(sp))+'×';
 };
+sS.oninput();  // sync display with initial slider value on load
 function selectScenario(name) {
   const btn = document.querySelector(`.sc-btn[data-sc="${name}"]`);
   if (!btn) return;
@@ -1525,9 +1724,11 @@ document.getElementById('btnScreenshot').onclick = () => {
   });
 };
 document.getElementById('btnExportCsv').onclick = () => {
-  let csv = 't_s,T_max_C,I_A\n';
+  let csv = 't_s,T_plate_max_C,T_inner_coil_C,T_outer_coil_C,I_A\n';
   for (let i = 0; i < sim.hist_t.length; i++)
-    csv += `${sim.hist_t[i].toFixed(2)},${sim.hist_Tmax[i].toFixed(3)},${sim.hist_I[i].toFixed(3)}\n`;
+    csv += `${sim.hist_t[i].toFixed(2)},${sim.hist_Tmax[i].toFixed(3)},` +
+           `${sim.hist_T_inner[i].toFixed(3)},${sim.hist_T_outer[i].toFixed(3)},` +
+           `${sim.hist_I[i].toFixed(3)}\n`;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
   a.download = `tmax_history_${Date.now()}.csv`;
@@ -1565,8 +1766,8 @@ document.getElementById('tauLabel').textContent =
 // Precompute coil steady-state temperatures (at I_ref) — shown as target arrows.
 // True steady rise = own rise above the local air node + the air node's rise above
 // the far ambient (AIR_DT_SS_REF), since the coils now convect into shared air.
-const T_ss_inner = ROM.T_amb + LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF;
-const T_ss_outer = ROM.T_amb + LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF;
+const T_ss_inner = T_AMB_JS + LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF;
+const T_ss_outer = T_AMB_JS + LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF;
 document.getElementById('tInSS').textContent  = `→${T_ss_inner.toFixed(0)}°`;
 document.getElementById('tOutSS').textContent = `→${T_ss_outer.toFixed(0)}°`;
 
@@ -1583,7 +1784,7 @@ document.getElementById('tOutSS').textContent = `→${T_ss_outer.toFixed(0)}°`;
 // (coilAirDrive), so it warms slowly with the copper mass rather than jumping with
 // I² — this is the thermal-inertia effect. Updated every frame in the loop.
 function liveAirBot() {
-  const Tinf_bot = ROM.T_amb + (ROM.Tinf_bot_ref - ROM.T_amb) * coilAirDrive();
+  const Tinf_bot = T_AMB_JS + (ROM.Tinf_bot_ref - ROM.T_amb) * coilAirDrive();
   document.getElementById('tAirBot').textContent = Tinf_bot.toFixed(1) + ' °C';
 }
 liveAirBot();
@@ -1626,10 +1827,14 @@ function loop() {
       const Tmax = plateTmax();
       sim.hist_t.push(sim.t);
       sim.hist_Tmax.push(Tmax);
+      sim.hist_T_inner.push(sim.T.inner);
+      sim.hist_T_outer.push(sim.T.outer);
       sim.hist_I.push(getI());
       // Keep max 3600 points
       if (sim.hist_t.length > 3600) {
-        sim.hist_t.shift(); sim.hist_Tmax.shift(); sim.hist_I.shift();
+        sim.hist_t.shift(); sim.hist_Tmax.shift();
+        sim.hist_T_inner.shift(); sim.hist_T_outer.shift();
+        sim.hist_I.shift();
       }
     }
 
@@ -1638,11 +1843,17 @@ function loop() {
 
   // Paint meshes
   paintMesh(baseM);
+  paintMesh(woodM);
   paintMesh(plateM);
   updateScaleBar();
 
-  // Update telemetry
+  // Update disc Z position (levitation gap tracks current I)
   const I_display = getI();
+  const liftY = levLiftY(I_display);
+  plateM.mesh.position.y = -ctr.y + liftY;
+  plateLabelObj.position.y = plateCentroid.y + liftY + size * 0.05;
+
+  // Update telemetry
   const Tmax  = plateTmax();
   const Tmean = plateTmean();
   const Tss   = plateTss(I_display);
@@ -1659,6 +1870,9 @@ function loop() {
   document.getElementById('vPdisc').textContent = P_disc.toFixed(2) + ' W';
   document.getElementById('vPcoil').textContent = P_coil_now.toFixed(1) + ' W';
 
+  const gapMm = levGapPhysMm(I_display);
+  document.getElementById('tLevGap').textContent =
+    I_display >= I_LEV_MIN ? 'Levitation Gap: '+gapMm.toFixed(1)+' mm' : 'Levitation Gap: 0.0 mm';
   document.getElementById('tPmax').textContent  = Tmax.toFixed(2)+' °C';
   setV('tPmean', Tmean); setV('tPss', Tss);
   setV('tIn',  sim.T.inner); setV('tOut', sim.T.outer); setV('tFe',  sim.T.iron);

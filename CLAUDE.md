@@ -188,6 +188,44 @@ P and hA). Transient RMS residual ≈3°C (same quality). Effective C_coil = 0.2
 - [x] Magnet-contact test DONE (2026-07-01): center core = non-ferromagnetic, non-
       thermally-conductive. mu_r=1.0, sigma=0.0 confirmed. Plate thickness=3mm confirmed.
 - [ ] NEXT: Re-confirm coil/iron radii by ruler (geometry still unverified).
+- [x] build_twin_html_fem.py UI improvements (2026-07-01 session 1):
+      Time speed slider default reset to 1×; T_amb display = 29°C (lab ambient);
+      Solid center core procedural geometry (`build_solid_core()`, r=0–25mm);
+      Gap filler ring r=25–28mm (inner coil material, no air gap between core and coil);
+      Levitation gap Z-axis animation bound to I (z_eq=4.1mm@5A, min I_lev=4.64A);
+      Levitation gap shown in Telemetry panel; disc label follows disc Y-position;
+      Inner/outer coil temps plotted realtime on Time History chart alongside plate T_max;
+      Coil surface uses relative heat ramp (0=T_amb, 1=T_ss(I)) → visible colour change;
+      Header badge voltage corrected to 220 V (was incorrectly set to 190V).
+- [ ] TODO (future): auto-initialise T_amb from OpenWeatherMap API at page load —
+      fetch current temperature for Darmstadt, Germany (Zipcode: 64289) and use it
+      as the simulation's ambient baseline instead of the hardcoded 29°C.
+- [x] build_twin_html_fem.py rendering fixes (2026-07-01 session 2):
+      Center Core (reg 3) and Separator Ring (reg 5) now use writeRamp(tnIron) instead
+      of static METAL_RGB — they show real heat-ramp colour (conduction from coils,
+      ~39-45°C). Center Core label corrected to "Center Core (ferromagnetic)" per user.
+      Inner Coil material upgraded (roughness 0.35, metalness 0.55, envMapIntensity 0.7)
+      for a coated-wire / insulation-wrapped look. Telemetry row label cleaned to
+      "Levitation Gap" (no emoji), value now reads "Levitation Gap: X.X mm".
+      Z_GAP_EXAG raised 6.0→8.0 so the 4.1mm physical gap at 5A maps to ~33 display-mm
+      (clearer visual lift). Chart coil line widths raised 1.4→2.2 px, colors brightened:
+      outer=#ffdd22, inner=#ff6600 — clearly distinct from Plate T_max (#ff6644 1.8px).
+- [x] build_twin_html_fem.py — FULL PROCEDURAL GEOMETRY REBUILD (2026-07-01 session 3):
+      STL body geometry entirely REMOVED from body pipeline (STL was causing 5 visual bugs:
+      hollow core, unrealistic gaps, plastic-looking material, hexagonal frame, surface-only heat).
+      ALL device parts now built 100% from params.yaml numbers via revolve_ring()/build_solid_core()/
+      build_octagonal_frame() — no classify() STL voxelization. New coordinate system (natural,
+      z=0 floor, z=8..60 coil assembly, z=63.8 disc bottom). Region labels:
+        reg 3 = center core (solid cylinder r=0..25mm, ceramic/Al₂O₃)
+        reg 1 = inner coil + gap-filler (solid toroid r=25..78mm, 1000T varnished copper)
+        reg 5 = separator / iron ring (solid fill r=78..104mm — entire gap, no visible voids)
+        reg 2 = outer coil (solid toroid r=104..124mm, 500T varnished copper)
+        reg 4 = plywood octagonal frame (8-sided prism r=130..165mm)
+        reg 0 = levitating disc (Ø160mm × 3mm Al, z≈63.8mm above coil top)
+      New thermal ramp functions: writeRampCopper() (dark red-brown→orange-yellow, for coils) and
+      writeRampMetal() (silver-gray→warm orange, for core/separator). Separate Three.js meshes:
+      baseM (roughness=0.42, metalness=0.68) / woodM (0.88, 0.02) / plateM (0.35, 0.75).
+      Total body tris: ~4896. Disc: ~3072 tris. Output: outputs/digital_twin_fem.html (625 KB).
 
 ## Conventions
 - SI units; geometry entered in mm in params.yaml (code converts to m).
