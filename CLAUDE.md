@@ -1,8 +1,11 @@
 # CLAUDE.md — Project context for Thermal Digital Twin (TEAM 28-like Levitator)
 
 Auto-loaded by Claude Code each session. Keep under ~200 lines. Single source of
-truth. See @README.md for setup/run and @physics.md for the full formulation.
-NOTE: all source + assets live FLAT in the repo root (no src/ docs/ data/ folders).
+truth. See @README.md for setup/run and @docs/physics.md for the full formulation.
+NOTE: source scripts (*.py), params.yaml and input data (STL/CSV) stay FLAT in the
+repo root — scripts self-locate everything via __file__, so do NOT move them into
+src/ or data/. Only two subfolders exist: docs/ (all *.md except CLAUDE.md/README.md)
+and outputs/ (all generated PNG/GLB/OBJ/HTML — gitignored except digital_twin_fem.html).
 
 ## What we are building
 A real-time **thermal digital twin** for the aluminium plate + coils of a TEAM 28-like
@@ -34,7 +37,7 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   for Phase 1.
 - **Sensors for validation**: Team designs own solution. Arduino + thermocouple/RTD
   sensors + IR thermometer. Create shopping list (Reichelt/Conrad) → professor buys.
-  See SENSOR_PLAN.md.
+  See docs/SENSOR_PLAN.md.
 - **Scope (Prof 2)**: Can start with disc-only simulation first, then expand to full
   device. Current full-device approach is also OK.
 
@@ -60,12 +63,12 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   build_twin_html_fem.py PROCEDURALLY synthesizes it (region 5, static metal
   colour) since the real STL has no surface at the exact gap radii params.yaml
   implies — a 3-wall hollow-drum shape (walls at r≈24/59/79mm, full device height
-  z≈-2..66mm). Visual-only; EM/thermal solve unchanged. See 3D_MODEL_UPDATE_PLAN.md.
+  z≈-2..66mm). Visual-only; EM/thermal solve unchanged. See docs/3D_MODEL_UPDATE_PLAN.md.
 - Coils: height 52mm, Cu wire 1.2mm. Radii from Fig.2/STL — **CONFIRM with a real
   ruler measurement on the rig**: the STL's actual coil-region geometry doesn't
-  line up cleanly with these radii either (see 3D_MODEL_UPDATE_PLAN.md mismatch).
+  line up cleanly with these radii either (see docs/3D_MODEL_UPDATE_PLAN.md mismatch).
 
-## Key physics points (see physics.md)
+## Key physics points (see docs/physics.md)
 - Heat source q = ½·σ·ω²·|A_φ|² [W/m³] (cycle-averaged). NOT |∇T|²/σ.
 - Solve EM as a PHASOR once; do NOT time-step 50Hz inside the thermal loop.
 - σ(T)=σ0/(1+α(T-T0)), α≈3.9e-3/K — include as a runtime amplitude multiplier
@@ -143,7 +146,7 @@ narrated-timeline run, ±~10s timing uncertainty). Cross-check at I_ref=5A
       Sensor integration pending (calibrate_UA() already wired in ROM).
 - [x] visualize.py — make_plate_3d(): revolve FEM 2D→3D surface (top+bot cap+rim),
       matplotlib 3D render (z_scale exaggeration), GLB export via trimesh.
-      Outputs: thermal_3d.png, thermal_2d_section.png, plate.glb (247 KB).
+      Outputs (→ outputs/): thermal_3d.png, thermal_2d_section.png, plate.glb (247 KB).
       Optional: --pyvista for interactive window.
 - [x] sim_plates.py — compare thermal response across plate_library (EM + thermal,
       3D revolve + bar/profile charts). --no-em fast path via σ·R² scaling.
@@ -152,9 +155,9 @@ narrated-timeline run, ±~10s timing uncertainty). Cross-check at I_ref=5A
 - [x] data_io.py + arduino/thermal_sensor/thermal_sensor.ino — SensorReader (serial or
       port="mock" synthetic source) → calibrate_from_file() → rom.calibrate_UA(I_meas,
       dT_meas); live_compare() animation. Tested end-to-end against mock_sensor_data.csv
-      (no real hardware yet) — see SENSOR_PLAN.md.
+      (no real hardware yet) — see docs/SENSOR_PLAN.md.
 - [ ] NEXT: Sensor hardware — build the real Arduino rig (MAX31855×2 + thermocouples,
-      shopping list in SENSOR_PLAN.md), log a real run, re-run calibrate_from_file() on it.
+      shopping list in docs/SENSOR_PLAN.md), log a real run, re-run calibrate_from_file() on it.
 - [x] Domain validation — Dirichlet vs Neumann BC comparison: validate_domain_size() in
       em_solver.py; PASS, diffs <0.06% at ±500mm domain → domain is large enough.
 - [x] Re-ran full pipeline with T_amb=20°C, ±500mm domain (2026-06-22): config → em_solver →

@@ -24,20 +24,23 @@ pip install -r requirements.txt
 ```
 
 ## Run
-All source lives flat in the repo root (no `src/` subfolder).
+Source scripts stay flat in the repo root (no `src/` subfolder); docs are in
+`docs/`, generated files land in `outputs/`.
 ```bash
 python config.py            # print normalized parameters
 python em_solver.py         # AC eddy losses + I² check + benchmark (z_eq≈7.1mm vs 11.3 expected — improved, not yet matching, see CLAUDE.md)
 python thermal_solver.py    # solve heat + energy balance (expect "error=0.000%")
 python rom.py               # real-time ROM demo (I² scaling + transient)
 python digital_twin.py      # interactive live twin (slider I, plate selector)
-python visualize.py --no-show   # revolve 2D→3D, export plate.glb
+python visualize.py --no-show   # revolve 2D→3D, export outputs/plate.glb
 python sim_plates.py            # compare plates from plate_library
-python build_twin_html.py 3D_model.stl   # bake standalone AR twin → digital_twin.html
+python build_twin_html.py 3D_model.stl   # bake standalone AR twin → outputs/digital_twin.html
 python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
 ```
 
-## Layout (flat — everything in repo root)
+## Layout
+Source scripts, `params.yaml` and input data stay flat in the repo root (scripts
+self-locate via `__file__`). Docs live in `docs/`, generated files in `outputs/`.
 ```
 params.yaml         # ALL knobs (units, current, materials, BCs, mesh)
 config.py           # loads params, converts mm->m, derives P ~ I^2
@@ -47,13 +50,15 @@ rom.py              # real-time ROM: I^2 + first-order transient + σ(T)
 digital_twin.py     # interactive live loop I(t) -> T(r,z,t)
 visualize.py        # revolve 2D->3D, export GLB/OBJ (+ optional PyVista)
 sim_plates.py       # compare thermal response across plate_library
-build_twin_html.py  # bake STL + physics into a standalone digital_twin.html
-data_io.py           # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA()
+build_twin_html.py      # bake STL + physics -> outputs/digital_twin.html (lumped)
+build_twin_html_fem.py  # FEM-based bake  -> outputs/digital_twin_fem.html
+data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA()
 arduino/thermal_sensor/thermal_sensor.ino  # MAX31855x2 firmware, 1Hz CSV over serial
 3D_model.stl                    # colleague's CAD (source, meters, axisymmetric)
 levitation_height_team28.csv    # Table I from the PDF (levitation height, validation)
 mock_sensor_data.csv            # synthetic sensor log for testing data_io.py
-physics.md                      # full formulation / derivations
+docs/               # physics.md, ARCHITECTURE.md, HANDOFF.md, SENSOR_PLAN.md, 3D_MODEL_UPDATE_PLAN.md
+outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin_fem.html)
 ```
 
 ## Roadmap
@@ -70,7 +75,7 @@ physics.md                      # full formulation / derivations
 - [x] **Phase 8** — `data_io.py` + `arduino/thermal_sensor.ino`: `SensorReader` (serial or
   mock) -> `calibrate_from_file()` -> `rom.calibrate_UA()`. Tested against `mock_sensor_data.csv`.
 - [ ] **Phase 7** — Sensor hardware: build the real Arduino rig (Arduino + thermocouple +
-  IR thermometer, see `SENSOR_PLAN.md`), then re-run Phase 8 calibration on real data.
+  IR thermometer, see `docs/SENSOR_PLAN.md`), then re-run Phase 8 calibration on real data.
 
 ## Axisymmetric FEM math (reference)
 Weak form with volume weight `2πr dr dz`:

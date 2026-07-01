@@ -355,7 +355,9 @@ if __name__ == "__main__":
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    out_path = os.path.join(os.path.dirname(__file__), "thermal_map.png")
+    out_dir = os.path.join(os.path.dirname(__file__), "outputs")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "thermal_map.png")
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"\nChart saved: {out_path}")
     plt.show()

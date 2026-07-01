@@ -1709,5 +1709,7 @@ loop();
 
 if __name__ == "__main__":
     stl = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "3D_model.stl")
-    out = os.path.join(HERE, "digital_twin_fem.html")
+    out_dir = os.path.join(HERE, "outputs")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, "digital_twin_fem.html")
     build(stl, out)

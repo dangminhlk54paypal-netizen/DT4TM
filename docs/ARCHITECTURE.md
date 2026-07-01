@@ -2,7 +2,8 @@
 
 > Last updated: 2026-06-22 (Professor feedback Juni 2026).
 > Single-source-of-truth for file relationships.
-> All files live **flat in repo root** (no src/ subfolder).
+> Source scripts + input data live **flat in repo root** (no src/ subfolder);
+> docs live in `docs/`, generated files in `outputs/`.
 
 ---
 
@@ -11,38 +12,40 @@
 ```
 DT4TM/
 ├── params.yaml                  ← ALL physics knobs (geometry, materials, BCs, mesh)
-│
 ├── config.py                    ← Loads params.yaml, converts mm→m, derives scalars
 │
 ├── em_solver.py                 ← AC eddy-current FEM (axisymmetric, complex A_φ)
 ├── thermal_solver.py            ← Steady-state heat FEM (axisymmetric, P1 triangles)
 ├── rom.py                       ← Real-time ROM: I²-scaling + first-order ODE + σ(T)
 ├── digital_twin.py              ← Interactive live twin (matplotlib, sliders)
-│
-├── visualize.py                 ← Revolve 2D→3D, export plate.glb / thermal_3d.png
+├── visualize.py                 ← Revolve 2D→3D, export outputs/plate.glb + thermal_3d.png
 ├── sim_plates.py                ← Batch compare plate materials from plate_library
-│
-├── build_twin_html_fem.py       ← Bake FEM+STL+ROM → standalone digital_twin_fem.html
+├── build_twin_html_fem.py       ← Bake FEM+STL+ROM → outputs/digital_twin_fem.html
 ├── build_twin_html.py           ← Older bake script (lumped ROM only, no FEM disc)
-│
 ├── data_io.py                   ← SensorReader (serial/mock) → calibrate_from_file() → rom.calibrate_UA()
-├── arduino/thermal_sensor/
-│   └── thermal_sensor.ino       ← MAX31855×2 firmware, 1Hz CSV over serial (see SENSOR_PLAN.md)
-│
-├── digital_twin_fem.html        ← [GENERATED] Full AR twin — double-click to run
-├── digital_twin.html            ← [GENERATED] Older version (lumped only)
 │
 ├── 3D_model.stl                 ← CAD geometry (meters, axisymmetric, ~467 KB)
 ├── levitation_height_team28.csv ← Benchmark Table I: t_ms, z_mm (levitation height)
 ├── mock_sensor_data.csv         ← Synthetic sensor log for testing data_io.py without hardware
 │
-├── params.yaml                  (already listed above)
-├── physics.md                   ← Full physics derivations + formulas
 ├── CLAUDE.md                    ← Claude Code project instructions (auto-loaded)
 ├── README.md                    ← Setup, run commands, FEM math reference
-├── HANDOFF.md                   ← Quick status handoff for team members
-└── ARCHITECTURE.md              ← This file
-└── SENSOR_PLAN.md               ← Hardware shopping list + sensor architecture
+│
+├── arduino/thermal_sensor/
+│   └── thermal_sensor.ino       ← MAX31855×2 firmware, 1Hz CSV (see docs/SENSOR_PLAN.md)
+│
+├── docs/                        ← project documentation
+│   ├── physics.md               ← Full physics derivations + formulas
+│   ├── ARCHITECTURE.md          ← This file
+│   ├── HANDOFF.md               ← Quick status handoff for team members
+│   ├── SENSOR_PLAN.md           ← Hardware shopping list + sensor architecture
+│   └── 3D_MODEL_UPDATE_PLAN.md  ← Separator-ring / coil geometry update notes
+│
+└── outputs/                     ← [GENERATED — gitignored except digital_twin_fem.html]
+    ├── digital_twin_fem.html    ← Full AR twin — double-click to run (kept in git)
+    ├── digital_twin.html        ← Older version (lumped only)
+    ├── plate.glb / plate.obj    ← 3D exports for AR
+    └── *.png                    ← render outputs (thermal_3d, rom_demo, plates_*, …)
 ```
 
 ---
@@ -142,13 +145,15 @@ build_twin_html_fem.py ◄──────────────────
 
 ## Generated / Derived Files
 
+All generated files land in `outputs/` (gitignored, except `digital_twin_fem.html`).
+
 | File | How to regenerate | Size |
 |---|---|---|
-| `digital_twin_fem.html` | `python build_twin_html_fem.py 3D_model.stl` | 568 KB |
-| `digital_twin.html` | `python build_twin_html.py 3D_model.stl` | 464 KB |
-| `plate.glb` | `python visualize.py` | ~247 KB |
-| `thermal_3d.png` | `python visualize.py --no-show` | — |
-| `thermal_2d_section.png` | `python visualize.py --no-show` | — |
+| `outputs/digital_twin_fem.html` | `python build_twin_html_fem.py 3D_model.stl` | 568 KB |
+| `outputs/digital_twin.html` | `python build_twin_html.py 3D_model.stl` | 464 KB |
+| `outputs/plate.glb` | `python visualize.py` | ~247 KB |
+| `outputs/thermal_3d.png` | `python visualize.py --no-show` | — |
+| `outputs/thermal_2d_section.png` | `python visualize.py --no-show` | — |
 
 ---
 

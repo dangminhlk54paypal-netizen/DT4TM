@@ -402,23 +402,26 @@ def main():
     print(f"done  →  {len(verts):,} vertices, {len(faces):,} faces  |  "
           f"T: {T_v.min():.1f} – {T_v.max():.1f} °C")
 
+    out_dir = os.path.join(ROOT, "outputs")
+    os.makedirs(out_dir, exist_ok=True)
+
     # --- matplotlib 3D ---
-    png_3d = os.path.join(ROOT, "thermal_3d.png")
+    png_3d = os.path.join(out_dir, "thermal_3d.png")
     plot_3d_matplotlib(verts, faces, T_v, cfg, I=args.I,
                        z_scale=args.z_scale,
                        save_path=png_3d, show=show)
 
     # --- matplotlib 2D cross-section ---
-    png_2d = os.path.join(ROOT, "thermal_2d_section.png")
+    png_2d = os.path.join(out_dir, "thermal_2d_section.png")
     plot_2d_crosssection(rom, I=args.I, save_path=png_2d, show=show)
 
     # --- PyVista (optional) ---
     if args.pyvista:
         plot_pyvista(verts, faces, T_v, show=show,
-                     save_path=os.path.join(ROOT, "thermal_pyvista.png") if not show else None)
+                     save_path=os.path.join(out_dir, "thermal_pyvista.png") if not show else None)
 
     # --- Export GLB / OBJ ---
-    out = args.out or os.path.join(ROOT, "plate.glb")
+    out = args.out or os.path.join(out_dir, "plate.glb")
     export_3d(verts, faces, T_v, out)
 
 

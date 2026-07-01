@@ -360,5 +360,7 @@ loop();
 
 if __name__ == "__main__":
     stl = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "3D_model.stl")
-    out = os.path.join(ROOT, "digital_twin.html")
+    out_dir = os.path.join(ROOT, "outputs")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, "digital_twin.html")
     build(stl, out)

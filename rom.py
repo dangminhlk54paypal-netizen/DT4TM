@@ -389,7 +389,9 @@ if __name__ == "__main__":
     ax3.grid(alpha=0.3)
 
     plt.tight_layout()
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rom_demo.png")
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, "rom_demo.png")
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"\nSaved: {out}")
     plt.show()

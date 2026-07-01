@@ -1,6 +1,6 @@
 # HANDOFF — Digital Twin for Thermal Management
 
-> **Primary source of truth is [CLAUDE.md](CLAUDE.md) + [README.md](README.md).**
+> **Primary source of truth is [CLAUDE.md](../CLAUDE.md) + [README.md](../README.md).**
 > This file is a quick handoff status summary. Last updated: 2026-06-22.
 
 ## Goal
@@ -13,7 +13,8 @@ in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the rea
   (+ `trimesh` for GLB export). Problem is **axisymmetric** → solve in 2D (r, z), revolve to 3D.
 - **Real-time:** losses scale as I², spatial pattern stays fixed → run FEM once at I_ref=5A,
   online inference is just a multiply by (I/I_ref)². I²-scaling verified: 4.000000.
-- All parameters live in [params.yaml](params.yaml). All source files are **flat in the repo root**.
+- All parameters live in [params.yaml](../params.yaml). Source scripts + input data are
+  **flat in the repo root**; docs live in `docs/`, generated files in `outputs/`.
 
 ## Device numbers (in params.yaml)
 - Aluminium plate: **R=80mm (Ø16cm)**, thickness 3mm (placeholder — needs to be MEASURED), σ=3.4e7 S/m.
@@ -62,4 +63,4 @@ in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the rea
 - **Session 5**: Build the real Arduino rig, log a real run, calibrate `data_io.py`
   against actual sensor data instead of `mock_sensor_data.csv`
 
-## Run commands — see [README.md](README.md) (note: `python config.py`, NOT `src/`).
+## Run commands — see [README.md](../README.md) (note: `python config.py`, NOT `src/`).

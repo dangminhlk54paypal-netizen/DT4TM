@@ -221,7 +221,9 @@ def main():
     cbar.ax.tick_params(labelsize=9)
 
     fig3d.tight_layout(rect=[0, 0, 1, 0.93])
-    path3d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plates_3d.png")
+    _out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    os.makedirs(_out_dir, exist_ok=True)
+    path3d = os.path.join(_out_dir, "plates_3d.png")
     fig3d.savefig(path3d, dpi=140, bbox_inches="tight")
     print(f"\nSaved: {path3d}")
 
@@ -286,7 +288,9 @@ def main():
     ax.legend(fontsize=8, ncol=2); ax.grid(alpha=0.3)
 
     fig2.tight_layout()
-    path2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plates_compare.png")
+    _out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    os.makedirs(_out_dir, exist_ok=True)
+    path2 = os.path.join(_out_dir, "plates_compare.png")
     fig2.savefig(path2, dpi=140, bbox_inches="tight")
     print(f"Saved: {path2}")
 
