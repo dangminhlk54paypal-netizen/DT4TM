@@ -1,7 +1,24 @@
 # HANDOFF — Digital Twin for Thermal Management
 
 > **Primary source of truth is [CLAUDE.md](../CLAUDE.md) + [README.md](../README.md).**
-> This file is a quick handoff status summary. Last updated: 2026-06-22.
+> This file is a quick handoff status summary. Last updated: 2026-07-02.
+
+## Next-session prompt (paste this to resume)
+> Tiếp tục dự án digital twin nhiệt cho thiết bị levitator TEAM 28.
+> Đọc CLAUDE.md trước — có 2 việc mở đang chờ:
+> 1. **Câu hỏi vật lý chưa giải quyết**: twin đang cho T_ss đĩa nhôm (61.7°C @5.5A) CAO HƠN
+>    cuộn dây (~59°C), nhưng ảnh IR thực tế (docs/thermal_test.png) cho thấy cuộn dây nóng
+>    hơn đĩa rất nhiều. Model cuộn dây đã calibrate từ IR thật; model đĩa (ROM FEM,
+>    ΔT_max=27K@5A) CHƯA từng calibrate (h là số đoán, vì IR đo đĩa nhôm bóng không tin
+>    được — ε thực ≈0.1 vs camera set ε=0.91). Cần đo đĩa bằng thermocouple dán (không phải
+>    IR) rồi fit lại hệ số đối lưu h của đĩa trong rom.py/thermal_solver.py.
+> 2. **params.yaml `em_domain` đã bị đổi r_max/z_min/z_max từ ±500mm → ±1000mm** (không rõ
+>    do ai/khi nào — phát hiện lúc commit ngày 2026-07-02, KHÔNG phải do tôi chỉnh). Điều
+>    này mâu thuẫn với "locked decision" trong CLAUDE.md ghi domain ±500mm đã PASS validation
+>    (Dirichlet vs Neumann, diff<0.06%). Cần hỏi người dùng có chủ đích hay không, rồi hoặc
+>    (a) re-run `em_solver.validate_domain_size()` ở ±1000mm và cập nhật CLAUDE.md, hoặc
+>    (b) revert về ±500mm nếu là nhầm lẫn.
+> Sau đó tiếp tục theo mục "Pending tasks" trong CLAUDE.md / docs/HANDOFF.md.
 
 ## Goal
 A digital twin that predicts the **real-time temperature field** of the aluminium plate
@@ -58,9 +75,16 @@ in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the rea
 4. Domain validation: Dirichlet vs Neumann BC comparison (Session 2).
 
 ## Next Sessions
-- **Session 2**: Domain & BC validation (Dirichlet vs Neumann comparison)
-- **Session 3**: Re-run pipeline with T_amb=20°C, regenerate HTML twin
+- **Session 2**: Domain & BC validation (Dirichlet vs Neumann comparison) — DONE at ±500mm
+  (see CLAUDE.md), but params.yaml `em_domain` now shows ±1000mm uncommitted — re-validate
+  or revert (see prompt above).
+- **Session 3**: Re-run pipeline with T_amb=20°C, regenerate HTML twin — DONE.
+- **Session 4 (2026-07-02)**: HTML twin visual fixes — coil emissive glow, label
+  de-overlap, B-field line density vs I, live coil T_ss arrows. See CLAUDE.md for detail.
+  Surfaced an open question: plate T_ss > coil T_ss contradicts IR data — plate model is
+  uncalibrated (see prompt above).
 - **Session 5**: Build the real Arduino rig, log a real run, calibrate `data_io.py`
-  against actual sensor data instead of `mock_sensor_data.csv`
+  against actual sensor data instead of `mock_sensor_data.csv` — also use this run to
+  calibrate the disc/plate convection coefficient (currently uncalibrated FEM guess).
 
 ## Run commands — see [README.md](../README.md) (note: `python config.py`, NOT `src/`).

@@ -1076,13 +1076,18 @@ function ramp1(t) {
 const STRUCT_RGB = [160/255, 100/255, 55/255];   // wood base (plywood housing)
 const METAL_RGB  = [170/255, 175/255, 185/255];  // passive white-grey metal
 
-// Copper/varnish ramp: dark chocolate-brown lacquer at cold → warm ember orange at hot.
-// Matched to docs/real_model.png — the real windings read as a solid dark-brown
-// varnished mass, not saturated red (previous values looked like glowing plastic).
+// Copper/varnish ramp: dark chocolate-brown lacquer at cold → IR-bright yellow at hot.
+// Cold end matched to docs/real_model.png (solid dark-brown varnished mass); hot end
+// matched to docs/thermal_test.png — the HIKMICRO IR image shows the windings as the
+// brightest part of the whole device (yellow-white at ~60°C), so the hot colour must
+// read unambiguously as "glowing", not as a slightly lighter brown.
 const COPPER_COLD = [0.30, 0.14, 0.08];   // dark varnish/rosin over copper wire (cold)
-const COPPER_HOT  = [0.93, 0.55, 0.16];   // warm ember orange (hot, still believable)
+const COPPER_HOT  = [1.00, 0.80, 0.22];   // IR-bright yellow-orange (hot)
 function writeRampCopper(col, idx, tnorm) {
-  const t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  t = Math.pow(t, 0.65);   // perceptual boost: typical operating tnorm ≈0.4-0.6 on the
+                           // absolute 80°C scale — pow<1 lifts that mid-range into a
+                           // clearly orange band while keeping 0→0 and 1→1 fixed.
   col[idx]   = COPPER_COLD[0] + (COPPER_HOT[0] - COPPER_COLD[0]) * t;
   col[idx+1] = COPPER_COLD[1] + (COPPER_HOT[1] - COPPER_COLD[1]) * t;
   col[idx+2] = COPPER_COLD[2] + (COPPER_HOT[2] - COPPER_COLD[2]) * t;
@@ -1239,9 +1244,26 @@ function discVtxT(M, vi) {
 // real polished metal. Low envMapIntensity + no bloom avoids the "everything is
 // glossy chrome under studio lights" look reported against docs/real_model.png.
 const baseM  = makeMesh(buildSub(r => r === 3 || r === 5), 0.60, 0.30, 0.25); // core + separator — dull metal/oxide
-const coilM  = makeMesh(buildSub(r => r === 1 || r === 2), 0.80, 0.05, 0.15); // coils — matte varnish/insulation, absorbs light
+// Coils split into TWO meshes (inner/outer) so each can carry its own emissive
+// glow driven by its own temperature — MeshStandardMaterial emissive is per-material,
+// not per-vertex, and the two coils run a few K apart.
+const coilInnerM = makeMesh(buildSub(r => r === 1), 0.80, 0.05, 0.15); // inner coil — matte varnish/insulation
+const coilOuterM = makeMesh(buildSub(r => r === 2), 0.80, 0.05, 0.15); // outer coil — matte varnish/insulation
 const woodM  = makeMesh(buildSub(r => r === 4), 0.90, 0.00, 0.05);           // plywood
 const plateM = makeMesh(buildSub(r => r === 0), 0.45, 0.65, 0.45);           // aluminium disc — real metal, toned down
+// IR-style glow: hot windings must visibly LIGHT UP (docs/thermal_test.png) — vertex
+// colours alone are multiplied by scene light, so a matte material stays dull no
+// matter how bright the ramp colour is. Emissive adds light-independent radiance.
+const COIL_GLOW_RGB = new THREE.Color(1.0, 0.45, 0.10);   // ember orange
+coilInnerM.mesh.material.emissive.copy(COIL_GLOW_RGB);
+coilOuterM.mesh.material.emissive.copy(COIL_GLOW_RGB);
+function updateCoilGlow() {
+  const dTh = T_COIL_HOT - T_AMB_JS;
+  const gi = Math.max(0, Math.min(1, (sim.T.inner - T_AMB_JS) / dTh));
+  const go = Math.max(0, Math.min(1, (sim.T.outer - T_AMB_JS) / dTh));
+  coilInnerM.mesh.material.emissiveIntensity = 0.9 * Math.pow(gi, 1.4);
+  coilOuterM.mesh.material.emissiveIntensity = 0.9 * Math.pow(go, 1.4);
+}
 
 // Live min/max of the disc temperature field (radial + top/bottom gradient).
 // Recomputed each frame because the field SHAPE changes over time (β_eddy vs β_air).
@@ -1271,10 +1293,11 @@ function levLiftY() {
 }
 
 baseM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
-coilM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
+coilInnerM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
+coilOuterM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
 woodM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
 plateM.mesh.position.set(-ctr.x, -ctr.y + levLiftY(), -ctr.z);
-scene.add(baseM.mesh, coilM.mesh, woodM.mesh, plateM.mesh);
+scene.add(baseM.mesh, coilInnerM.mesh, coilOuterM.mesh, woodM.mesh, plateM.mesh);
 
 // Field-line hints (blue arcs bridging coil rim → plate)
 const rRim = Math.min(size * 0.18, 90);
@@ -1339,9 +1362,17 @@ for (const fl of FIELD_LINES) {
     line.renderOrder = 10;
     line.computeLineDistances();
     fieldLineGroup.add(line);
-    fieldLineMats.push({mat, amp: avgAmp});
+    fieldLineMats.push({mat, line, amp: avgAmp});
   }
 }
+// Rank lines by field strength so line DENSITY responds to I, not just brightness:
+// at low I only the strongest flux tubes (hugging the coils) remain visible, and
+// the full baked set appears at I_em_ref. rankFrac ∈ [0,1): 0 = strongest line.
+{
+  const sorted = [...fieldLineMats].sort((a, b) => b.amp - a.amp);
+  sorted.forEach((o, i) => { o.rankFrac = i / sorted.length; });
+}
+const FL_GAP_BASE = size * 0.012;   // dash gap at I ≤ I_em_ref (shrinks above → denser flow)
 function applyFieldLineOpacity() {
   for (const o of fieldLineMats) o.mat.opacity = fieldLineOpacityPct * (0.15 + 0.85 * o.amp);
 }
@@ -1362,7 +1393,9 @@ const plateTopY = (bb.max.y - ctr.y) + levGapEqMm(targetI) * Z_GAP_EXAG;
 camera.position.set(size*0.70, size*0.42, size*0.70);
 controls.target.set(0, plateTopY*0.55, 0); controls.update();
 // Exposed for headless (Playwright) verification — lets tests reposition the view.
-window.twinDebug = {camera, controls, size, plateM, coilM, ctr, scene, get lev() { return lev; }, get sim() { return sim; }};
+window.twinDebug = {camera, controls, size, plateM, coilInnerM, coilOuterM,
+  coilM: coilInnerM,   // back-compat alias for existing headless tests
+  ctr, scene, get lev() { return lev; }, get sim() { return sim; }};
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 const dl = new THREE.DirectionalLight(0xffffff, 0.7);
 dl.position.set(1, 1.5, 0.8); scene.add(dl);
@@ -1384,22 +1417,81 @@ function regionCentroid(regIdx) {
   }
   return n ? new THREE.Vector3(sx/n - ctr.x, sy/n - ctr.y, sz/n - ctr.z) : new THREE.Vector3();
 }
+const labelDivs = [];   // for the screen-space de-overlap pass below
 function addLabel(text, pos, cls) {
   const div = document.createElement('div');
   div.className = 'label3d' + (cls ? ' ' + cls : '');
   div.textContent = text;
+  labelDivs.push(div);
   const obj = new CSS2DObject(div);
   obj.position.copy(pos);
   scene.add(obj);
   return obj;
 }
+// Screen-space label de-overlap: the 3D anchors are spread out, but an arbitrary
+// camera angle can still project two labels onto the same spot. Every ~200ms,
+// nudge the later label downward until it clears (margin-top applies before the
+// CSS2D transform, so it stacks cleanly with the renderer's own positioning).
+let labelDeOverlapTimer = 0;
+function deOverlapLabels(dt) {
+  labelDeOverlapTimer -= dt;
+  if (labelDeOverlapTimer > 0) return;
+  labelDeOverlapTimer = 0.2;
+  // Greedy stacking, stable in one pass: measure the un-shifted rects, walk the
+  // labels top-to-bottom, and push each one below every x-overlapping label
+  // already placed above it. (A naive pairwise push oscillated between frames.)
+  for (const d of labelDivs) d.style.marginTop = '0px';
+  const rects = labelDivs.map(d => d.getBoundingClientRect());
+  const order = labelDivs.map((_, k) => k).sort((p, q) => rects[p].top - rects[q].top);
+  const shift = new Array(labelDivs.length).fill(0);
+  for (let oi = 1; oi < order.length; oi++) {
+    const k = order[oi];
+    for (let oj = 0; oj < oi; oj++) {
+      const m = order[oj];
+      const ox = Math.min(rects[m].right, rects[k].right)
+               - Math.max(rects[m].left,  rects[k].left);
+      if (ox <= 0) continue;
+      const mBot = rects[m].bottom + shift[m];
+      const kTop = rects[k].top    + shift[k];
+      const kBot = rects[k].bottom + shift[k];
+      if (kTop < mBot + 2 && kBot > rects[m].top + shift[m] - 2)
+        shift[k] = mBot + 4 - rects[k].top;
+    }
+  }
+  labelDivs.forEach((d, k) => { if (shift[k]) d.style.marginTop = shift[k] + 'px'; });
+}
 const plateCentroid = regionCentroid(0);
 const plateLabelObj = addLabel('Aluminium Plate',
   new THREE.Vector3(plateCentroid.x, plateCentroid.y + levLiftY() + size*0.05, plateCentroid.z));
-addLabel('Inner Coil (1000 turns)', regionCentroid(1));
-addLabel('Outer Coil (500 turns)',  regionCentroid(2));
-addLabel('Center Core', regionCentroid(3), 'iron');
-addLabel('Separator Ring', regionCentroid(5), 'iron');
+// Ring labels anchor on each ring's OUTER TOP EDGE at its own azimuth θ — the naive
+// full-revolve centroid collapses to (≈0, y_mid, ≈0) for EVERY ring (x,z average out
+// over 2π and the coil assembly shares one z-band), which stacked all four labels
+// onto the same screen point. Distinct radii + distinct azimuths keep them apart
+// from any camera angle; small y-stagger breaks the remaining near-ties.
+function regionAnchor(regIdx, thetaDeg, yPad) {
+  let rMax = 0, yTop = -Infinity, n = 0;
+  for (let tri = 0; tri < regions.length; tri++) {
+    if (regions[tri] !== regIdx) continue;
+    for (let v = 0; v < 3; v++) {
+      const i = (tri * 3 + v) * 3;
+      const r = Math.hypot(positions[i], positions[i+2]);
+      if (r > rMax) rMax = r;
+      if (positions[i+1] > yTop) yTop = positions[i+1];
+      n++;
+    }
+  }
+  if (!n) return new THREE.Vector3();
+  const th = thetaDeg * Math.PI / 180;
+  return new THREE.Vector3(rMax * Math.cos(th) - ctr.x,
+                           yTop + (yPad || 0) - ctr.y,
+                           -rMax * Math.sin(th) - ctr.z);
+}
+addLabel('Inner Coil (1000 turns)', regionAnchor(1,  25, size*0.030));
+addLabel('Outer Coil (500 turns)',  regionAnchor(2, -40, size*0.015));
+addLabel('Center Core',    regionAnchor(3,  90, size*0.008), 'iron');
+// Separator: keep LOW (yPad 0) and well left (θ=190°) — a back-side ring label
+// projects toward screen centre-height, where it collided with the plate label.
+addLabel('Separator Ring', regionAnchor(5, 190, 0), 'iron');
 
 // ── Heat particles — faint glowing motes rising from the coils, shown only
 // once a body is noticeably above ambient (>2 K). Purely decorative; does not
@@ -1447,19 +1539,20 @@ function updateHeatParticles(dt) {
 
 // ── Paint vertex colors (allocation-free hot path) ───────────────────────────
 const TRANGE = T_COLOR_HI - T_COLOR_LO;
+// Coil colour-ramp ceiling — ABSOLUTE scale: 0 = T_amb, 1 = T_COIL_HOT.
+// Anchored to the real IR data (session 1, 2026-06-23): inner coil hit 79°C @7.8A,
+// the hottest reading ever measured. Colour only changes when the actual
+// temperature changes — NOT when I changes (a prior *relative* scale divided by
+// I-dependent T_ss(I), so bumping I made the coil "cool" instantly and steady
+// state always painted full-hot regardless of I — both wrong).
+// (Module scope: shared by paintMesh and updateCoilGlow.)
+const T_COIL_HOT = 80.0;   // [°C]
 // Disc colour-scale mode: 'auto' keeps the original behaviour (stretch only once
 // the in-plate spread is physically meaningful), 'absolute'/'relative' force one
 // or the other — wired to the "Scale: …" button in the telemetry panel.
 let colorScaleMode = 'auto';
 function paintMesh(M) {
   const col = M.col;
-  // Per-region tnorm for coils/iron — ABSOLUTE scale: 0 = T_amb, 1 = T_COIL_HOT.
-  // Anchored to the real IR data (session 1, 2026-06-23): inner coil hit 79°C @7.8A,
-  // the hottest reading ever measured. Colour only changes when the actual
-  // temperature changes — NOT when I changes (a prior *relative* scale divided by
-  // I-dependent T_ss(I), so bumping I made the coil "cool" instantly and steady
-  // state always painted full-hot regardless of I — both wrong).
-  const T_COIL_HOT = 80.0;   // [°C] colour-ramp ceiling for coils
   const dT_hot = T_COIL_HOT - T_AMB_JS;
   const tnInner = (sim.T.inner - T_AMB_JS) / dT_hot;
   const tnOuter = (sim.T.outer - T_AMB_JS) / dT_hot;
@@ -1892,9 +1985,11 @@ function loop() {
 
   // Paint meshes
   paintMesh(baseM);
-  paintMesh(coilM);
+  paintMesh(coilInnerM);
+  paintMesh(coilOuterM);
   paintMesh(woodM);
   paintMesh(plateM);
+  updateCoilGlow();   // emissive ∝ coil T — hot windings visibly light up (IR look)
   updateScaleBar();
 
   // Update disc Z position — spring-mass response toward z_eq(I): the disc bobs
@@ -1928,6 +2023,10 @@ function loop() {
   document.getElementById('tPmax').textContent  = Tmax.toFixed(2)+' °C';
   setV('tPmean', Tmean); setV('tPss', Tss);
   setV('tIn',  sim.T.inner); setV('tOut', sim.T.outer); setV('tFe',  sim.T.iron);
+  // Steady-state target arrows must track the CURRENT I — they were previously baked
+  // once at I_ref (5A), so at 5.5A the live temperature sailed past a stale "→50°".
+  document.getElementById('tInSS').textContent  = `→${coilTss_inner(I_display).toFixed(0)}°`;
+  document.getElementById('tOutSS').textContent = `→${coilTss_outer(I_display).toFixed(0)}°`;
 
   setBox('bPl',  Tmax);
   setBox('bIn',  sim.T.inner);
@@ -1941,14 +2040,21 @@ function loop() {
   document.getElementById('tBplate').textContent = (ROM.B_max * emScale).toFixed(3) + ' T';
   document.getElementById('tJmax').textContent = (ROM.J_max * emScale * 1e-6).toFixed(3) + ' A/mm²';
 
-  // Field-line "flow" pulse + opacity, tied to I_display: the FIELD SHAPE is static
-  // (linear problem — geometry doesn't change with I), but flow speed and brightness
-  // scale with |I|/I_em_ref so B=0 reads as still+invisible and higher I flows faster.
+  // Field-line "flow" pulse + opacity + DENSITY, tied to I_display: the FIELD SHAPE
+  // is static (linear problem — each line's geometry doesn't change with I), but
+  // |B| ∝ I, so the visual density must grow with I too: below I_em_ref the weakest
+  // lines are culled (only the strong flux tubes near the coils survive), the full
+  // baked set shows at I_em_ref, and above it the dash gaps shrink (denser flow) on
+  // top of the existing speed/brightness scaling. B=0 reads as still+invisible.
   if (fieldLineGroup.visible) {
     const iFrac = Math.min(2.0, Math.abs(emScale));   // 0->0A, 1->I_em_ref, capped at 2x
     flFlowPhase += wall_dt * FIELD_LINE_FLOW_SPEED * iFrac;
+    const visFrac  = Math.min(1, iFrac);              // fraction of lines shown
+    const gapScale = 1 / Math.max(1, iFrac);          // >I_ref: shorter gaps = denser dashes
     for (const o of fieldLineMats) {
+      o.line.visible  = o.rankFrac < visFrac;
       o.mat.dashOffset = -flFlowPhase;
+      o.mat.gapSize    = FL_GAP_BASE * gapScale;
       o.mat.opacity = fieldLineOpacityPct * (0.15 + 0.85 * o.amp) * Math.min(1, iFrac);
     }
   }
@@ -1958,6 +2064,7 @@ function loop() {
   controls.update();
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
+  deOverlapLabels(wall_dt);
 }
 
 addEventListener('resize', () => {

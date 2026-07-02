@@ -204,11 +204,11 @@ mesh: {nr: 40, nz: 16}
 # Validate: compare Dirichlet vs Neumann BC — if results match, domain is large enough.
 # If edge effects appear, increase further.
 em_domain:
-  r_max_mm: 500.0           # 1m box (professor: "1x1m box sollte reichen")
-  z_min_mm: -500.0
-  z_max_mm: 500.0
+  r_max_mm: 1000.0          # 2m box (enlarged from 1m to pass boundary condition validation)
+  z_min_mm: -1000.0
+  z_max_mm: 1000.0
   fine_step_mm: 2.0         # fine step around device
-  coarse_step_mm: 15.0      # coarse step in far air region (slightly larger for 1m box)
+  coarse_step_mm: 20.0      # coarse step in far air region
 
 # --- Transient (Phase 2) ---
 transient: {dt_s: 1.0, t_end_s: 600.0}

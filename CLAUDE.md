@@ -297,6 +297,26 @@ P and hA). Transient RMS residual ≈3°C (same quality). Effective C_coil = 0.2
       the aluminium disc keeps real metalness (0.65, envInt=0.45). Verified:
       0 JS errors across 5 camera angles, no sliding white highlights, matches
       docs/real_model.png (dark matte coils, only the disc is shiny).
+- [x] build_twin_html_fem.py — coil GLOW + label de-overlap + field density (2026-07-02 s2),
+      per user review vs docs/thermal_test.png (HIKMICRO IR: coils are the BRIGHTEST part,
+      yellow-white at ~60°C): (1) coils split into coilInnerM/coilOuterM meshes, each with
+      per-material emissive (ember orange, intensity=0.9·tn^1.4 on the absolute 80°C scale)
+      — hot windings now visibly LIGHT UP; COPPER_HOT brightened to [1.0,0.80,0.22] +
+      pow(t,0.65) perceptual boost (old ramp read as "slightly lighter brown" at tn≈0.5).
+      (2) Labels: regionCentroid collapsed to (≈0,y_mid,≈0) for EVERY revolved ring → all
+      4 labels stacked on one screen point; now regionAnchor(reg,θ,yPad) anchors each on
+      its ring's outer-top edge at its own azimuth + a 5Hz greedy screen-space de-overlap
+      pass (stack top-to-bottom via margin-top). (3) B-field line DENSITY now follows I:
+      lines amp-ranked, visible fraction = min(I/I_ref,1) (72/360 at 1A → 360/360 at 5A),
+      dash gaps shrink above I_ref — on top of existing speed/opacity scaling. (4) Coil
+      "→T_ss" arrows were baked once at 5A, never updated → at 5.5A live T sailed past a
+      stale "→50°"; now live per-frame coilTss(I). Verified headless: 0 JS errors, no
+      label overlap at default+rotated cam, glow 0.43@59°C / 0.87@79°C / ≈0@29°C.
+- [ ] OPEN physics question (2026-07-02): twin shows plate T_ss(5.5A)=61.7°C ABOVE the
+      inner coil ≈59°C, but IR data says coils run far hotter than the disc. Plate ROM
+      (ΔT_max=27K@5A) is the UNCALIBRATED FEM (guessed h; disc IR unreliable so it was
+      never fitted) while the coil network is IR-calibrated. Needs a real disc
+      thermocouple measurement to calibrate plate h — don't trust plate/coil ordering.
 
 ## Conventions
 - SI units; geometry entered in mm in params.yaml (code converts to m).
