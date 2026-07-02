@@ -173,11 +173,19 @@ levitating_disc:
   bottom_heating_gradient: 0.5
 
 # --- Metal plate library (swap for comparison) ---
+# Al Ø202mm (2026-07-02, user feedback): covers the disc out to the separator
+# ring's outer edge (r=101mm per outer_iron_ring.r_outer_mm). This is a SEPARATE
+# entry, not a change to plate_material.radius_mm default (80mm is the real,
+# validated disc) -- select it at build time via
+# `python build_twin_html_fem.py --plate-radius 101`. EM/ROM MUST be re-solved
+# at this radius (not scaled from R=80) because the wider plate overlaps the
+# outer_iron_ring/outer-coil field region -- see CLAUDE.md WP-C results.
 plate_library:
   - {name: "Al Ø50mm",  radius_mm:  50.0, thickness_mm: 3.0, material: aluminium}
   - {name: "Al Ø65mm",  radius_mm:  65.0, thickness_mm: 3.0, material: aluminium}
   - {name: "Al Ø80mm",  radius_mm:  80.0, thickness_mm: 3.0, material: aluminium}
   - {name: "Al Ø100mm", radius_mm: 100.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Al Ø202mm", radius_mm: 101.0, thickness_mm: 3.0, material: aluminium}
   - {name: "Cu Ø80mm",  radius_mm:  80.0, thickness_mm: 3.0, material: copper}
 
 # --- Material properties (lookup by name in plate_library) ---
@@ -204,11 +212,11 @@ mesh: {nr: 40, nz: 16}
 # Validate: compare Dirichlet vs Neumann BC — if results match, domain is large enough.
 # If edge effects appear, increase further.
 em_domain:
-  r_max_mm: 1000.0          # 2m box (enlarged from 1m to pass boundary condition validation)
-  z_min_mm: -1000.0
-  z_max_mm: 1000.0
+  r_max_mm: 500.0           # 1m box (professor: "1x1m box sollte reichen")
+  z_min_mm: -500.0
+  z_max_mm: 500.0
   fine_step_mm: 2.0         # fine step around device
-  coarse_step_mm: 20.0      # coarse step in far air region
+  coarse_step_mm: 15.0      # coarse step in far air region (slightly larger for 1m box)
 
 # --- Transient (Phase 2) ---
 transient: {dt_s: 1.0, t_end_s: 600.0}
@@ -307,6 +315,30 @@ validation_data:
 # (similar quality to old fit). Treat tau as order-of-magnitude (fit from narrated
 # timeline +-~10s uncertainty; a logged repeat run would sharpen it).
 # air_node_hA_far_W_per_K kept at 40.0 (not enough independent data to refit).
+# --- WP-B (2026-07-02): realistic coil COOLING (rig feedback: "dây vừa nóng cần
+# rất lâu để nguội trong không khí"; the plain RC node above cools with the SAME
+# tau it heats with, ~350s, unrealistic). Two additions, both scratch-fit against
+# thermal_ramp_test (script not committed, see build_twin_html_fem.py romStep):
+#   1. Nonlinear natural convection h(dT) = hA_cal * (dT/dT_cal)^convection_exponent
+#      (simplified Churchill-Chu, dT_cal = each node's own P_ref/hA at I_ref
+#      steady state) -- h stays hA_cal exactly at the I_ref calibration point, but
+#      drops off as dT shrinks toward 0 during cooldown -> long cooling tail.
+#   2. Two-node coil (surface + winding-core): ALL P_ref lands on the surface
+#      node (same as before, so the 0-450s ramp-test transient is essentially
+#      unchanged); the winding-core mass ((1-coil_C_scale) of the solid-copper
+#      mass, i.e. the 77.6% NOT already counted in coil_C_scale) only exchanges
+#      heat with the surface via coil_G_wind_W_per_K -- invisible while heating,
+#      but keeps feeding the surface for a long time after the current is cut.
+# Refit result (coil_C_scale UNCHANGED at 0.2241; only G_wind is new): ramp-test
+# RMS = 2.5°C (better than the ~3°C previously claimed for the single-node model
+# -- re-checking that claim found the CURRENTLY deployed single-node model
+# actually scores RMS=6.6°C on this exact data, i.e. it had drifted stale, most
+# likely after later additions such as the iron contact-conduction node; the new
+# two-node model both fixes the drift and adds realistic cooling). Cooldown time
+# to reach T_air+10%ΔT is now ~8x longer than the old single-node model (inner
+# ~2080s vs ~255s) -- comfortably past the >=3x qualitative target, though there
+# is still NO real cooldown IR data (see TODO in CLAUDE.md) to fit the absolute
+# tau against, so treat this as order-of-magnitude, same caveat as coil_C_scale.
 # Iron/core node (2026-07-02): heated by CONTACT CONDUCTION from the inner coil
 # (G_iron_cond), not just via the air pocket -- without it the node stayed ~2K
 # above ambient after 30 min while the real core/separator reach 36-45C.
@@ -324,3 +356,9 @@ lumped_thermal:
   G_iron_cond_W_per_K: 0.06   # inner coil -> iron/core contact conduction (fit 2026-07-02)
   air_node_C_J_per_K: 3000.0     # shared local-air thermal mass (illustrative)
   air_node_hA_far_W_per_K: 40.0  # local air -> far ambient (illustrative, unchanged)
+  coil_G_wind_W_per_K: 1.0    # NEW WP-B 2026-07-02: coil surface<->winding-core
+                               # conductance (both coils share this value); fit
+                               # against thermal_ramp_test, see note above.
+  convection_exponent: 0.25   # NEW WP-B 2026-07-02: simplified Churchill-Chu
+                               # natural-convection exponent, h ~ dT^n, applied to
+                               # every coil/iron node (see note above).

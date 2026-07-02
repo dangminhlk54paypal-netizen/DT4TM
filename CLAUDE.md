@@ -317,6 +317,37 @@ P and hA). Transient RMS residual ≈3°C (same quality). Effective C_coil = 0.2
       (ΔT_max=27K@5A) is the UNCALIBRATED FEM (guessed h; disc IR unreliable so it was
       never fitted) while the coil network is IR-calibrated. Needs a real disc
       thermocouple measurement to calibrate plate h — don't trust plate/coil ordering.
+- [x] WP-C (2026-07-02, docs/PLAN_SIM_FEEDBACK_2026-07-02.md): **Al Ø202mm disc option**
+      (R=101mm, covers out to the separator ring's outer edge). Added as a NEW
+      `plate_library` entry — default `plate_material.radius_mm` stays 80mm (the real,
+      validated disc). Build with `python build_twin_html_fem.py --plate-radius 101`
+      → `outputs/digital_twin_fem_R101.html` (default file unaffected, verified via
+      headless Playwright: 0 JS errors both files, disc bbox radius = 80mm / 101mm
+      exactly, screenshot confirms the disc now covers the separator ring and stops
+      just short of the outer coil). EM/ROM re-solve FROM SCRATCH at R=101 (not
+      scaled from R=80) — `thermal_solver.energy_balance` still 0.000% error.
+      **Key result: the Ø202mm disc does NOT levitate at the 5A_rms operating point.**
+      m=259.6g → F_grav=2.5465N (was 162.9g/1.5977N at R=80); F_z at the physical
+      resting floor z=3.8mm = 1.5318N (I_peak=7.07A convention) — 40% short of
+      F_grav. Estimated **I_min_lev ≈ 6.45 A_rms** (vs 5A op point) for it to lift off
+      at all; P_plate(5A) rises 9.67W→11.66W (+20%, wider disc overlaps more of the
+      field). CAVEAT: outer_iron_ring (r=81–101mm, right under this disc) is still
+      modeled as air (μ_r=1, magnet test PENDING) — if it turns out ferromagnetic,
+      both F_z and P_plate change substantially (see μ_r sensitivity note above), so
+      this R=101 result is only valid under the current air assumption.
+      SECONDARY FINDING (mesh-resolution check, not yet acted on): refining
+      em_domain.fine_step_mm 2.0→1.0mm moves the R=80 baseline's own z_eq from
+      4.15mm→~3.5mm-equivalent (F(3.8mm) drops below F_grav) and R=101's I_min_lev
+      from 6.45A→6.9A — same qualitative conclusions, but the already-"VALIDATED"
+      R=80 4.1mm figure is more mesh-sensitive than previously assumed. Left
+      em_domain unchanged (out of WP-C's scope, adjacent to the already-PAUSED
+      benchmark mesh investigation) — flagging for whoever revisits that.
+      Staged (NOT wired live) for WP-D: `LEV_ANCHORS` dict + `_lev_anchor()` helper
+      in build_twin_html_fem.py (F_z anchors, mass, F_grav, decay length z0 per
+      plate radius) — the JS levitation-gap block still owns its own hardcoded
+      Z_GAP_5A_MM/Z_DECAY_MM constants (WP-A/WP-D territory); the R101 HTML's
+      Levitation Gap telemetry currently still shows a (wrong) nonzero gap because
+      of this — expected, closes once WP-D wires PARAMS.lev per radius.
 
 ## Conventions
 - SI units; geometry entered in mm in params.yaml (code converts to m).

@@ -28,9 +28,92 @@ from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from config import load_config
-from em_solver import compute_losses
+from config import load_config, Geometry
+from em_solver import compute_losses, compute_lift_force
 from rom import ThermalROM
+
+
+# ─── WP-C (2026-07-02) lift-force anchors, staged for WP-D ────────────────────
+# NOT wired into anything live yet -- the JS levitation-gap block (~line 1130,
+# "Z_GAP_5A_MM"/"Z_DECAY_MM") still owns its own hardcoded constants (WP-A/WP-D
+# territory, see docs/PLAN_SIM_FEEDBACK_2026-07-02.md "Bản đồ conflict"). This
+# dict is WP-C's deliverable for WP-D to fold into params.yaml (`levitation:`
+# block) + the PARAMS JSON export, one entry per plate_library radius.
+#
+# All F_z values computed with em_solver.compute_lift_force() at the physical
+# PEAK current I_peak = 5A_rms*sqrt(2) = 7.0711A (CLAUDE.md "CURRENT CONVENTION"),
+# default EM mesh (em_domain.fine_step_mm=2.0mm, unchanged -- matches the
+# existing R=80 pipeline so the two rows are apples-to-apples). z=3.8mm is the
+# PHYSICAL resting floor (plate_material.z_bottom_mm default = winding-form
+# spacer height): the disc cannot get closer to the coil than this, so it is
+# the correct z to test "does F clear gravity" at (not z=1mm, which isn't
+# physically reachable at rest).
+#
+# R=80mm row reproduces the already-locked CLAUDE.md result exactly (z_eq=4.15
+# vs the documented 4.1mm) -- confirms this derivation matches the existing
+# validated pipeline. R=101mm is the new WP-C result: F(3.8mm) < F_grav at
+# 5A_rms, i.e. the Ø202mm disc does NOT levitate at the standard operating
+# point -- I_min_lev_A is the key new number, not a z_eq.
+#
+# z0 (decay length) is fit from two REAL points on the F(z) curve at z=1mm and
+# z=5mm: z0=(5-1)/ln(F(1mm)/F(5mm)) -- NOTE this differs from the z0=21.4mm
+# quoted in the 2026-07-01 CLAUDE.md entry for R=80, which instead anchored the
+# second point at the F=F_grav crossing itself (z0=(z_eq-1)/ln(F(1mm)/F_grav));
+# the two methods disagree by ~1.5x (13.6mm vs 21.4mm) because F(z) isn't a
+# clean single exponential over that range. This dict uses the F1/F5 method
+# consistently for both radii (reproducible from compute_lift_force() alone,
+# no F_grav/mass dependency baked into the shape fit). Treat z0 as order-of-
+# magnitude regardless of method (mesh-sensitive -- see the WP-C report for a
+# fine_step_mm convergence check that moved z_eq(R=80) by ~0.7mm and
+# I_min_lev(R=101) by ~0.5A between fine_step=2.0mm and 1.0mm).
+def _lev_anchor(radius_mm: float, plate_thickness_mm: float = 3.0) -> dict:
+    """Recompute the lift-force anchors for one plate radius. Re-solves EM from
+    scratch at the given radius (NOT scaled from another radius's result) --
+    see the WP-C module docstring above for why that matters once the disc
+    overlaps the outer_iron_ring / outer-coil field region."""
+    cfg = load_config()
+    R_m = radius_mm * 1e-3
+    t_m = plate_thickness_mm * 1e-3
+    cfg.raw["plate_material"]["radius_mm"] = float(radius_mm)
+    cfg.raw["excitation"]["current_A"] = 5.0 * math.sqrt(2.0)   # I_peak convention
+    m_kg = cfg.plate["rho_kg_per_m3"] * math.pi * R_m ** 2 * t_m
+    F_grav = m_kg * 9.81
+
+    def F_at(z_mm):
+        cfg.raw["plate_material"]["z_bottom_mm"] = float(z_mm)
+        cfg.geometry = Geometry(plate_radius_m=R_m, plate_thickness_m=t_m,
+                                 plate_z_bottom_m=float(z_mm) * 1e-3)
+        return compute_lift_force(cfg)
+
+    F1, F38, F5 = F_at(1.0), F_at(3.8), F_at(5.0)
+    z0_mm = (5.0 - 1.0) / math.log(F1 / F5)
+
+    out = {"radius_mm": radius_mm, "mass_kg": round(m_kg, 5), "F_grav_N": round(F_grav, 4),
+           "F_at_1mm_N": round(F1, 4), "F_at_3p8mm_N": round(F38, 4),
+           "z0_decay_mm": round(z0_mm, 2)}
+    if F38 >= F_grav:
+        zs = np.array([1.0, 3.8, 5.0]); Fs = np.array([F1, F38, F5])
+        order = np.argsort(Fs)
+        out["z_eq_5A_mm"] = round(float(np.interp(F_grav, Fs[order], zs[order])), 2)
+        out["levitates_at_5A_rms"] = True
+    else:
+        out["I_min_lev_A_rms"] = round(5.0 * math.sqrt(F_grav / F38), 2)
+        out["levitates_at_5A_rms"] = False
+    return out
+
+
+# LEV_ANCHORS: computed once (see WP-C report / commit message for the printed
+# derivation); NOT auto-recomputed at every build() call (EM solves are ~seconds
+# each and this isn't on the hot path) -- call _lev_anchor(radius_mm) directly
+# if a new plate_library radius needs staging.
+LEV_ANCHORS = {
+    80.0:  {"radius_mm": 80.0,  "mass_kg": 0.16286, "F_grav_N": 1.5977,
+            "F_at_1mm_N": 1.8462, "F_at_3p8mm_N": 1.6877, "z0_decay_mm": 13.63,
+            "z_eq_5A_mm": 4.15, "levitates_at_5A_rms": True},
+    101.0: {"radius_mm": 101.0, "mass_kg": 0.25958, "F_grav_N": 2.5465,
+            "F_at_1mm_N": 1.6591, "F_at_3p8mm_N": 1.5318, "z0_decay_mm": 14.02,
+            "I_min_lev_A_rms": 6.45, "levitates_at_5A_rms": False},
+}
 
 
 # ─── EM field visualization data (B field lines + eddy current density) ──────
@@ -174,39 +257,76 @@ def lumped_physics(cfg, em: dict) -> dict:
         return c["turns"] * (2 * math.pi * r_mean) / (co["sigma_Cu_S_per_m"] * A_wire)
 
     coil_C_scale = float(lt.get("coil_C_scale", 1.0))
+    G_wind = float(lt.get("coil_G_wind_W_per_K", 0.0))
+    conv_exp = float(lt.get("convection_exponent", 0.25))
 
-    def coil_C(c):
+    def coil_C_solid(c):
         r_mean = (c["r_inner_mm"] + c["r_outer_mm"]) / 2 * mm
         Vc = c["turns"] * (2 * math.pi * r_mean) * A_wire
-        return 8960.0 * 385.0 * Vc * coil_C_scale  # rho_Cu * cp_Cu * V_Cu, scaled
+        return 8960.0 * 385.0 * Vc  # rho_Cu * cp_Cu * V_Cu, full solid-copper mass
 
     p = cfg.plate
     V_plate = math.pi * (p["radius_mm"] * mm) ** 2 * (p["thickness_mm"] * mm)
     C_plate = p["rho_kg_per_m3"] * p["cp_J_per_kgK"] * V_plate
 
+    P_inner = 0.5 * cfg.I ** 2 * coil_R(co["inner"])
+    P_outer = 0.5 * cfg.I ** 2 * coil_R(co["outer"])
+    P_iron = em["P_iron_W"]
+    hA_inner = float(lt["hA_inner_W_per_K"])
+    hA_outer = float(lt["hA_outer_W_per_K"])
+    hA_iron = float(lt["hA_iron_W_per_K"])
+    G_cond = float(lt.get("G_iron_cond_W_per_K", 0.0))
+    hA_far = float(lt["air_node_hA_far_W_per_K"])
+
+    # dT_cal[node] = (T_node_surface - T_local_air) at the I_ref steady state of
+    # the ORIGINAL linear model -- the anchor point where hA_eff(dT_cal)=hA_cal
+    # by construction, so the nonlinear convection correction below is exact at
+    # I_ref (steady state stays T_inner_ss=40.5C/T_outer_ss=38.5C, unchanged).
+    # Solved once from the small inner<->iron conduction-coupled linear system
+    # (outer decouples trivially: dT_cal_outer = P_outer/hA_outer).
+    dT_air_cal = (P_inner + P_outer + P_iron) / hA_far
+    A = np.array([[hA_inner + G_cond, -G_cond],
+                  [-G_cond, hA_iron + G_cond]])
+    b = np.array([P_inner + hA_inner * dT_air_cal,
+                   P_iron + hA_iron * dT_air_cal])
+    dT_inner_amb, dT_iron_amb = np.linalg.solve(A, b)
+    dT_cal = {
+        "inner": float(dT_inner_amb - dT_air_cal),
+        "outer": P_outer / hA_outer,
+        "iron":  float(dT_iron_amb - dT_air_cal),
+    }
+
     return {
+        "convection_exponent": conv_exp,  # Churchill-Chu-simplified natural convection h~dT^n
         "nodes": {
             "inner": {
-                "P_ref": 0.5 * cfg.I ** 2 * coil_R(co["inner"]),
-                "C":     coil_C(co["inner"]),
-                "hA":    float(lt["hA_inner_W_per_K"]),
+                "P_ref":  P_inner,
+                "C":      coil_C_solid(co["inner"]) * coil_C_scale,       # surface (IR-visible) mass
+                "C_deep": coil_C_solid(co["inner"]) * (1 - coil_C_scale),  # winding-core mass
+                "G_wind": G_wind,   # surface<->winding-core conductance (fit 2026-07-02)
+                "hA":     hA_inner,
+                "dT_cal": dT_cal["inner"],
             },
             "outer": {
-                "P_ref": 0.5 * cfg.I ** 2 * coil_R(co["outer"]),
-                "C":     coil_C(co["outer"]),
-                "hA":    float(lt["hA_outer_W_per_K"]),
+                "P_ref":  P_outer,
+                "C":      coil_C_solid(co["outer"]) * coil_C_scale,
+                "C_deep": coil_C_solid(co["outer"]) * (1 - coil_C_scale),
+                "G_wind": G_wind,
+                "hA":     hA_outer,
+                "dT_cal": dT_cal["outer"],
             },
             "iron": {
-                "P_ref":  em["P_iron_W"],
+                "P_ref":  P_iron,
                 "C":      0.5 * C_plate,
-                "hA":     float(lt["hA_iron_W_per_K"]),
+                "hA":     hA_iron,
+                "dT_cal": dT_cal["iron"],
                 # contact conduction from the inner coil (fit 2026-07-02, params.yaml)
-                "G_cond": float(lt.get("G_iron_cond_W_per_K", 0.0)),
+                "G_cond": G_cond,
             },
         },
         "air_node": {
             "C":      float(lt["air_node_C_J_per_K"]),
-            "hA_far": float(lt["air_node_hA_far_W_per_K"]),
+            "hA_far": hA_far,
         },
     }
 
@@ -441,8 +561,23 @@ def compute_eddy_fraction(cfg, em: dict, rom) -> float:
 
 # ─── Main build function ──────────────────────────────────────────────────────
 
-def build(stl_path: str | None, out_path: str) -> None:
+def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = None) -> None:
     cfg = load_config()
+
+    # WP-C (2026-07-02): optional plate-radius override, e.g. the Ø202mm disc
+    # that covers out to the separator ring's outer edge (r=101mm). Does NOT
+    # touch the params.yaml default (80mm, the real validated disc) -- only
+    # this in-memory cfg. EM/ROM below re-solve FROM SCRATCH at the new radius
+    # (never scaled from the R=80 result): a wider plate overlaps the
+    # outer_iron_ring / outer-coil field region, so the eddy distribution and
+    # P_plate genuinely differ, not just by area ratio.
+    if plate_radius_mm is not None:
+        cfg.raw["plate_material"]["radius_mm"] = float(plate_radius_mm)
+        cfg.geometry = Geometry(
+            plate_radius_m=float(plate_radius_mm) * 1e-3,
+            plate_thickness_m=cfg.geometry.plate_thickness_m,
+            plate_z_bottom_m=cfg.geometry.plate_z_bottom_m,
+        )
 
     # 1. EM + ROM (same pipeline as digital_twin.py __main__)
     print(f"[EM]  Solving at î={cfg.I}A ...", end=" ", flush=True)
@@ -941,9 +1076,13 @@ const sim = {
   beta_eddy: 0.0,               // eddy-driven part — responds to I² instantly
   beta_air:  0.0,               // hot-air part — gated by the coils' thermal inertia
   t:    0.0,                     // sim time [s]
-  // inner/outer/iron = body nodes; air = shared LOCAL air node they all heat up.
-  // The bodies convect into `air`, and `air` sheds heat to the far ambient ROM.T_amb.
-  T: { inner: T_AMB_JS, outer: T_AMB_JS, iron: T_AMB_JS, air: T_AMB_JS },
+  // inner/outer/iron = body (surface) nodes; air = shared LOCAL air node they all
+  // heat up. The bodies convect into `air`, and `air` sheds heat to the far
+  // ambient ROM.T_amb. inner_deep/outer_deep = hidden winding-core mass (WP-B,
+  // 2026-07-02): conducts with its surface node via G_wind, no direct
+  // convection to air -- this is what makes cooldown far slower than heat-up.
+  T: { inner: T_AMB_JS, outer: T_AMB_JS, iron: T_AMB_JS, air: T_AMB_JS,
+       inner_deep: T_AMB_JS, outer_deep: T_AMB_JS },
   hist_t:    [0.0],
   hist_Tmax: [T_AMB_JS],
   hist_T_inner: [T_AMB_JS],
@@ -988,6 +1127,16 @@ let curScenario = 'step';
 let targetI = 5.0;   // from slider
 function getI() { return SCENARIOS[curScenario](targetI, sim.t); }
 
+// Nonlinear natural convection (simplified Churchill-Chu): h grows slowly with
+// ΔT (h ~ ΔT^n, n=LUMPED.convection_exponent≈0.25). hA_cal was calibrated
+// against the I_ref steady-state ΔT (nd.dT_cal), so hAEff(dT_cal)=hA_cal exactly
+// — the I_ref steady state is untouched. Below dT_cal (e.g. during cooldown, as
+// ΔT→0) h drops well below hA_cal, which is what stretches the cooldown tail.
+function hAEff(hA_cal, dT, dT_cal) {
+  const dTuse = Math.max(Math.abs(dT), 0.1);
+  return hA_cal * Math.pow(dTuse / dT_cal, LUMPED.convection_exponent);
+}
+
 // ── ROM step — two-source disc model + coil thermal inertia ──────────────────
 // The disc is heated by (a) its OWN eddy currents (instantaneous with I²) and
 // (b) the hot air rising from the coils. (b) cannot appear before the copper mass
@@ -1013,8 +1162,22 @@ function romStep(I, dt) {
     let q = nd.P_ref * s2;
     if (k === 'iron')  q += q_cond;      // gains from the coil contact
     if (k === 'inner') q -= q_cond;      // energy conservation (≪ P_inner, ~0.6W)
-    const out = nd.hA * (sim.T[k] - sim.T.air);   // convect into local air
-    sim.T[k] += (q - out) / nd.C * dt;
+    const dTsurf = sim.T[k] - sim.T.air;
+    const hA_use = hAEff(nd.hA, dTsurf, nd.dT_cal);
+    const out = hA_use * dTsurf;         // convect into local air
+    if (nd.G_wind) {
+      // Two-node coil (WP-B): ALL generation lands on the surface node (same as
+      // before — matches the IR-calibrated ramp-test transient); the deep
+      // winding-core mass only exchanges heat via conduction G_wind, so it is
+      // nearly invisible while heating but keeps feeding the surface long after
+      // the current is cut, giving a realistic slow cooldown tail.
+      const deepKey = k + '_deep';
+      const g = nd.G_wind * (sim.T[deepKey] - sim.T[k]);  // >0 when deep hotter
+      sim.T[k]       += (q + g - out) / nd.C * dt;
+      sim.T[deepKey] += (-g) / nd.C_deep * dt;
+    } else {
+      sim.T[k] += (q - out) / nd.C * dt;
+    }
     Qconv += out;
   }
   // Local air node: gains all body convection, loses to the far ambient ROM.T_amb.
@@ -1136,7 +1299,17 @@ const regionKey = {1:'inner', 2:'outer', 3:'iron'};
 // → CONTINUOUS lift-off at I_min = 5·e^{−4.1/(2·z0)} ≈ 4.54A: the gap grows
 // smoothly from 0 (no jump), passes 4.1mm at 5A, reaches ≈18.5mm at 7A.
 const Z_GAP_5A_MM = 4.1;    // [mm] equilibrium gap at I=5A
-const Z_DECAY_MM  = 21.4;   // [mm] EM force decay length z0 (from the two EM anchors)
+
+// CALIBRATION OPEN (user question, docs/PLAN_SIM_FEEDBACK_2026-07-02.md WP-A #4):
+// at Z_DECAY_MM=21.4mm, z_eq(7.75A)≈22.9mm — user reports the real rig's gap only
+// "nudges up a little" from 5A to 7.75-8A, so 21.4mm is likely too large. Once the
+// real gap at 7.75A is measured (mm, or "x times disc thickness"), fill it in below
+// and Z_DECAY_MM refits itself; leave null to keep the 21.4mm placeholder.
+const Z_OBS_7_75A_MM = null;
+let Z_DECAY_MM = 21.4;      // [mm] EM force decay length z0 (from the two EM anchors)
+if (Z_OBS_7_75A_MM !== null) {
+  Z_DECAY_MM = (Z_OBS_7_75A_MM - Z_GAP_5A_MM) / (2 * Math.log(7.75 / 5.0));
+}
 const I_LEV_MIN   = 5.0 * Math.exp(-Z_GAP_5A_MM / (2 * Z_DECAY_MM));  // ≈4.54A lift-off
 const Z_GAP_EXAG  = 2.0;    // display exaggeration factor — SAME as display_z_exaggeration
                              // used for the disc thickness (params.yaml), so every z-axis
@@ -1148,23 +1321,62 @@ function levGapEqMm(I) {
 }
 
 // Disc vertical dynamics: m·z̈ = F(I,z) − mg − damping. Linearised about the
-// equilibrium this is an underdamped oscillator with ω = √(g/z0) ≈ 21 rad/s and
-// very low damping — the real disc visibly bobs for ~10s after a current step
-// before settling (user observation 2026-07-01). Integrated in WALL time: it is
-// a mechanical motion watched live, unlike the (speed-scaled) thermal sim.
+// equilibrium this is an underdamped oscillator with ω = √(g/z0) ≈ 21 rad/s.
 const LEV_OMEGA = Math.sqrt(9.81 / (Z_DECAY_MM * 1e-3));  // ≈21.4 rad/s
-const LEV_ZETA  = 0.02;                                    // settle ≈ 4/(ζω) ≈ 9s
-const lev = {z: 0.0, v: 0.0};   // gap [mm], velocity [mm/s] — starts resting
+
+// Eddy-current damping grows with B² ∝ I² (more current -> more braking on the
+// bobbing disc): ζ(I) = ζ0 + ζ1·(I/5)². ζ1=0.02 reproduces the original fixed
+// ζ=0.02 exactly at the 5A anchor (settle ≈4/(ζω)≈9s, matches the 2026-07-01
+// observation), giving ζ(7.75A)≈0.048.
+// NOTE (open calibration, same spirit as Z_DECAY_MM above): a pure I² law only
+// reaches ζ(7.75A)≈0.048 — the WP-A overshoot acceptance target ("<40% of the
+// 0->5A step overshoot, normalized") works out to needing ζ≈0.3 at 7.75A, which
+// a quadratic law can't reach without breaking the ζ(5A)=0.02 anchor. Flagging
+// this rather than silently forcing a steeper/unphysical law — revisit once
+// real oscillation-amplitude data at 7.75-8A exists.
+const LEV_ZETA0 = 0.0;
+const LEV_ZETA1 = 0.02;
+function levZeta(I) { return LEV_ZETA0 + LEV_ZETA1 * (I / 5.0) ** 2; }
+
+// Sub-liftoff jitter: below I_LEV_MIN the disc rests on the coil, but the AC
+// force still pulses at 100Hz (i(t)² term) — real rig "rung lạch cạch" chatter
+// starting around 0.1A, growing through 1-3A. 100Hz can't be resolved at 60fps,
+// so it's shown as an aliased two-tone shimmer, amplitude ∝ I², fading out once
+// the disc actually lifts (lev.z > 0.5mm).
+const JIT_MM    = 0.3;   // [display-mm] max shimmer amplitude before liftoff
+const JIT_FREQ1 = 27.0;  // [rad/s] visual-only shimmer rates (incommensurate, not physical 100Hz)
+const JIT_FREQ2 = 71.0;
+
+const lev = {z: 0.0, v: 0.0, jit: 0.0, jitPhase1: 0.0, jitPhase2: 0.0};   // gap [mm], velocity [mm/s]
 function levStep(I, dt) {
-  const zt = levGapEqMm(I);
-  const n = Math.max(1, Math.ceil(dt / 0.01));  // semi-implicit Euler, h ≤ 10ms
-  const h = dt / n;
-  for (let i = 0; i < n; i++) {
-    if (zt <= 0 && lev.z <= 0) { lev.z = 0; lev.v = 0; break; }  // resting on coil
-    const a = LEV_OMEGA * LEV_OMEGA * (zt - lev.z) - 2 * LEV_ZETA * LEV_OMEGA * lev.v;
-    lev.v += a * h;
-    lev.z += lev.v * h;
-    if (lev.z < 0) { lev.z = 0; if (lev.v < 0) lev.v = 0; }      // floor contact
+  const zt   = levGapEqMm(I);
+  const zeta = levZeta(I);
+  if (zt <= 0 && lev.z <= 0) {
+    lev.z = 0; lev.v = 0;   // resting on coil, target also at rest
+  } else {
+    // Closed-form solution of ẍ + 2ζω ẋ + ω² x = 0 about the (possibly moving)
+    // target zt, exact for ANY dt — no substepping needed for stability, unlike
+    // Euler. Integrated in SIM time (caller passes dt_sim), so the speed slider
+    // correctly speeds up/slows down the bob-and-settle instead of only the
+    // thermal side of the sim.
+    const x0 = lev.z - zt, v0 = lev.v;
+    const wd    = LEV_OMEGA * Math.sqrt(Math.max(1e-6, 1 - zeta * zeta));
+    const decay = Math.exp(-zeta * LEV_OMEGA * dt);
+    const cwt = Math.cos(wd * dt), swt = Math.sin(wd * dt);
+    const A = (v0 + zeta * LEV_OMEGA * x0) / wd;
+    lev.z = zt + decay * (x0 * cwt + A * swt);
+    lev.v =      decay * ((A * wd - zeta * LEV_OMEGA * x0) * cwt - (x0 * wd + zeta * LEV_OMEGA * A) * swt);
+    if (lev.z < 0) { lev.z = 0; if (lev.v < 0) lev.v = 0; }   // floor contact
+  }
+
+  const fadeIn = Math.max(0, 1 - lev.z / 0.5);
+  if (I > 0.05 && fadeIn > 0) {
+    lev.jitPhase1 += JIT_FREQ1 * dt;
+    lev.jitPhase2 += JIT_FREQ2 * dt;
+    const amp = Math.min(1.0, JIT_MM * (I / 5.0) ** 2);
+    lev.jit = fadeIn * amp * (Math.sin(lev.jitPhase1) + 0.5 * Math.sin(lev.jitPhase2));
+  } else {
+    lev.jit = 0.0;
   }
 }
 
@@ -1289,7 +1501,7 @@ const size = bb.getSize(new THREE.Vector3()).length();
 const modelH  = bb.max.y - bb.min.y;
 
 function levLiftY() {
-  return lev.z * Z_GAP_EXAG;   // follows the live spring-mass state; disc sits on coil top at lev.z=0
+  return (lev.z + lev.jit) * Z_GAP_EXAG;   // spring-mass state + sub-liftoff shimmer; disc sits on coil top at lev.z=0
 }
 
 baseM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
@@ -1395,7 +1607,8 @@ controls.target.set(0, plateTopY*0.55, 0); controls.update();
 // Exposed for headless (Playwright) verification — lets tests reposition the view.
 window.twinDebug = {camera, controls, size, plateM, coilInnerM, coilOuterM,
   coilM: coilInnerM,   // back-compat alias for existing headless tests
-  ctr, scene, get lev() { return lev; }, get sim() { return sim; }};
+  ctr, scene, get lev() { return lev; }, get sim() { return sim; },
+  levStep, levGapEqMm, levZeta, I_LEV_MIN};   // WP-A: direct physics hooks for headless tests
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 const dl = new THREE.DirectionalLight(0xffffff, 0.7);
 dl.position.set(1, 1.5, 0.8); scene.add(dl);
@@ -1994,8 +2207,10 @@ function loop() {
 
   // Update disc Z position — spring-mass response toward z_eq(I): the disc bobs
   // for ~10s after a current step, then settles (matches the real rig behaviour).
+  // Integrated in SIM time (dt_sim), so the speed slider speeds up/slows down
+  // the bob-and-settle exactly like the thermal side of the sim.
   const I_display = getI();
-  if (!paused) levStep(I_display, wall_dt);
+  if (!paused) levStep(I_display, dt_sim);
   const liftY = levLiftY();
   plateM.mesh.position.y = -ctr.y + liftY;
   plateLabelObj.position.y = plateCentroid.y + liftY + size * 0.05;
@@ -2081,8 +2296,21 @@ loop();
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    stl = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "3D_model.stl")
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("stl", nargs="?", default=os.path.join(HERE, "3D_model.stl"),
+                     help="unused (body geometry is 100% procedural) -- kept for CLI compatibility")
+    ap.add_argument("--plate-radius", type=float, default=None,
+                     help="Override plate_material.radius_mm (mm) for this build only "
+                          "(params.yaml default is unchanged). E.g. --plate-radius 101 for "
+                          "the Ø202mm disc. Output gets a _R<radius> filename suffix.")
+    args = ap.parse_args()
+
     out_dir = os.path.join(HERE, "outputs")
     os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, "digital_twin_fem.html")
-    build(stl, out)
+    if args.plate_radius is not None:
+        out_name = f"digital_twin_fem_R{int(round(args.plate_radius))}.html"
+    else:
+        out_name = "digital_twin_fem.html"
+    out = os.path.join(out_dir, out_name)
+    build(args.stl, out, plate_radius_mm=args.plate_radius)

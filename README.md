@@ -35,6 +35,8 @@ python digital_twin.py      # interactive live twin (slider I, plate selector)
 python visualize.py --no-show   # revolve 2D→3D, export outputs/plate.glb
 python sim_plates.py            # compare plates from plate_library
 python build_twin_html.py 3D_model.stl   # bake standalone AR twin → outputs/digital_twin.html
+python build_twin_html_fem.py            # FEM-accurate bake → outputs/digital_twin_fem.html (R=80mm, default disc)
+python build_twin_html_fem.py --plate-radius 101   # same, but Ø202mm disc → outputs/digital_twin_fem_R101.html
 python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
 ```
 
