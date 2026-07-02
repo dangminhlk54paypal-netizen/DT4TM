@@ -163,6 +163,24 @@ def lev_params(cfg) -> dict:
     }
 
 
+def power_supply_params(cfg) -> dict:
+    """Carroll & Meynell CMV 10 E-1 variac dial->current table (params.yaml
+    power_supply, identified 2026-07-02 from docs/rig_photo.jpg). Lets the HTML
+    twin's "Variac dial" input mode reproduce the real rig's knob instead of a
+    bare amps slider -- JS does the same piecewise-linear interpolation as
+    config.py's dial_to_current_A()."""
+    ps = cfg.power_supply
+    if not ps:
+        return {}
+    anchors = ps["dial_to_current_A"]
+    return {
+        "name":     ps["name"],
+        "dial_min": float(ps["dial_min"]),
+        "dial_max": float(ps["dial_max"]),
+        "anchors":  [[float(a["dial"]), float(a["I"])] for a in anchors],
+    }
+
+
 # ─── EM field visualization data (B field lines + eddy current density) ──────
 
 def compute_eddy_field(em: dict):
@@ -789,7 +807,9 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     }
     lumped = lumped_physics(cfg, em)
     lev = lev_params(cfg)
-    params = {"rom": rom_params, "lumped": lumped, "field_lines": field_lines, "lev": lev}
+    psup = power_supply_params(cfg)
+    params = {"rom": rom_params, "lumped": lumped, "field_lines": field_lines, "lev": lev,
+              "power_supply": psup}
 
     # 5. Encode binary data as base64
     pos_b64   = base64.b64encode(V.reshape(-1).astype("<f4").tobytes()).decode()
@@ -858,10 +878,11 @@ body{margin:0;overflow:hidden;background:var(--bg);color:var(--text);
 .panel{background:var(--panel-bg);padding:0;border-radius:12px;
        border:1px solid var(--panel-border);pointer-events:auto;backdrop-filter:blur(12px);
        box-shadow:0 8px 24px rgba(0,0,0,.35);width:260px;overflow:hidden;
-       transition:background .25s,border-color .25s}
+       transition:width .3s ease,background .25s,border-color .25s}
 .panel-head{margin:0;font-size:.95rem;color:var(--accent);
    border-bottom:1px solid var(--panel-border);padding:12px 16px;cursor:pointer;
-   display:flex;justify-content:space-between;align-items:center;user-select:none}
+   display:flex;justify-content:space-between;align-items:center;user-select:none;gap:10px}
+.panel-head span:first-child{white-space:nowrap}
 .panel-head .chev{font-size:.75rem;color:var(--muted);transition:transform .2s}
 .panel.collapsed .chev{transform:rotate(-90deg)}
 .panel.collapsed .panel-body{display:none}
@@ -956,9 +977,17 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
       <button class="sc-btn" data-sc="sine">Sine</button>
       <button class="sc-btn" data-sc="pulse">Pulse</button>
     </div>
-    <div class="cg">
+    <div class="sc-group" id="inputModeGroup">
+      <button class="sc-btn active" data-mode="amps">Amps</button>
+      <button class="sc-btn" data-mode="dial">Variac Dial</button>
+    </div>
+    <div class="cg" id="ampsGroup">
       <label><span>Current I</span><span id="vI" class="val">5.0 A</span></label>
       <input type="range" id="sI" min="0" max="20" step="0.5" value="5">
+    </div>
+    <div class="cg" id="dialGroup" style="display:none">
+      <label><span>Variac dial (CMV 10 E-1)</span><span id="vDial" class="val">220</span></label>
+      <input type="range" id="sDial" min="0" max="270" step="1" value="220">
     </div>
     <div class="cg">
       <label><span>Time speed</span><span id="vS" class="val">1.0×</span></label>
@@ -2083,8 +2112,30 @@ const setBox = (id, T) => document.getElementById(id).style.background =
   '#' + tcol(T).getHexString();
 
 // ── Panel collapse (click header to toggle) ──────────────────────────────────
+// CSS can't animate a transition into `width:fit-content` (browsers treat it as
+// a non-interpolable keyword and just snap), so measure the header's natural
+// shrink-to-fit width in JS and transition between two explicit px values.
 document.querySelectorAll('.panel-head').forEach(h => {
-  h.onclick = () => h.parentElement.classList.toggle('collapsed');
+  const panel = h.parentElement;
+  h.onclick = () => {
+    const collapsing = !panel.classList.contains('collapsed');
+    if (collapsing) {
+      const title = h.children[0], chev = h.children[1];
+      const headStyle = getComputedStyle(h);
+      const collapsedWidth = title.scrollWidth + chev.scrollWidth
+        + parseFloat(headStyle.gap || 10)
+        + parseFloat(headStyle.paddingLeft) + parseFloat(headStyle.paddingRight);
+      panel.style.width = collapsedWidth + 'px';
+      panel.classList.add('collapsed');
+    } else {
+      // Clear the inline override a frame later (double rAF = wait for the
+      // collapsed width to actually paint) so the transition animates from
+      // that width back to the stylesheet's own width (260px desktop / 100%
+      // under the mobile media query) instead of a stale fixed px forever.
+      panel.classList.remove('collapsed');
+      requestAnimationFrame(() => requestAnimationFrame(() => { panel.style.width = ''; }));
+    }
+  };
 });
 
 // ── Dark / light theme toggle ─────────────────────────────────────────────────
@@ -2205,6 +2256,41 @@ sI.oninput = () => {
   targetI = +sI.value;
   document.getElementById('vI').textContent = targetI.toFixed(1)+' A';
 };
+
+// ── Variac dial input mode (Carroll & Meynell CMV 10 E-1, docs/rig_photo.jpg) ─
+// Dial scale reads 0-270; anchors measured on the real rig (params.yaml
+// power_supply.dial_to_current_A). Piecewise-linear, same as config.py's
+// dial_to_current_A() so the twin and the offline tooling agree.
+const PS_ANCHORS = (PARAMS.power_supply && PARAMS.power_supply.anchors) ||
+  [[0, 0], [220, 5.0], [270, 7.78]];
+function dialToCurrentA(dial) {
+  const xs = PS_ANCHORS;
+  if (dial <= xs[0][0]) return xs[0][1];
+  if (dial >= xs[xs.length-1][0]) return xs[xs.length-1][1];
+  for (let i = 1; i < xs.length; i++) {
+    if (dial <= xs[i][0]) {
+      const [x0, y0] = xs[i-1], [x1, y1] = xs[i];
+      return y0 + (dial - x0) / (x1 - x0) * (y1 - y0);
+    }
+  }
+  return xs[xs.length-1][1];
+}
+const sDial = document.getElementById('sDial');
+sDial.oninput = () => {
+  targetI = dialToCurrentA(+sDial.value);
+  document.getElementById('vDial').textContent = sDial.value;
+  document.getElementById('vI').textContent = targetI.toFixed(2)+' A';
+};
+document.querySelectorAll('.sc-btn[data-mode]').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.sc-btn[data-mode]').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    const mode = btn.dataset.mode;
+    document.getElementById('ampsGroup').style.display = mode === 'amps' ? '' : 'none';
+    document.getElementById('dialGroup').style.display  = mode === 'dial' ? '' : 'none';
+    if (mode === 'dial') sDial.oninput(); else sI.oninput();
+  };
+});
 
 // ── Main animation loop ───────────────────────────────────────────────────────
 let lastWall = performance.now();

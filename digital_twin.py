@@ -2,7 +2,9 @@
 
 Features:
   • Real-time T(r,z) heatmap
-  • Current slider I (0–5A)
+  • Current slider I (0–I_MAX, sized to the rig's variac) + a Variac dial
+    slider (Carroll & Meynell CMV 10 E-1, 0–270) that drives I via the
+    measured dial->current table (params.yaml power_supply)
   • Time-speed slider (1×–200×)
   • Metal plate selector from plate_library (Al Ø50/65/80/100, Cu Ø80)
     → automatically rebuilds ROM when a new plate is selected
@@ -178,8 +180,9 @@ def run_live(
     ax_T    = fig.add_axes([0.03, 0.26, 0.27, 0.64])   # heatmap
     ax_t    = fig.add_axes([0.36, 0.52, 0.61, 0.40])   # T(t)
     ax_I    = fig.add_axes([0.36, 0.30, 0.61, 0.17])   # I(t)
-    ax_slI  = fig.add_axes([0.36, 0.17, 0.27, 0.05])   # slider I
-    ax_slSp = fig.add_axes([0.70, 0.17, 0.27, 0.05])   # slider speed
+    ax_slI    = fig.add_axes([0.36, 0.17, 0.16, 0.05])   # slider I
+    ax_slDial = fig.add_axes([0.56, 0.17, 0.16, 0.05])   # slider Variac dial
+    ax_slSp   = fig.add_axes([0.76, 0.17, 0.21, 0.05])   # slider speed
     ax_plate= fig.add_axes([0.03, 0.04, 0.14, 0.18])   # plate radio
     ax_sc   = fig.add_axes([0.19, 0.04, 0.10, 0.18])   # scenario radio
     ax_info = fig.add_axes([0.36, 0.04, 0.61, 0.10])   # info text box
@@ -203,7 +206,11 @@ def run_live(
     # -----------------------------------------------------------------------
     # Slider I
     # -----------------------------------------------------------------------
-    sl_I = Slider(ax_slI, "I (A)", 0.0, 5.0, valinit=I_init,
+    # I_MAX covers the rig's real max current (variac dial 270 -> 7.78A measured
+    # 2026-07-02, docs/rig_photo.jpg), with a little headroom over the old 5.0A cap.
+    ps = cfg.power_supply
+    I_MAX = max(5.0, cfg.dial_to_current_A(ps["dial_max"])) if ps else 5.0
+    sl_I = Slider(ax_slI, "I (A)", 0.0, round(I_MAX + 0.5, 1), valinit=I_init,
                   color="#335588", track_color="#223355")
     sl_I.label.set_color(TEXT_CLR); sl_I.valtext.set_color("#ffcc44")
     ax_slI.set_facecolor(DARK_AX)
@@ -213,6 +220,22 @@ def run_live(
         state["I_manual"] = val
         if state["sc_name"] == "manual":
             state["I_func"] = lambda t: state["I_manual"]
+
+    # -----------------------------------------------------------------------
+    # Variac dial slider (Carroll & Meynell CMV 10 E-1, docs/rig_photo.jpg) —
+    # a convenience control that drives sl_I via the measured dial->I table
+    # (params.yaml power_supply), so the twin can be operated the same way as
+    # the physical rig's knob instead of typing amps directly.
+    # -----------------------------------------------------------------------
+    if ps:
+        sl_dial = Slider(ax_slDial, "Dial", ps["dial_min"], ps["dial_max"],
+                          valinit=220.0, color="#553388", track_color="#332255")
+        sl_dial.label.set_color(TEXT_CLR); sl_dial.valtext.set_color("#cc99ff")
+        ax_slDial.set_facecolor(DARK_AX)
+
+        @sl_dial.on_changed
+        def _on_dial(val):
+            sl_I.set_val(cfg.dial_to_current_A(val))
 
     # -----------------------------------------------------------------------
     # Speed slider (1× – 200×, log scale)
@@ -393,7 +416,7 @@ def run_live(
         n_steps = max(1, int(round(spd)))
         dt_eff  = dt_sim * spd / n_steps
         for _ in range(n_steps):
-            I_now = max(0.0, min(float(I_fn(twin.t)), 5.0))
+            I_now = max(0.0, min(float(I_fn(twin.t)), I_MAX))
             twin.step(I_now, dt_eff)
 
         T_cur   = twin.T_field

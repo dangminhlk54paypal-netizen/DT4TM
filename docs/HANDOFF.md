@@ -1,23 +1,36 @@
 # HANDOFF — Digital Twin for Thermal Management
 
 > **Primary source of truth is [CLAUDE.md](../CLAUDE.md) + [README.md](../README.md).**
-> This file is a quick handoff status summary. Last updated: 2026-07-02.
+> This file is a quick handoff status summary. Last updated: 2026-07-02 (session 6).
 
 ## Next-session prompt (paste this to resume)
-> Tiếp tục dự án digital twin nhiệt cho thiết bị levitator TEAM 28.
-> Đọc CLAUDE.md trước — có 2 việc mở đang chờ:
-> 1. **Câu hỏi vật lý chưa giải quyết**: twin đang cho T_ss đĩa nhôm (61.7°C @5.5A) CAO HƠN
->    cuộn dây (~59°C), nhưng ảnh IR thực tế (docs/thermal_test.png) cho thấy cuộn dây nóng
->    hơn đĩa rất nhiều. Model cuộn dây đã calibrate từ IR thật; model đĩa (ROM FEM,
->    ΔT_max=27K@5A) CHƯA từng calibrate (h là số đoán, vì IR đo đĩa nhôm bóng không tin
->    được — ε thực ≈0.1 vs camera set ε=0.91). Cần đo đĩa bằng thermocouple dán (không phải
->    IR) rồi fit lại hệ số đối lưu h của đĩa trong rom.py/thermal_solver.py.
-> 2. **params.yaml `em_domain` đã bị đổi r_max/z_min/z_max từ ±500mm → ±1000mm** (không rõ
->    do ai/khi nào — phát hiện lúc commit ngày 2026-07-02, KHÔNG phải do tôi chỉnh). Điều
->    này mâu thuẫn với "locked decision" trong CLAUDE.md ghi domain ±500mm đã PASS validation
->    (Dirichlet vs Neumann, diff<0.06%). Cần hỏi người dùng có chủ đích hay không, rồi hoặc
->    (a) re-run `em_solver.validate_domain_size()` ở ±1000mm và cập nhật CLAUDE.md, hoặc
->    (b) revert về ±500mm nếu là nhầm lẫn.
+> Tiếp tục dự án digital twin nhiệt cho thiết bị levitator TEAM 28. Đọc CLAUDE.md trước —
+> có các việc mở đang chờ:
+> 1. **Power-supply / Variac dial — STEP 1 xong, STEP 2-3 còn mở** (session 6, 2026-07-02).
+>    Đã xác định nguồn cấp là biến áp xoay tay Carroll & Meynell CMV 10 E-1 (240V vào,
+>    0-270V ra, 50Hz) qua ampe kế, từ docs/rig_photo.jpg. Đã thêm bảng nội suy dial→I vào
+>    params.yaml (`power_supply` block, 3 điểm neo: 0→0A, 220→5.00A, 270→7.78A) và một chế
+>    độ "Variac Dial" trong cả build_twin_html_fem.py (HTML twin) và digital_twin.py (GUI
+>    matplotlib) — kéo núm ảo giống núm thật thay vì gõ thẳng dòng điện. Còn THIẾU:
+>    (a) đo dày thêm bảng dial→I (hiện chỉ 3 điểm, ~20 vạch/điểm sẽ tốt hơn),
+>    (b) đo lại V tại đầu cực cuộn dây khi dial=220 — có mâu thuẫn giữa "dial 220 → 5A" và
+>    multimeter cũ đo "190V → 5A" (2026-06-23), chưa rõ do sụt áp dưới tải hay lệch vạch núm,
+>    (c) ghi độ cao levitation tại 7.78A (cũng lấp câu hỏi mở `Z_OBS_7_75A_MM` của WP-A),
+>    (d) cảm biến dòng phần cứng thời gian thực (kẹp CT không xâm lấn, vd SCT-013) — MỤC
+>    TIÊU CUỐI của người dùng là lấy I trực tiếp từ rig, KHÔNG dùng thermal sensor làm input
+>    (sensor chỉ để validate). Xem CLAUDE.md mục "Power-supply integration".
+> 2. **Câu hỏi vật lý chưa giải quyết (vẫn mở, không đổi từ trước)**: twin đang cho T_ss đĩa
+>    nhôm (61.7°C @5.5A) CAO HƠN cuộn dây (~59°C), nhưng ảnh IR thực tế
+>    (docs/thermal_test.png) cho thấy cuộn dây nóng hơn đĩa rất nhiều. Model cuộn dây đã
+>    calibrate từ IR thật; model đĩa (ROM FEM, ΔT_max=27K@5A) CHƯA từng calibrate (h là số
+>    đoán, vì IR đo đĩa nhôm bóng không tin được — ε thực ≈0.1 vs camera set ε=0.91). Cần đo
+>    đĩa bằng thermocouple dán (không phải IR) rồi fit lại hệ số đối lưu h của đĩa trong
+>    rom.py/thermal_solver.py.
+> 3. **em_domain đã kiểm tra lại — KHÔNG còn là vấn đề mở.** params.yaml hiện đang ở
+>    ±500mm (r_max_mm=500, z_min/max=±500), đúng như "locked decision" trong CLAUDE.md
+>    (đã PASS validation Dirichlet vs Neumann, diff<0.06%). Nghi vấn ±1000mm ghi ở bản
+>    HANDOFF.md cũ đã không còn tái hiện — có thể đã được ai đó revert; không cần hành động
+>    thêm trừ khi phát hiện lại giá trị khác ±500mm.
 > Sau đó tiếp tục theo mục "Pending tasks" trong CLAUDE.md / docs/HANDOFF.md.
 
 ## Goal
@@ -67,6 +80,12 @@ in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the rea
       `calibrate_from_file()`, `live_compare()`); mock-data tested end-to-end via
       `mock_sensor_data.csv` / `--port mock`. **Waiting on the real Arduino rig** to log
       actual data.
+- [x] power_supply / Variac dial input — STEP 1 done (session 6, 2026-07-02): identified
+      the rig's AC source (Carroll & Meynell CMV 10 E-1 variac), added `params.yaml
+      power_supply` dial→I table + `Config.dial_to_current_A()` + a "Variac Dial" input
+      mode in both `build_twin_html_fem.py` and `digital_twin.py`. **STEP 2 (denser
+      calibration table + terminal-V re-measurement) and STEP 3 (live hardware current
+      sensing) still open** — see CLAUDE.md and the next-session prompt above.
 
 ## Validation
 1. EM reproduces original benchmark (960/576, 20A, R=65mm, no iron) → lift force balances at z≈11.3mm. **NOT YET** (z_eq≈7.1mm after fixing the coil geometry, see CLAUDE.md) — 37% error remains, unexplained.
@@ -86,5 +105,14 @@ in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the rea
 - **Session 5**: Build the real Arduino rig, log a real run, calibrate `data_io.py`
   against actual sensor data instead of `mock_sensor_data.csv` — also use this run to
   calibrate the disc/plate convection coefficient (currently uncalibrated FEM guess).
+- **Session 6 (2026-07-02)**: Identified the rig's AC power supply (Carroll & Meynell
+  CMV 10 E-1 variac, from docs/rig_photo.jpg) and wired a dial→current calibration table
+  into params.yaml + a "Variac Dial" input mode into both twins — STEP 1 of driving the
+  simulation directly from the rig's current/dial instead of thermal sensors (sensors stay
+  validation-only). STEP 2 (denser table, terminal-V re-measurement, 7.78A gap
+  measurement) and STEP 3 (live CT-clamp current sensing) are next.
+- **Session 7**: Either (a) the disc/plate thermocouple calibration from Session 4/5's
+  open question, or (b) power-supply steps 2-3 above — whichever data collection happens
+  first in the next lab session should probably be done together (same lab visit).
 
 ## Run commands — see [README.md](../README.md) (note: `python config.py`, NOT `src/`).

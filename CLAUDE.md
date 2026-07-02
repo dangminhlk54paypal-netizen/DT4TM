@@ -460,6 +460,54 @@ P and hA). Transient RMS residual ≈3°C (same quality). Effective C_coil = 0.2
       for the SAME R=80 disc (21.4mm vs 13.6mm — an open methodology question,
       not a bug), R=101's I_min_lev=6.45A finding, outer_iron_ring magnet test,
       plate-vs-coil temperature ordering, and EM mesh-resolution sensitivity).
+- [x] POWER SUPPLY IDENTIFIED (2026-07-02, docs/rig_photo.jpg): **Carroll & Meynell
+      CMV 10 E-1 variac** (Stelltransformator, 240V in / 0–270V out, 50Hz), feeds
+      the coils through an ammeter. Dial scale 0–270 ≈ output VOLTS (explains the
+      old 220V→5A vs 270V→7.8A numbers). Measured dial→I anchors (new
+      `power_supply` block in params.yaml): 0→0A, 220→5.00A, 270(max)→**7.78A**.
+      DISCREPANCY flagged, not resolved: dial 220 at 5A vs multimeter 190V→5A
+      (2026-06-23) — sag under load or dial offset; re-measure V at coil terminals.
+      Load impedance NOT constant (44Ω@220 vs 34.7Ω@270) → use the interpolation
+      table, never I∝V over the full range. Rig behaviour re-confirms WP-A
+      qualitatively: disc shakes/unstable during ramp below lift-off (jitter model ✓),
+      takes >10s to settle at 5A (model: ~9s, ζ=0.02 ✓).
+      **USER GOAL (drives next work): twin input = variac dial / measured I directly;
+      thermal sensors are validation-only, NOT the runtime input.** Matches the
+      existing ROM design (input is already I(t)).
+- [x] Power-supply integration STEP 1 (2026-07-02, SW dial mode, no HW yet):
+      `config.py` gained `Config.dial_to_current_A(dial)` (piecewise-linear over
+      `power_supply.dial_to_current_A`) + a `power_supply` property; `python
+      config.py` now prints a dial→I table as a sanity check.
+      `build_twin_html_fem.py`: new `power_supply_params(cfg)` bakes the same
+      anchor table into `PARAMS.power_supply`; HTML gained an "Amps / Variac
+      Dial" toggle (`#inputModeGroup`) — the Dial slider (`#sDial`, 0–270,
+      default 220) computes I the same way as config.py and writes it into the
+      existing `targetI`, so scenarios/ROM/levitation are untouched. Verified
+      headless (Playwright): dial 220→5.00A, 270→7.78A, 0→0A, mode toggle
+      round-trips cleanly, 0 JS errors.
+      `digital_twin.py`: matplotlib GUI gained a second slider "Dial" next to
+      "I (A)" (`ax_slDial`, only created if `power_supply` is in params.yaml)
+      that calls `sl_I.set_val(cfg.dial_to_current_A(val))` — reuses the
+      existing `_on_I` callback, no new state field. Also fixed a latent bug
+      this surfaced: `sl_I`'s range and the `update()` loop's current clamp
+      were BOTH hardcoded to 5.0A, which would have silently clipped the rig's
+      real 7.78A max — replaced with `I_MAX = max(5.0,
+      cfg.dial_to_current_A(dial_max))` (≈7.78→rounds to 8.0 slider ceiling).
+      Smoke-tested `run_live()` end-to-end on the Agg backend (no display): no
+      exceptions, ROM builds, figure constructs with both sliders wired.
+      **NOT done yet (step 2/3, still open)**: denser dial→I calibration table
+      (only 3 anchor points), re-measuring V at dial 220 to resolve the
+      190V-vs-220-dial discrepancy, recording the 7.78A levitation gap, and any
+      live hardware current sensing (CT clamp + Arduino) — see plan below.
+- [ ] NEXT (power-supply integration, steps 2–3):
+      (2) Next lab session: log dial→I every ~20 dial units (fills the interp
+      table), re-measure terminal V at dial 220, record levitation gap at 7.78A
+      (also fills WP-A's open `Z_OBS_7_75A_MM`).
+      (3) HW live input — non-invasive CT clamp (SCT-013) or ZMCT103C + Arduino
+      → I_rms CSV over serial → extend data_io.py SensorReader (mode="current")
+      → digital_twin.py live; HTML twin via Web Serial API. Add to
+      docs/SENSOR_PLAN.md shopping list. (Knob-position encoder rejected:
+      indirect, mapping drifts with load.)
 
 ## Conventions
 - SI units; geometry entered in mm in params.yaml (code converts to m).

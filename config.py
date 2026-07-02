@@ -67,6 +67,29 @@ class Config:
     def bc(self):      return self.raw["thermal_bc"]
     @property
     def mesh(self):    return self.raw["mesh"]
+    @property
+    def power_supply(self): return self.raw.get("power_supply", {})
+
+    def dial_to_current_A(self, dial: float) -> float:
+        """Piecewise-linear interpolation over power_supply.dial_to_current_A anchors."""
+        anchors = self.power_supply["dial_to_current_A"]
+        dials = [a["dial"] for a in anchors]
+        currents = [a["I"] for a in anchors]
+        return float(_interp_clamped(dial, dials, currents))
+
+
+def _interp_clamped(x, xs, ys):
+    if x <= xs[0]:
+        return ys[0]
+    if x >= xs[-1]:
+        return ys[-1]
+    for i in range(1, len(xs)):
+        if x <= xs[i]:
+            x0, x1 = xs[i - 1], xs[i]
+            y0, y1 = ys[i - 1], ys[i]
+            t = (x - x0) / (x1 - x0)
+            return y0 + t * (y1 - y0)
+    return ys[-1]
 
 
 def load_config(path=DEFAULT_PARAMS) -> Config:
@@ -88,3 +111,7 @@ if __name__ == "__main__":
     print(f"Inner/outer coils: {c.coils['inner']['turns']}/{c.coils['outer']['turns']} turns")
     print(f"Iron core: enabled={c.iron['enabled']}, μ_r={c.iron.get('mu_r')}")
     print(f"î={c.I}A, f={c.freq}Hz, ω={c.omega:.1f} rad/s")
+    if c.power_supply:
+        print(f"Power supply: {c.power_supply['name']}")
+        for d in (0, 100, 220, 250, 270):
+            print(f"  dial {d:>3} -> {c.dial_to_current_A(d):.2f} A")

@@ -26,6 +26,39 @@ excitation:
   power_ref_W: 9.67     # aluminum plate eddy loss at I_ref=5A_rms (EM solver, corrected
                         # coil radii 2026-07-01, payload OFF). Old value was 2.63W (wrong coil radii).
 
+# --- AC power supply (variac) — identified 2026-07-02 from rig photo (docs/rig_photo.jpg) ---
+# Carroll & Meynell "Stelltransformator" CMV 10 E-1: variable autotransformer,
+# input 240V 50Hz, output 0..270V via rotary dial, feeding the coils THROUGH an
+# ammeter (blue multimeter in the photo). The dial scale reads 0..270 — at max the
+# rig draws 7.78A. Dial value ≈ output VOLTS (CMV units boost to 270V max), which
+# is why "dial 220" matches the professor's original 220V→5A reading.
+# Measured dial→current anchors (2026-07-02, disc levitating):
+#   dial 0   → 0 A      (off)
+#   dial 220 → 5.00 A   (main op point. DISCREPANCY: multimeter measured 190V→5A
+#                        on 2026-06-23 — voltage sag under load or dial offset;
+#                        re-measure V at the coil terminals next lab session)
+#   dial 270 → 7.78 A   (max; refines the earlier 7.8A reading)
+# NOT a constant impedance: Z(dial220)=44Ω vs Z(dial270)=34.7Ω (levitation height
+# and coil temperature change the load) → interpolate the table, don't assume I∝V
+# across the full range. Below lift-off (dial≲200) I∝dial is a fair first guess.
+# PURPOSE (user request 2026-07-02): drive the twin's INPUT from the dial/current
+# directly — thermal sensors stay validation-only. Phase 1: dial slider in the
+# HTML twin mapped through dial_to_current_A. Phase 2: live current sensing
+# (non-invasive CT clamp → Arduino → data_io.py), see docs/SENSOR_PLAN.md.
+power_supply:
+  name: "Carroll & Meynell CMV 10 E-1 (variac, 240V in, 0-270V out, 50Hz)"
+  type: variac
+  input_V: 240.0
+  frequency_Hz: 50.0
+  dial_min: 0.0
+  dial_max: 270.0
+  # measured (dial, I_rms) anchors — extend with more readings next lab session
+  dial_to_current_A:
+    - {dial: 0.0,   I: 0.0}
+    - {dial: 220.0, I: 5.0}
+    - {dial: 270.0, I: 7.78}
+  interpolation: linear   # piecewise-linear between anchors (monotone)
+
 # --- Aluminum Plate ---
 plate_material:
   name: aluminium
