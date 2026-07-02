@@ -33,12 +33,15 @@ from em_solver import compute_losses, compute_lift_force
 from rom import ThermalROM
 
 
-# ─── WP-C (2026-07-02) lift-force anchors, staged for WP-D ────────────────────
-# NOT wired into anything live yet -- the JS levitation-gap block (~line 1130,
-# "Z_GAP_5A_MM"/"Z_DECAY_MM") still owns its own hardcoded constants (WP-A/WP-D
-# territory, see docs/PLAN_SIM_FEEDBACK_2026-07-02.md "Bản đồ conflict"). This
-# dict is WP-C's deliverable for WP-D to fold into params.yaml (`levitation:`
-# block) + the PARAMS JSON export, one entry per plate_library radius.
+# ─── WP-C (2026-07-02) lift-force anchors, wired live by WP-D ─────────────────
+# WP-D (2026-07-02) folded this into params.yaml (`levitation:` block) + the
+# PARAMS JSON export via lev_params() below -- the JS levitation-gap block
+# (search "Levitation gap physics") now reads PARAMS.lev instead of hardcoding
+# Z_GAP_5A_MM/Z_DECAY_MM. For the default R=80mm disc, lev_params() uses the
+# params.yaml `levitation.z_gap_5A_mm`/`z_decay_mm` defaults UNCHANGED (bit-
+# identical to the old hardcoded 4.1/21.4); for any OTHER --plate-radius build,
+# it recomputes fresh per-radius anchors from THIS dict (fixing the R=101
+# "wrong nonzero gap at 5A" bug flagged below).
 #
 # All F_z values computed with em_solver.compute_lift_force() at the physical
 # PEAK current I_peak = 5A_rms*sqrt(2) = 7.0711A (CLAUDE.md "CURRENT CONVENTION"),
@@ -114,6 +117,50 @@ LEV_ANCHORS = {
             "F_at_1mm_N": 1.6591, "F_at_3p8mm_N": 1.5318, "z0_decay_mm": 14.02,
             "I_min_lev_A_rms": 6.45, "levitates_at_5A_rms": False},
 }
+
+
+def lev_params(cfg) -> dict:
+    """WP-D (2026-07-02): bake the levitation spring-mass-damper constants into
+    PARAMS.lev instead of JS hardcoding them (params.yaml.levitation).
+
+    For the DEFAULT plate radius (80mm — the only physically-validated disc),
+    uses the params.yaml levitation.z_gap_5A_mm/z_decay_mm values UNCHANGED, so
+    the already-shipped/validated 4.1mm@5A behaviour is bit-for-bit preserved.
+
+    For any OTHER radius (e.g. --plate-radius 101), recomputes fresh anchors via
+    LEV_ANCHORS/_lev_anchor() instead of silently reusing the R=80 numbers — this
+    is the WP-C-flagged bug fix (the R=101 disc doesn't levitate at all at 5A; the
+    old code still showed a nonzero baked gap because it never looked at the
+    radius). When the disc doesn't lift at 5A, z_gap_5A_mm is solved backwards so
+    the SAME exponential formula (z_eq(I) = z_gap_5A_mm + 2*z_decay_mm*ln(I/5))
+    reproduces the correct I_min_lev exactly (see derivation in the WP-D report).
+    """
+    lv = cfg.raw.get("levitation", {})
+    radius_mm = float(cfg.plate["radius_mm"])
+    default_radius = 80.0
+
+    if abs(radius_mm - default_radius) < 0.5:
+        z_gap_5A = float(lv.get("z_gap_5A_mm", 4.1))
+        z_decay  = float(lv.get("z_decay_mm", 21.4))
+    else:
+        anchor = LEV_ANCHORS.get(radius_mm) or _lev_anchor(radius_mm, cfg.plate["thickness_mm"])
+        z_decay = float(anchor["z0_decay_mm"])
+        if anchor.get("levitates_at_5A_rms"):
+            z_gap_5A = float(anchor["z_eq_5A_mm"])
+        else:
+            I_min = float(anchor["I_min_lev_A_rms"])
+            z_gap_5A = 2.0 * z_decay * math.log(5.0 / I_min)
+
+    return {
+        "z_gap_5A_mm":        round(z_gap_5A, 4),
+        "z_decay_mm":         round(z_decay, 4),
+        "zeta0":              float(lv.get("zeta0", 0.0)),
+        "zeta1":              float(lv.get("zeta1", 0.02)),
+        "jit_mm":             float(lv.get("jit_mm", 0.3)),
+        "jit_freq1":          float(lv.get("jit_freq1_rad_s", 27.0)),
+        "jit_freq2":          float(lv.get("jit_freq2_rad_s", 71.0)),
+        "z_gap_exaggeration": float(lv.get("z_gap_exaggeration", 2.0)),
+    }
 
 
 # ─── EM field visualization data (B field lines + eddy current density) ──────
@@ -259,6 +306,7 @@ def lumped_physics(cfg, em: dict) -> dict:
     coil_C_scale = float(lt.get("coil_C_scale", 1.0))
     G_wind = float(lt.get("coil_G_wind_W_per_K", 0.0))
     conv_exp = float(lt.get("convection_exponent", 0.25))
+    coil_hot_display_C = float(lt.get("coil_hot_display_C", 80.0))
 
     def coil_C_solid(c):
         r_mean = (c["r_inner_mm"] + c["r_outer_mm"]) / 2 * mm
@@ -298,6 +346,7 @@ def lumped_physics(cfg, em: dict) -> dict:
 
     return {
         "convection_exponent": conv_exp,  # Churchill-Chu-simplified natural convection h~dT^n
+        "T_coil_hot_display_C": coil_hot_display_C,  # coil colour-ramp ceiling (was JS literal T_COIL_HOT)
         "nodes": {
             "inner": {
                 "P_ref":  P_inner,
@@ -739,7 +788,8 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
         "J_max":       round(J_max, 1),  # peak disc |J_e| [A/m²] at I_em_ref
     }
     lumped = lumped_physics(cfg, em)
-    params = {"rom": rom_params, "lumped": lumped, "field_lines": field_lines}
+    lev = lev_params(cfg)
+    params = {"rom": rom_params, "lumped": lumped, "field_lines": field_lines, "lev": lev}
 
     # 5. Encode binary data as base64
     pos_b64   = base64.b64encode(V.reshape(-1).astype("<f4").tobytes()).decode()
@@ -1298,22 +1348,28 @@ const regionKey = {1:'inner', 2:'outer', 3:'iron'};
 //   z_eq(I) = Z_GAP_5A_MM + 2·z0·ln(I/5)   (clamped at 0)
 // → CONTINUOUS lift-off at I_min = 5·e^{−4.1/(2·z0)} ≈ 4.54A: the gap grows
 // smoothly from 0 (no jump), passes 4.1mm at 5A, reaches ≈18.5mm at 7A.
-const Z_GAP_5A_MM = 4.1;    // [mm] equilibrium gap at I=5A
+// WP-D (2026-07-02): baked from params.yaml `levitation` via PARAMS.lev instead
+// of hardcoded here — for the default R=80mm disc this is bit-identical to the
+// old 4.1/21.4 literals; for any OTHER --plate-radius build, lev_params() (Python)
+// recomputes fresh per-radius anchors (fixes the R=101 "wrong nonzero gap" bug).
+const LEV = PARAMS.lev;
+const Z_GAP_5A_MM = LEV.z_gap_5A_mm;    // [mm] equilibrium gap at I=5A (R=80mm default)
 
 // CALIBRATION OPEN (user question, docs/PLAN_SIM_FEEDBACK_2026-07-02.md WP-A #4):
 // at Z_DECAY_MM=21.4mm, z_eq(7.75A)≈22.9mm — user reports the real rig's gap only
 // "nudges up a little" from 5A to 7.75-8A, so 21.4mm is likely too large. Once the
 // real gap at 7.75A is measured (mm, or "x times disc thickness"), fill it in below
-// and Z_DECAY_MM refits itself; leave null to keep the 21.4mm placeholder.
+// and Z_DECAY_MM refits itself; leave null to keep the params.yaml placeholder.
 const Z_OBS_7_75A_MM = null;
-let Z_DECAY_MM = 21.4;      // [mm] EM force decay length z0 (from the two EM anchors)
+let Z_DECAY_MM = LEV.z_decay_mm;      // [mm] EM force decay length z0 (from the two EM anchors)
 if (Z_OBS_7_75A_MM !== null) {
   Z_DECAY_MM = (Z_OBS_7_75A_MM - Z_GAP_5A_MM) / (2 * Math.log(7.75 / 5.0));
 }
-const I_LEV_MIN   = 5.0 * Math.exp(-Z_GAP_5A_MM / (2 * Z_DECAY_MM));  // ≈4.54A lift-off
-const Z_GAP_EXAG  = 2.0;    // display exaggeration factor — SAME as display_z_exaggeration
-                             // used for the disc thickness (params.yaml), so every z-axis
-                             // dimension of the disc scales consistently (4.1mm@5A -> 8.2 display-mm).
+const I_LEV_MIN   = 5.0 * Math.exp(-Z_GAP_5A_MM / (2 * Z_DECAY_MM));  // ≈4.54A lift-off (R=80mm)
+const Z_GAP_EXAG  = LEV.z_gap_exaggeration;  // display exaggeration factor — SAME as
+                             // display_z_exaggeration used for the disc thickness
+                             // (params.yaml), so every z-axis dimension of the disc
+                             // scales consistently (4.1mm@5A -> 8.2 display-mm).
 
 function levGapEqMm(I) {
   if (I <= I_LEV_MIN) return 0.0;
@@ -1334,8 +1390,8 @@ const LEV_OMEGA = Math.sqrt(9.81 / (Z_DECAY_MM * 1e-3));  // ≈21.4 rad/s
 // a quadratic law can't reach without breaking the ζ(5A)=0.02 anchor. Flagging
 // this rather than silently forcing a steeper/unphysical law — revisit once
 // real oscillation-amplitude data at 7.75-8A exists.
-const LEV_ZETA0 = 0.0;
-const LEV_ZETA1 = 0.02;
+const LEV_ZETA0 = LEV.zeta0;
+const LEV_ZETA1 = LEV.zeta1;
 function levZeta(I) { return LEV_ZETA0 + LEV_ZETA1 * (I / 5.0) ** 2; }
 
 // Sub-liftoff jitter: below I_LEV_MIN the disc rests on the coil, but the AC
@@ -1343,9 +1399,9 @@ function levZeta(I) { return LEV_ZETA0 + LEV_ZETA1 * (I / 5.0) ** 2; }
 // starting around 0.1A, growing through 1-3A. 100Hz can't be resolved at 60fps,
 // so it's shown as an aliased two-tone shimmer, amplitude ∝ I², fading out once
 // the disc actually lifts (lev.z > 0.5mm).
-const JIT_MM    = 0.3;   // [display-mm] max shimmer amplitude before liftoff
-const JIT_FREQ1 = 27.0;  // [rad/s] visual-only shimmer rates (incommensurate, not physical 100Hz)
-const JIT_FREQ2 = 71.0;
+const JIT_MM    = LEV.jit_mm;    // [display-mm] max shimmer amplitude before liftoff
+const JIT_FREQ1 = LEV.jit_freq1; // [rad/s] visual-only shimmer rates (incommensurate, not physical 100Hz)
+const JIT_FREQ2 = LEV.jit_freq2;
 
 const lev = {z: 0.0, v: 0.0, jit: 0.0, jitPhase1: 0.0, jitPhase2: 0.0};   // gap [mm], velocity [mm/s]
 function levStep(I, dt) {
@@ -1759,7 +1815,9 @@ const TRANGE = T_COLOR_HI - T_COLOR_LO;
 // I-dependent T_ss(I), so bumping I made the coil "cool" instantly and steady
 // state always painted full-hot regardless of I — both wrong).
 // (Module scope: shared by paintMesh and updateCoilGlow.)
-const T_COIL_HOT = 80.0;   // [°C]
+// WP-D (2026-07-02): baked from params.yaml lumped_thermal.coil_hot_display_C
+// instead of hardcoded — was a JS literal `T_COIL_HOT = 80.0`.
+const T_COIL_HOT = LUMPED.T_coil_hot_display_C;   // [°C]
 // Disc colour-scale mode: 'auto' keeps the original behaviour (stretch only once
 // the in-plate spread is physically meaningful), 'absolute'/'relative' force one
 // or the other — wired to the "Scale: …" button in the telemetry panel.

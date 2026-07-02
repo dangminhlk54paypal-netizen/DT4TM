@@ -433,6 +433,33 @@ P and hA). Transient RMS residual ≈3°C (same quality). Effective C_coil = 0.2
       and the R101 build still uses the R=80 lift-force anchors (see WP-C entry
       above), so its levitation telemetry is known-wrong until WP-D wires
       `LEV_ANCHORS` per plate radius.
+- [x] WP-D (2026-07-02, docs/PLAN_SIM_FEEDBACK_2026-07-02.md): **constants
+      refactor + final integration**. Added `levitation:` block to params.yaml
+      (z_gap_5A_mm, z_decay_mm, zeta0/1, jit_mm, jit_freq1/2, z_gap_exaggeration)
+      and `coil_hot_display_C` to `lumped_thermal:`. New `lev_params(cfg)`
+      (build_twin_html_fem.py) feeds `PARAMS.lev`; JS now reads `PARAMS.lev.*`
+      and `LUMPED.T_coil_hot_display_C` instead of hardcoding `Z_GAP_5A_MM`,
+      `Z_DECAY_MM`, `LEV_ZETA0/1`, `JIT_MM/FREQ1/FREQ2`, `T_COIL_HOT`.
+      **Fixed the WP-C-flagged R=101 bug**: `lev_params()` uses the R=80
+      params.yaml defaults ONLY for the R=80 build (bit-identical, zero
+      regression — verified `levGapEqMm(5)=4.1000mm` exactly, `I_LEV_MIN=
+      4.543A`, both unchanged); any OTHER `--plate-radius` build now recomputes
+      its own anchors from `LEV_ANCHORS`/`_lev_anchor()` (WP-C's staged
+      deliverable). Verified for R=101: `levGapEqMm(5)=0.0000mm` (correctly does
+      NOT lift at the 5A operating point — was wrongly nonzero before),
+      `I_LEV_MIN=6.450A` (matches WP-C's `I_min_lev_A_rms=6.45` exactly), gap
+      curve continuous and sane above threshold (0.22mm@6.5A → 6.04mm@8A).
+      Regression-tested both `digital_twin_fem.html` (R=80) and
+      `digital_twin_fem_R101.html`: 0 JS console errors, coil glow still runs
+      correctly through the relocated `T_COIL_HOT`.
+      **Consolidated ALL open questions from every WP into one place**: see
+      docs/PLAN_SIM_FEEDBACK_2026-07-02.md, final section "Câu hỏi cần user trả
+      lời" (8 items — gap@7.75A calibration, a genuine numeric conflict inside
+      WP-A's own spec between the ζ∝I² law and its 40% overshoot acceptance
+      target, coil cooldown data, TWO disagreeing z0 decay-length derivations
+      for the SAME R=80 disc (21.4mm vs 13.6mm — an open methodology question,
+      not a bug), R=101's I_min_lev=6.45A finding, outer_iron_ring magnet test,
+      plate-vs-coil temperature ordering, and EM mesh-resolution sensitivity).
 
 ## Conventions
 - SI units; geometry entered in mm in params.yaml (code converts to m).

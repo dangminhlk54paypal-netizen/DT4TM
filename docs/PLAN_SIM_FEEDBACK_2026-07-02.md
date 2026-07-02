@@ -28,6 +28,12 @@ tiêu chí nghiệm thu. Đọc CLAUDE.md trước khi bắt đầu.
 
 ## WP-A — Vật lý dao động levitation (agent 1)
 
+> **STATUS: DONE (2026-07-02).** Xem CLAUDE.md Code status → mục "WP-A" cho đầy
+> đủ kết quả. Tóm tắt: `levStep` chuyển sang nghiệm giải tích + sim-time (speed
+> slider giờ hoạt động đúng), jitter dưới ngưỡng nâng đã có, ζ(I) đã theo I².
+> **2 câu hỏi mở chưa trả lời được** (xem mục "Câu hỏi cần user trả lời" cuối
+> file) — không chặn, code đã có chỗ điền sẵn.
+
 ### Nguyên nhân gốc (đã xác minh trong code)
 - `build_twin_html_fem.py` dòng ~1150–1170: dao động là **lò xo–khối lượng
   tuyến tính hoá quanh z_eq**: `m·z̈ = mω²(z_eq−z) − 2ζω·m·ż` với
@@ -95,6 +101,15 @@ KHÔNG đụng geometry Python.
 ---
 
 ## WP-B — Làm nguội cuộn dây thực tế hơn (agent 2)
+
+> **STATUS: DONE (2026-07-02).** Xem CLAUDE.md Code status → mục "WP-B". Tóm
+> tắt: đối lưu phi tuyến (h~ΔT^0.25) + coil 2-node (surface/winding-core,
+> `coil_G_wind_W_per_K=1.0`) đã implement + fit lại từ đầu. RMS ramp-test=2.5°C
+> (tốt hơn cả claim cũ), cooldown chậm hơn ~6-8× so với model cũ. Steady-state
+> không đổi (verify được). **Phát hiện phụ**: model cũ (trước WP-B) thực ra có
+> RMS=6.6°C trên `thermal_ramp_test`, không phải ~3°C như tài liệu cũ ghi — claim
+> đó đã cũ, có lẽ lệch sau khi thêm iron contact-conduction mà không re-check.
+> Chưa có dữ liệu NGUỘI thật để fit định lượng — xem câu hỏi cuối file.
 
 ### Nguyên nhân gốc
 `romStep()` (~dòng 996–1035): mỗi coil là 1 node RC tuyến tính
@@ -204,6 +219,16 @@ ring cần **R = 101mm (Ø202mm)**.
 
 ## WP-D — Refactor hằng số + tích hợp + kiểm thử (agent 4, merge cuối)
 
+> **STATUS: DONE (2026-07-02).** Block `levitation:` đã thêm vào params.yaml,
+> `coil_hot_display_C` đã thêm vào `lumped_thermal:`. Python `lev_params(cfg)`
+> đọc params + `LEV_ANCHORS`/`_lev_anchor()` (deliverable của WP-C) → JS đọc
+> `PARAMS.lev.*` thay vì hardcode `Z_GAP_5A_MM`/`Z_DECAY_MM`/`ζ0`/`ζ1`/`JIT_*`;
+> `LUMPED.T_coil_hot_display_C` thay `T_COIL_HOT`. **Bug WP-C cờ lại đã được
+> sửa**: file R=101 giờ tính riêng anchor của nó thay vì dùng lại của R=80 —
+> verify: R=80 gap@5A=4.1000mm (regression giữ nguyên tuyệt đối, chưa đổi 1 bit),
+> R=101 gap@5A=0.0000mm + I_LEV_MIN=6.450A (đúng bằng số WP-C đã tính, KHÔNG còn
+> gap sai ở R101 nữa). Cả 2 file: 0 lỗi JS console (Playwright headless).
+
 ### Lý do
 Locked decision của repo: "All tunable parameters live in params.yaml. Never
 hardcode constants" — nhưng JS đang hardcode: `Z_GAP_5A_MM=4.1`,
@@ -229,6 +254,10 @@ hardcode constants" — nhưng JS đang hardcode: `Z_GAP_5A_MM=4.1`,
 
 ## Bản đồ conflict trong build_twin_html_fem.py
 
+> Lịch sử (tham khảo) — cả 4 WP đã DONE, không còn merge nào đang chờ. Trên
+> thực tế cả 4 WP chạy tuần tự trong cùng một working tree (không dùng git
+> worktree riêng như dự kiến ban đầu) nên không có conflict thật nào xảy ra.
+
 | WP | Python | JS |
 |----|--------|-----|
 | A  | — | ~1129–1170 (lev physics), ~1995–2022 (loop/telemetry) |
@@ -241,8 +270,64 @@ agent chỉ THÊM key mới (không sửa key cũ), D resolve cuối. **params.y
 B thêm vào `lumped_thermal`, C thêm vào `plate_library`, D thêm block
 `levitation` → vùng khác nhau, conflict dễ resolve.
 
-## Câu hỏi cần user trả lời (không chặn việc bắt đầu)
-1. Gap thật ở 7.75A ≈ bao nhiêu mm (hoặc mấy lần bề dày đĩa)? → refit
-   `Z_DECAY_MM` (WP-A bước 4).
-2. Lần tới ra lab: log cooldown trajectory (tắt dòng từ steady 5A, đọc IR coil
-   mỗi 60s × 20–30 phút) → fit định lượng WP-B.
+## Câu hỏi cần user trả lời (cập nhật 2026-07-02, sau khi cả 4 WP xong)
+
+Không cái nào chặn việc dùng twin hiện tại — đều là "độ chính xác", không phải
+lỗi chạy. Xếp theo mức ưu tiên.
+
+1. **[WP-A] Gap thật ở 7.75A ≈ bao nhiêu mm** (hoặc mấy lần bề dày đĩa)? Code
+   đã có chỗ điền sẵn: biến `Z_OBS_7_75A_MM` (JS, khối "Levitation gap physics")
+   — hiện `null`, điền số vào là `Z_DECAY_MM` tự refit. Hiện đang dùng
+   `z_decay_mm=21.4mm` (params.yaml `levitation:`), dự đoán gap@7.75A≈22.9mm,
+   nhưng bạn quan sát gap "chỉ nhích nhẹ" — 21.4mm nhiều khả năng quá lớn.
+
+2. **[WP-A] Mâu thuẫn số liệu trong chính kế hoạch này, CHƯA tự ý sửa**: tiêu
+   chí nghiệm thu WP-A đòi overshoot bước 5→7.75A phải <40% overshoot bước
+   0→5A — muốn vậy cần ζ(7.75A)≈0.3. Nhưng công thức vật lý ζ(I)=ζ0+ζ1·(I/5)²
+   neo tại ζ(5A)=0.02 (khớp quan sát settle ~9s) chỉ cho ra ζ(7.75A)≈0.048 —
+   KHÔNG thể đạt 0.3 nếu không phá neo 5A. Đo được: overshoot ratio thực tế là
+   91.5%, test FAIL theo tiêu chí gốc. Cần bạn quyết định: (a) nới tiêu chí
+   overshoot, (b) đổi sang luật damping dốc hơn (kém "vật lý" hơn), hay (c) chờ
+   dữ liệu dao động thật ở 7.75-8A để fit ζ cho đúng.
+
+3. **[WP-B] Chưa có dữ liệu NGUỘI thật.** `coil_G_wind_W_per_K=1.0` hiện chỉ
+   fit được từ đường NÓNG (ramp test) + mục tiêu định tính "chậm hơn nhiều" —
+   coi là order-of-magnitude. Lần tới ra lab: giữ dòng ổn định ở 5A cho tới
+   steady state, tắt dòng, đọc IR nhiệt độ coil mỗi 60s trong 20-30 phút → fit
+   định lượng `coil_G_wind_W_per_K` và `convection_exponent`.
+
+4. **[WP-C/D] Hai cách tính z0 (decay length) lệch nhau ~1.5×, đã tìm thấy khi
+   nối WP-C vào WP-D, KHÔNG tự ý chọn 1 bên**: số đang DÙNG trong file R=80
+   mặc định là `z0=21.4mm` (khớp F(1mm) và điểm cắt F=F_grav — cách tính gốc,
+   2026-07-01). WP-C tính lại bằng cách khác (khớp F(1mm) và F(5mm) trực tiếp,
+   không phụ thuộc khối lượng đĩa) ra `z0=13.6mm` cho CÙNG một đĩa R=80mm. Cả
+   hai đều "đúng" theo cách định nghĩa riêng — chênh nhau vì F(z) không phải
+   một hàm mũ sạch trên khoảng đó. R=101 hiện dùng cách tính của WP-C (13.6mm
+   kiểu). Câu hỏi: có dữ liệu đo gap thực ở nhiều mức dòng để chọn cách nào mô
+   phỏng đúng hơn không? (Câu hỏi #1 ở trên — gap@7.75A — sẽ giúp trả lời câu
+   này luôn.)
+
+5. **[WP-C] Đĩa Ø202mm KHÔNG bay ở dòng vận hành chuẩn 5A_rms** — cần
+   I_min_lev≈6.45A (thiếu ~40% lực nâng so với 2.55N trọng lượng). Đây là kết
+   quả mô phỏng, chưa kiểm chứng bằng đĩa thật. Nếu định thực sự đúc đĩa Ø202mm
+   để thử trên rig, có đáng thử không, hay giữ đĩa Ø160mm hiện tại?
+
+6. **[Nền, không riêng WP nào] Iron/separator ring (r=81-101mm) — magnet test
+   CHƯA làm.** Đang model là air (μ_r=1). Nếu ferromagnetic thật, P_plate và
+   F_z có thể đổi rất lớn (xem "μ_r SENSITIVITY TEST" trong CLAUDE.md) — ảnh
+   hưởng cả kết quả R=101 (WP-C) lẫn các số levitation hiện tại. Cần magnet test
+   thực tế trên vành ring này (giống test đã làm với center core).
+
+7. **[Nền] Đĩa nóng hơn hay cuộn dây nóng hơn?** Twin hiện dự đoán
+   T_ss(plate,5.5A)=61.7°C CAO HƠN cả cuộn dây (~59°C), nhưng dữ liệu IR nói
+   cuộn dây nóng hơn đĩa nhiều. Model đĩa (FEM, ΔT_max=27K@5A) CHƯA từng được
+   fit bằng dữ liệu thật (IR đĩa không đáng tin — đĩa nhôm bóng, ε sai). Cần đo
+   nhiệt độ đĩa bằng thermocouple tiếp xúc thật (không phải IR) để fit hệ số h
+   của đĩa.
+
+8. **[Nền, phát hiện phụ của WP-C] Độ nhạy lưới (mesh)**: làm mịn lưới EM
+   (`em_domain.fine_step_mm` 2.0→1.0mm) làm z_eq(R=80) đổi từ 4.15mm xuống
+   ~3.5mm-tương-đương (đủ để đĩa R=80 lúc đó KHÔNG bay ở 5A nữa!), và
+   I_min_lev(R=101) đổi từ 6.45A→6.9A. Tức con số "z_eq=4.1mm đã validated"
+   nhạy với lưới hơn tưởng — chưa xử lý (nằm ngoài phạm vi WP-C, liên quan tới
+   cuộc điều tra benchmark 37% đang PAUSED). Ai đó nên revisit khi có thời gian.

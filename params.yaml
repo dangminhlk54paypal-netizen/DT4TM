@@ -188,6 +188,33 @@ plate_library:
   - {name: "Al Ø202mm", radius_mm: 101.0, thickness_mm: 3.0, material: aluminium}
   - {name: "Cu Ø80mm",  radius_mm:  80.0, thickness_mm: 3.0, material: copper}
 
+# --- Levitation gap spring-mass-damper (WP-A/WP-D, docs/PLAN_SIM_FEEDBACK_2026-07-02.md) ---
+# JS reads these via PARAMS.lev (build_twin_html_fem.py lev_params()/romStep)
+# instead of hardcoding them. z_gap_5A_mm/z_decay_mm below are the DEFAULT
+# R=80mm (the physically-validated disc) anchors ONLY -- any OTHER plate radius
+# (e.g. --plate-radius 101) gets its OWN anchors recomputed via _lev_anchor()
+# instead of silently reusing these (fixes the WP-C-flagged bug where the R=101
+# build showed a nonzero gap at 5A even though that disc doesn't lift until
+# ~6.45A). See lev_params() in build_twin_html_fem.py for the radius selection.
+levitation:
+  z_gap_5A_mm: 4.1     # [mm] equilibrium gap at I=5A_rms, R=80mm (locked 2026-07-01)
+  z_decay_mm: 21.4     # [mm] EM force decay length z0, R=80mm (locked 2026-07-01 via
+                        # the F(1mm)/F_grav crossing method). WP-C's independent
+                        # F(1mm)/F(5mm) refit gives 13.6mm for the SAME disc -- the two
+                        # methods disagree ~1.5x because F(z) isn't a clean single
+                        # exponential over this range (see _lev_anchor() docstring in
+                        # build_twin_html_fem.py). OPEN QUESTION for user -- see
+                        # docs/PLAN_SIM_FEEDBACK_2026-07-02.md.
+  zeta0: 0.0            # damping ratio floor
+  zeta1: 0.02           # damping ratio grows with (I/5A)^2; zeta(5A)=0.02 matches the
+                        # observed ~9s settle time (2026-07-01). zeta(7.75A) only
+                        # reaches ~0.048 under this law -- the WP-A overshoot
+                        # acceptance target implies ~0.3 is needed; OPEN QUESTION.
+  jit_mm: 0.3           # [display-mm] max sub-liftoff shimmer amplitude
+  jit_freq1_rad_s: 27.0 # visual-only shimmer rates (incommensurate, NOT the physical 100Hz)
+  jit_freq2_rad_s: 71.0
+  z_gap_exaggeration: 2.0  # display exaggeration, matches levitating_disc.display_z_exaggeration
+
 # --- Material properties (lookup by name in plate_library) ---
 material_props:
   aluminium:
@@ -362,3 +389,7 @@ lumped_thermal:
   convection_exponent: 0.25   # NEW WP-B 2026-07-02: simplified Churchill-Chu
                                # natural-convection exponent, h ~ dT^n, applied to
                                # every coil/iron node (see note above).
+  coil_hot_display_C: 80.0    # NEW WP-D 2026-07-02: coil colour-ramp ceiling for the
+                               # HTML twin (0=T_amb, 1=this). Anchored to IR session 1's
+                               # hottest reading (inner coil 79C@7.8A). Was a JS literal
+                               # `T_COIL_HOT`; moved here so it's not hardcoded.
