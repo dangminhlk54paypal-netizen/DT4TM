@@ -348,6 +348,91 @@ P and hA). Transient RMS residual ≈3°C (same quality). Effective C_coil = 0.2
       Z_GAP_5A_MM/Z_DECAY_MM constants (WP-A/WP-D territory); the R101 HTML's
       Levitation Gap telemetry currently still shows a (wrong) nonzero gap because
       of this — expected, closes once WP-D wires PARAMS.lev per radius.
+- [x] WP-B (2026-07-02, docs/PLAN_SIM_FEEDBACK_2026-07-02.md): **realistic coil
+      cooling** (rig feedback: hot windings take much longer to cool than to heat;
+      the old single-node RC model cooled with the SAME τ it heated with, ~350s).
+      Two additions in `romStep`/`lumped_physics` (build_twin_html_fem.py) +
+      `lumped_thermal` (params.yaml), both scratch-fit (script not committed)
+      against `validation_data.thermal_ramp_test`:
+      (1) Nonlinear natural convection `h(ΔT) = hA_cal·(ΔT/dT_cal)^0.25`
+      (simplified Churchill-Chu; new `convection_exponent` param) — h stays
+      exactly hA_cal at the I_ref calibration point (`dT_cal`, baked per node
+      from a small linear steady-state solve incl. the inner↔iron contact
+      conduction), but drops as ΔT→0 during cooldown, stretching the tail.
+      (2) Two-node coil (surface + winding-core): ALL P_ref lands on the surface
+      node (unchanged ramp-test transient shape), the winding-core mass
+      ((1−coil_C_scale) of the solid-Cu mass) only exchanges heat via a NEW
+      `coil_G_wind_W_per_K=1.0` conductance — invisible while heating, keeps
+      feeding the surface long after the current is cut. `coil_C_scale` and all
+      four `hA_*`/`G_iron_cond` values are UNCHANGED (steady state provably
+      invariant to both additions — proven analytically and confirmed live:
+      T_inner_ss≈49.0-49.4°C/T_outer_ss≈47.2-47.4°C at T_amb=29°C, i.e.
+      40.5°C/38.5°C-equivalent at T_amb=20°C, matches pre-WP-B exactly).
+      **Side finding**: re-deriving the ramp-test residual found the CURRENTLY
+      DEPLOYED (pre-WP-B) single-node model actually scores RMS=6.6°C on
+      `thermal_ramp_test`, not the ~3°C previously claimed here — that claim had
+      gone stale (most likely after the iron contact-conduction node was added
+      2026-07-02 without re-checking the coil transient). The new two-node model
+      both fixes this and adds cooling realism: RMS=2.5°C on the same data.
+      Cooldown time-to-`T_air+10%ΔT` is now ~6-8× longer than the old model
+      (inner ~1700-2100s sim-time vs ~255s) — verified live via headless
+      Playwright (both `digital_twin_fem.html` R=80 and the WP-C
+      `digital_twin_fem_R101.html` variant: 0 JS errors, monotonic cooldown,
+      deep-node temperature visibly exceeds surface during cooldown confirming
+      the reservoir feeds back, no node dips below T_amb).
+      **CAVEAT** (same as coil_C_scale): no real COOLDOWN IR/thermocouple data
+      exists yet — `coil_G_wind_W_per_K` is fit only against the heating ramp
+      (which barely constrains it) plus a qualitative "much slower" cooldown
+      target, so treat both the value and the resulting τ as order-of-magnitude.
+      **NEXT** (unchanged ask, now more urgent): next lab session, log a real
+      cooldown trajectory (steady 5A → I=0, read coil IR every 60s for 20-30 min)
+      to actually fit `coil_G_wind_W_per_K` and `convection_exponent`.
+- [x] WP-A (2026-07-02, docs/PLAN_SIM_FEEDBACK_2026-07-02.md): **levitation
+      oscillation physics**, JS-only (`build_twin_html_fem.py` "Levitation gap
+      physics" block + render loop + `window.twinDebug`), no Python/geometry
+      changes. Fixes rig feedback: (a) speed slider didn't speed up the bob;
+      (b) no chatter below lift-off; (c) 5→7.75A step oscillated as hard as
+      0→5A. Changes:
+      (1) `levStep(I, dt)` now integrates the spring-mass gap with the EXACT
+      closed-form solution of the underdamped oscillator (was: wall-time-only
+      substepped Euler) — unconditionally stable for any `dt`, and the caller
+      now passes `dt_sim` (sim time) instead of `wall_dt`, so the speed slider
+      correctly scales the bob-and-settle. Verified headless: real wall-clock
+      settle time ratio between 1x and 10x speed ≈10.4x (target ~10x) — first
+      measurement attempt gave a misleadingly low ratio (~3-5x) because the
+      test's own "settled" check used a fixed wall-clock poll count, which is
+      NOT equivalent between speeds; redone against a fixed SIM-time-stable
+      window instead, confirming the fix is correct.
+      (2) Sub-lift-off jitter: amplitude ∝ (I/5)² aliased two-tone shimmer
+      (`JIT_MM`/`JIT_FREQ1`/`JIT_FREQ2`), fades out once `lev.z>0.5mm`. Verified:
+      visible at 0.5A/3A (grows with I), exactly zero at I=0.
+      (3) Damping now current-dependent: `ζ(I)=ζ0+ζ1·(I/5)²`, `ζ0=0`/`ζ1=0.02`
+      reproduces the old fixed ζ=0.02 exactly at the 5A anchor.
+      (4) `lev.z` settle vs `levGapEqMm(I)` verified exact (diff=0.00000mm) at
+      6 test currents spanning 0 to 7.75A.
+      **OPEN QUESTIONS (need user input, not blocking)**:
+      - `Z_OBS_7_75A_MM` (real gap at 7.75A, mm or "x× disc thickness") is still
+        `null` in the code — fill it in to refit `Z_DECAY_MM` (currently 21.4mm,
+        which predicts z_eq(7.75A)≈22.9mm; user reports the real gap only
+        "nudges up a little", so 21.4mm is likely too large).
+      - **Numeric inconsistency found, not silently patched**: the plan's own
+        acceptance target ("5→7.75A step overshoot <40% of the 0→5A step
+        overshoot, normalized") requires ζ(7.75A)≈0.3 — but the plan's own
+        physical model (§3, ζ∝I², anchored at ζ(5A)=0.02) can only reach
+        ζ(7.75A)≈0.048 without breaking the 5A anchor. Measured overshoot ratio
+        is 91.5%, not <40% — this test FAILS as specified. The two numbers in
+        the plan (the ζ∝I² law and the <40% target) are mutually incompatible;
+        picking one over the other is a product decision, not a bug fix. Left
+        ζ1=0.02 (physically motivated, preserves the validated 5A behaviour) and
+        documented the conflict inline in the code. Needs a decision: relax the
+        overshoot target, adopt a steeper (less physically-derived) damping law,
+        or wait for real oscillation-amplitude data at 7.75-8A to fit ζ properly.
+      **Still open (WP-D territory, unchanged by this entry)**: `Z_GAP_5A_MM`,
+      `Z_DECAY_MM`, `ζ0`/`ζ1`, `JIT_MM`/`JIT_FREQ1`/`JIT_FREQ2` are still
+      hardcoded JS literals, not yet routed through `params.yaml`/PARAMS JSON —
+      and the R101 build still uses the R=80 lift-force anchors (see WP-C entry
+      above), so its levitation telemetry is known-wrong until WP-D wires
+      `LEV_ANCHORS` per plate radius.
 
 ## Conventions
 - SI units; geometry entered in mm in params.yaml (code converts to m).
