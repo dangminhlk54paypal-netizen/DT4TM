@@ -197,9 +197,11 @@ def lumped_physics(cfg, em: dict) -> dict:
                 "hA":    float(lt["hA_outer_W_per_K"]),
             },
             "iron": {
-                "P_ref": em["P_iron_W"],
-                "C":     0.5 * C_plate,
-                "hA":    float(lt["hA_iron_W_per_K"]),
+                "P_ref":  em["P_iron_W"],
+                "C":      0.5 * C_plate,
+                "hA":     float(lt["hA_iron_W_per_K"]),
+                # contact conduction from the inner coil (fit 2026-07-02, params.yaml)
+                "G_cond": float(lt.get("G_iron_cond_W_per_K", 0.0)),
             },
         },
         "air_node": {
@@ -490,8 +492,9 @@ def build(stl_path: str | None, out_path: str) -> None:
     z_coil_bot  = z_base              # coil assembly starts at 8 mm
     z_coil_top  = z_base + coil_h    # 8 + 52 = 60 mm
 
-    # Disc: gap from params.yaml (plate_material.z_bottom_mm = gap above coil top)
-    z_disc_bot = z_coil_top + float(cfg.raw["plate_material"].get("z_bottom_mm", 3.8))
+    # Disc: sits directly on the coil top in the baked geometry — the levitation
+    # gap is added at RUNTIME (JS lev.z * Z_GAP_EXAG), not baked into the mesh.
+    z_disc_bot = z_coil_top
 
     # Radii from params.yaml
     r_core  = float(cfg.iron.get("r_outer_mm", 25.0))          # center core outer = 25 mm
@@ -500,28 +503,32 @@ def build(stl_path: str | None, out_path: str) -> None:
     r_o_in  = float(cfg.coils["outer"]["r_inner_mm"])           # 104 mm
     r_o_out = float(cfg.coils["outer"]["r_outer_mm"])           # 124 mm
 
-    # Outer plywood frame dimensions
-    r_frame_in  = r_o_out + 6.0       # snug air gap beyond outer coil: ~130 mm
-    r_frame_out = 165.0               # STL outer extent ≈ Ø340 mm → r ≈ 165 mm
+    # Outer plywood frame dimensions — the real outer coil stands FREE with ~50mm
+    # of air before the octagonal frame walls (user-verified vs docs/real_model.png)
+    frm = cfg.raw.get("device_frame", {})
+    r_frame_in  = r_o_out + float(frm.get("air_gap_mm", 50.0))            # 124+50 = 174 mm
+    r_frame_out = r_frame_in + float(frm.get("wall_thickness_mm", 20.0))  # 194 mm
 
     print("[BODY] Building procedural device geometry from params.yaml:")
 
-    # Center core: solid cylinder r=0..25mm (confirmed non-ferromagnetic, ceramic/Al₂O₃)
+    # Center core: solid cylinder r=0..25mm (material under review: magnet test 2026-07-01
+    # said non-ferromagnetic, user visual says ferro — EM keeps mu_r=1 pending re-test)
     V_core = build_solid_core(r_core, z_coil_bot, z_coil_top, n_theta)
     print(f"   center core  : {len(V_core):5d} tris  r=0..{r_core:.0f}mm  z={z_coil_bot:.0f}..{z_coil_top:.0f}mm")
 
-    # Gap filler core→inner coil: r=25..28mm (visually fills 3mm air pocket, inner-coil material)
-    V_coregap = revolve_ring(r_core, r_i_in, z_coil_bot, z_coil_top, n_theta)
-    print(f"   core→inner   : {len(V_coregap):5d} tris  r={r_core:.0f}..{r_i_in:.0f}mm (seamless fill)")
+    # r=25..28mm is a REAL ~3mm air gap between core and inner coil — left empty
+    # (user-verified vs docs/real_model.png; both walls are closed solids either side)
 
     # Inner coil: full solid toroid r=28..78mm, 1000 turns, dark varnished copper
     V_inner = revolve_ring(r_i_in, r_i_out, z_coil_bot, z_coil_top, n_theta)
     print(f"   inner coil   : {len(V_inner):5d} tris  r={r_i_in:.0f}..{r_i_out:.0f}mm (1000T solid toroid)")
 
-    # Separator ring: fills ENTIRE gap r=78..104mm (absorbs air gaps 78-81 and 101-104mm
-    # so device looks tightly packed — no visible voids between coil and iron ring)
-    V_sep = revolve_ring(r_i_out, r_o_in, z_coil_bot, z_coil_top, n_theta)
-    print(f"   separator    : {len(V_sep):5d} tris  r={r_i_out:.0f}..{r_o_in:.0f}mm (iron ring + air)")
+    # Separator ring: ONLY the real ring r=81..101mm (outer_iron_ring in params.yaml).
+    # The air gaps 78..81 and 101..104mm are REAL voids on the device — left empty.
+    oir = cfg.raw["outer_iron_ring"]
+    r_ring_in, r_ring_out = float(oir["r_inner_mm"]), float(oir["r_outer_mm"])
+    V_sep = revolve_ring(r_ring_in, r_ring_out, z_coil_bot, z_coil_top, n_theta)
+    print(f"   separator    : {len(V_sep):5d} tris  r={r_ring_in:.0f}..{r_ring_out:.0f}mm (iron ring; air gaps either side)")
 
     # Outer coil: full solid toroid r=104..124mm, 500 turns, dark varnished copper
     V_outer = revolve_ring(r_o_in, r_o_out, z_coil_bot, z_coil_top, n_theta)
@@ -535,11 +542,10 @@ def build(stl_path: str | None, out_path: str) -> None:
     V_wood  = np.concatenate([V_floor, V_walls], axis=0)
     print(f"   wood frame   : {len(V_wood):5d} tris  8-sided octagon r={r_frame_in:.0f}..{r_frame_out:.0f}mm")
 
-    # Assemble all non-disc parts
-    V_base   = np.concatenate([V_core, V_coregap, V_inner, V_sep, V_outer, V_wood], axis=0)
+    # Assemble all non-disc parts (air gaps 25-28 / 78-81 / 101-104 / 124-174mm stay empty)
+    V_base   = np.concatenate([V_core, V_inner, V_sep, V_outer, V_wood], axis=0)
     reg_base = np.concatenate([
-        np.full(len(V_core),    3, dtype=np.uint8),  # center core (ceramic)
-        np.full(len(V_coregap), 1, dtype=np.uint8),  # gap filler (inner coil material)
+        np.full(len(V_core),    3, dtype=np.uint8),  # center core
         np.full(len(V_inner),   1, dtype=np.uint8),  # inner coil 1000T
         np.full(len(V_sep),     5, dtype=np.uint8),  # separator / iron ring
         np.full(len(V_outer),   2, dtype=np.uint8),  # outer coil 500T
@@ -901,9 +907,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 // ── Baked data ────────────────────────────────────────────────────────────────
 const PARAMS = __PARAMS__;
 const ROM    = PARAMS.rom;    // T_amb tau I_ref dT_mean_ref dT_max_ref alpha P_ref UA + I_em_ref/B_max/J_max
@@ -1000,10 +1003,16 @@ function romStep(I, dt) {
   //     drive below reads this step's coil temperature (the source of inertia).
   //     Each body convects into the SHARED LOCAL air node (sim.T.air), not the
   //     far field — they heat up a common pocket of air around themselves.
+  // Contact conduction inner coil → iron/core-separator: the passive metal parts
+  // physically touch the coil and heat mainly through that contact (real IR:
+  // core reaches ~45°C at 7.8A steady), not through the air pocket.
+  const q_cond = (LUMPED.nodes.iron.G_cond || 0) * (sim.T.inner - sim.T.iron);
   let Qconv = 0.0;
   for (const k in LUMPED.nodes) {
     const nd = LUMPED.nodes[k];
-    const q   = nd.P_ref * s2;
+    let q = nd.P_ref * s2;
+    if (k === 'iron')  q += q_cond;      // gains from the coil contact
+    if (k === 'inner') q -= q_cond;      // energy conservation (≪ P_inner, ~0.6W)
     const out = nd.hA * (sim.T[k] - sim.T.air);   // convect into local air
     sim.T[k] += (q - out) / nd.C * dt;
     Qconv += out;
@@ -1067,10 +1076,11 @@ function ramp1(t) {
 const STRUCT_RGB = [160/255, 100/255, 55/255];   // wood base (plywood housing)
 const METAL_RGB  = [170/255, 175/255, 185/255];  // passive white-grey metal
 
-// Copper/varnish ramp: dark brownish-red at cold → bright orange-yellow at hot.
-// More physically realistic than blue→red scientific ramp for varnished copper wire.
-const COPPER_COLD = [0.52, 0.18, 0.07];   // dark lacquer over copper wire (cold)
-const COPPER_HOT  = [1.00, 0.72, 0.14];   // incandescent orange-yellow (very hot)
+// Copper/varnish ramp: dark chocolate-brown lacquer at cold → warm ember orange at hot.
+// Matched to docs/real_model.png — the real windings read as a solid dark-brown
+// varnished mass, not saturated red (previous values looked like glowing plastic).
+const COPPER_COLD = [0.30, 0.14, 0.08];   // dark varnish/rosin over copper wire (cold)
+const COPPER_HOT  = [0.93, 0.55, 0.16];   // warm ember orange (hot, still believable)
 function writeRampCopper(col, idx, tnorm) {
   const t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
   col[idx]   = COPPER_COLD[0] + (COPPER_HOT[0] - COPPER_COLD[0]) * t;
@@ -1083,7 +1093,10 @@ function writeRampCopper(col, idx, tnorm) {
 const METAL_COLD = [0.70, 0.72, 0.75];   // brushed aluminum / gray ceramic
 const METAL_HOT  = [0.95, 0.62, 0.18];   // warm orange glow (45°C looks subtle)
 function writeRampMetal(col, idx, tnorm) {
-  const t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  t = Math.sqrt(t);   // perceptual boost: passive parts peak at ~1/3 of the coil
+                       // scale (steady ratio ≈0.32) — sqrt lifts that to a clearly
+                       // visible warm shift while keeping 0→0 and 1→1 fixed.
   col[idx]   = METAL_COLD[0] + (METAL_HOT[0] - METAL_COLD[0]) * t;
   col[idx+1] = METAL_COLD[1] + (METAL_HOT[1] - METAL_COLD[1]) * t;
   col[idx+2] = METAL_COLD[2] + (METAL_HOT[2] - METAL_COLD[2]) * t;
@@ -1109,17 +1122,45 @@ let fieldLineOpacityPct = 0.70;
 const regionKey = {1:'inner', 2:'outer', 3:'iron'};
 
 // ── Levitation gap physics ────────────────────────────────────────────────────
-// At equilibrium: EM force F_z ∝ I²/z² = F_grav  →  z_eq ∝ I.
-// Calibrated from rig: I_ref=5A → z_eq=4.1mm (CLAUDE.md 2026-07-01).
-// I_lev_min = 5A × √(F_grav/F_z_max) = 5×√(1.60/1.85) ≈ 4.64A.
-const I_LEV_MIN   = 4.64;   // [A] minimum current to levitate
-const Z_GAP_5A_MM = 4.1;    // [mm] physical gap at I=5A, z_eq
-const Z_GAP_EXAG  = 8.0;    // display exaggeration factor — raised so 4.1mm gap at 5A
-                             // maps to ~33 display-mm (≈ half the plate thickness of 3mm
-                             // scaled the same way), giving a clearly visible gap lift.
+// The EM lift force decays ~exponentially with gap height z:
+//   F(I,z) = (I/5A)² · F1 · e^{−(z−z1)/z0}
+// Anchored on the EM solve (CLAUDE.md 2026-07-01): F(5A, z=1mm)=1.85N and the
+// observed equilibrium F(5A, z_eq=4.1mm) = F_grav = 1.60N (163g disc), giving a
+// decay length z0 = (4.1−1)/ln(1.85/1.60) ≈ 21.4mm. Solving F = F_grav for z:
+//   z_eq(I) = Z_GAP_5A_MM + 2·z0·ln(I/5)   (clamped at 0)
+// → CONTINUOUS lift-off at I_min = 5·e^{−4.1/(2·z0)} ≈ 4.54A: the gap grows
+// smoothly from 0 (no jump), passes 4.1mm at 5A, reaches ≈18.5mm at 7A.
+const Z_GAP_5A_MM = 4.1;    // [mm] equilibrium gap at I=5A
+const Z_DECAY_MM  = 21.4;   // [mm] EM force decay length z0 (from the two EM anchors)
+const I_LEV_MIN   = 5.0 * Math.exp(-Z_GAP_5A_MM / (2 * Z_DECAY_MM));  // ≈4.54A lift-off
+const Z_GAP_EXAG  = 2.0;    // display exaggeration factor — SAME as display_z_exaggeration
+                             // used for the disc thickness (params.yaml), so every z-axis
+                             // dimension of the disc scales consistently (4.1mm@5A -> 8.2 display-mm).
 
-function levGapPhysMm(I) {
-  return I >= I_LEV_MIN ? Z_GAP_5A_MM * (I / 5.0) : 0.0;
+function levGapEqMm(I) {
+  if (I <= I_LEV_MIN) return 0.0;
+  return Z_GAP_5A_MM + 2 * Z_DECAY_MM * Math.log(I / 5.0);
+}
+
+// Disc vertical dynamics: m·z̈ = F(I,z) − mg − damping. Linearised about the
+// equilibrium this is an underdamped oscillator with ω = √(g/z0) ≈ 21 rad/s and
+// very low damping — the real disc visibly bobs for ~10s after a current step
+// before settling (user observation 2026-07-01). Integrated in WALL time: it is
+// a mechanical motion watched live, unlike the (speed-scaled) thermal sim.
+const LEV_OMEGA = Math.sqrt(9.81 / (Z_DECAY_MM * 1e-3));  // ≈21.4 rad/s
+const LEV_ZETA  = 0.02;                                    // settle ≈ 4/(ζω) ≈ 9s
+const lev = {z: 0.0, v: 0.0};   // gap [mm], velocity [mm/s] — starts resting
+function levStep(I, dt) {
+  const zt = levGapEqMm(I);
+  const n = Math.max(1, Math.ceil(dt / 0.01));  // semi-implicit Euler, h ≤ 10ms
+  const h = dt / n;
+  for (let i = 0; i < n; i++) {
+    if (zt <= 0 && lev.z <= 0) { lev.z = 0; lev.v = 0; break; }  // resting on coil
+    const a = LEV_OMEGA * LEV_OMEGA * (zt - lev.z) - 2 * LEV_ZETA * LEV_OMEGA * lev.v;
+    lev.v += a * h;
+    lev.z += lev.v * h;
+    if (lev.z < 0) { lev.z = 0; if (lev.v < 0) lev.v = 0; }      // floor contact
+  }
 }
 
 // ── Three.js scene ────────────────────────────────────────────────────────────
@@ -1147,14 +1188,6 @@ labelRenderer.setSize(innerWidth, innerHeight);
 labelRenderer.domElement.style.cssText = 'position:absolute;top:0;left:0;z-index:1;pointer-events:none;';
 document.body.appendChild(labelRenderer.domElement);
 
-// Bloom postprocessing — strength is driven by whether current is flowing
-// (see loop(): bloomPass.strength set from I_display), giving the coils a
-// gentle glow only while they are actually being driven.
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.0, 0.45, 0.85);
-composer.addPass(bloomPass);
-
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.dampingFactor = 0.08;
 document.querySelectorAll('.panel, #headerBar').forEach(p => {
@@ -1181,7 +1214,7 @@ function buildSub(keepFn) {
   return {pos: new Float32Array(P), reg: new Uint8Array(G),
           dT: new Float32Array(DT), dTa: new Float32Array(DTA), je: new Float32Array(JE)};
 }
-function makeMesh(sub, roughness=0.45, metalness=0.65) {
+function makeMesh(sub, roughness=0.45, metalness=0.65, envInt=0.8) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(sub.pos, 3));
   g.computeVertexNormals();
@@ -1189,7 +1222,7 @@ function makeMesh(sub, roughness=0.45, metalness=0.65) {
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   const m = new THREE.Mesh(g,
     new THREE.MeshStandardMaterial({vertexColors:true, roughness, metalness,
-                                    envMapIntensity:0.8, side:THREE.DoubleSide}));
+                                    envMapIntensity:envInt, side:THREE.DoubleSide}));
   return {mesh:m, geo:g, reg:sub.reg, dT:sub.dT, dTa:sub.dTa, je:sub.je, col};
 }
 
@@ -1200,10 +1233,15 @@ function discVtxT(M, vi) {
   return T_AMB_JS + ROM.f_eddy * sim.beta_eddy * M.dT[vi]
                   + ROM.f_air  * sim.beta_air  * M.dTa[vi];
 }
-// Split base into metallic parts (coils, core, separator — shiny) and wood frame (matte).
-const baseM  = makeMesh(buildSub(r => r !== 0 && r !== 4), 0.42, 0.68);  // metallic
-const woodM  = makeMesh(buildSub(r => r === 4), 0.88, 0.02);              // plywood — rough, no metalness
-const plateM = makeMesh(buildSub(r => r === 0), 0.35, 0.75);              // aluminium disc
+// Split base into passive metal (core, separator), varnished coil windings,
+// wood frame and aluminium disc — each with its own PBR material.
+// Matte, non-reflective materials for the body — only the aluminium disc is a
+// real polished metal. Low envMapIntensity + no bloom avoids the "everything is
+// glossy chrome under studio lights" look reported against docs/real_model.png.
+const baseM  = makeMesh(buildSub(r => r === 3 || r === 5), 0.60, 0.30, 0.25); // core + separator — dull metal/oxide
+const coilM  = makeMesh(buildSub(r => r === 1 || r === 2), 0.80, 0.05, 0.15); // coils — matte varnish/insulation, absorbs light
+const woodM  = makeMesh(buildSub(r => r === 4), 0.90, 0.00, 0.05);           // plywood
+const plateM = makeMesh(buildSub(r => r === 0), 0.45, 0.65, 0.45);           // aluminium disc — real metal, toned down
 
 // Live min/max of the disc temperature field (radial + top/bottom gradient).
 // Recomputed each frame because the field SHAPE changes over time (β_eddy vs β_air).
@@ -1227,16 +1265,16 @@ const bb = new THREE.Box3();
 const ctr  = new THREE.Vector3(); bb.getCenter(ctr);
 const size = bb.getSize(new THREE.Vector3()).length();
 const modelH  = bb.max.y - bb.min.y;
-const LIFT_BASE = modelH * 0.20;   // base offset: disc sits visually above the coil top
 
-function levLiftY(I) {
-  return LIFT_BASE + levGapPhysMm(I) * Z_GAP_EXAG;
+function levLiftY() {
+  return lev.z * Z_GAP_EXAG;   // follows the live spring-mass state; disc sits on coil top at lev.z=0
 }
 
 baseM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
+coilM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
 woodM.mesh.position.set(-ctr.x, -ctr.y, -ctr.z);
-plateM.mesh.position.set(-ctr.x, -ctr.y + levLiftY(targetI), -ctr.z);
-scene.add(baseM.mesh, woodM.mesh, plateM.mesh);
+plateM.mesh.position.set(-ctr.x, -ctr.y + levLiftY(), -ctr.z);
+scene.add(baseM.mesh, coilM.mesh, woodM.mesh, plateM.mesh);
 
 // Field-line hints (blue arcs bridging coil rim → plate)
 const rRim = Math.min(size * 0.18, 90);
@@ -1245,7 +1283,7 @@ const gapTop = bb.max.y - ctr.y;
 const flPts = [];
 for (let a = 0; a < 12; a++) {
   const th = a / 12 * Math.PI * 2, x = Math.cos(th)*rRim, z = Math.sin(th)*rRim;
-  flPts.push(x, gapBot, z,  x, gapTop + LIFT_BASE * 0.9, z);
+  flPts.push(x, gapBot, z,  x, gapTop + modelH * 0.10, z);
 }
 const flGeo = new THREE.BufferGeometry();
 flGeo.setAttribute('position', new THREE.Float32BufferAttribute(flPts, 3));
@@ -1312,14 +1350,19 @@ function updateVizVisibility() {
   fieldLineGroup.visible = (vizMode === 'bfield' || vizMode === 'combined');
 }
 updateVizVisibility();
-const FIELD_LINE_FLOW_SPEED = size * 0.05;   // world units/s — dash "flow" pulse, runs on wall clock
+const FIELD_LINE_FLOW_SPEED = size * 0.05;   // world units/s — dash "flow" pulse at I_em_ref
+let flFlowPhase = 0;   // accumulated dash offset — advances with I so speed changes don't jump
 
 // Frame the levitating disc + coils in the clear lower area (UI panels cover the
 // top). Aim above the device centre so the whole assembly drops into the lower
 // half of the viewport, and pull back enough to keep the disc fully visible.
-const plateTopY = (bb.max.y - ctr.y) + levLiftY(targetI);  // top of the lifted disc
+// Frame the camera on where the disc will SETTLE at the initial current (the live
+// spring state starts at z=0, so use the equilibrium gap, not levLiftY()).
+const plateTopY = (bb.max.y - ctr.y) + levGapEqMm(targetI) * Z_GAP_EXAG;
 camera.position.set(size*0.70, size*0.42, size*0.70);
 controls.target.set(0, plateTopY*0.55, 0); controls.update();
+// Exposed for headless (Playwright) verification — lets tests reposition the view.
+window.twinDebug = {camera, controls, size, plateM, coilM, ctr, scene, get lev() { return lev; }, get sim() { return sim; }};
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 const dl = new THREE.DirectionalLight(0xffffff, 0.7);
 dl.position.set(1, 1.5, 0.8); scene.add(dl);
@@ -1352,10 +1395,10 @@ function addLabel(text, pos, cls) {
 }
 const plateCentroid = regionCentroid(0);
 const plateLabelObj = addLabel('Aluminium Plate',
-  new THREE.Vector3(plateCentroid.x, plateCentroid.y + levLiftY(targetI) + size*0.05, plateCentroid.z));
+  new THREE.Vector3(plateCentroid.x, plateCentroid.y + levLiftY() + size*0.05, plateCentroid.z));
 addLabel('Inner Coil (1000 turns)', regionCentroid(1));
 addLabel('Outer Coil (500 turns)',  regionCentroid(2));
-addLabel('Center Core (ceramic)', regionCentroid(3), 'iron');
+addLabel('Center Core', regionCentroid(3), 'iron');
 addLabel('Separator Ring', regionCentroid(5), 'iron');
 
 // ── Heat particles — faint glowing motes rising from the coils, shown only
@@ -1389,7 +1432,7 @@ const particles = new THREE.Points(particleGeo, new THREE.PointsMaterial({
 particles.position.set(-ctr.x, -ctr.y, -ctr.z);
 particles.visible = false;
 scene.add(particles);
-const particleTopY = gapTop + LIFT_BASE * 0.9;
+const particleTopY = gapTop + modelH * 0.10;
 function updateHeatParticles(dt) {
   const hot = Math.max(sim.T.inner, sim.T.outer, sim.T.iron) - ROM.T_amb > 2.0;
   particles.visible = hot;
@@ -1410,16 +1453,22 @@ const TRANGE = T_COLOR_HI - T_COLOR_LO;
 let colorScaleMode = 'auto';
 function paintMesh(M) {
   const col = M.col;
-  // Per-region tnorm for coils/iron — relative scale: 0 = T_amb, 1 = coil's own T_ss(I).
-  // This gives a clearly visible colour transition even at modest currents, because the
-  // colour ramp is stretched between "cold" and "fully warm for this I" rather than a
-  // fixed 29–125°C absolute scale.
-  const I_cur = getI();
-  const dT_inner_ss = Math.max(0.5, coilTss_inner(I_cur) - T_AMB_JS);
-  const dT_outer_ss = Math.max(0.5, coilTss_outer(I_cur) - T_AMB_JS);
-  const tnInner = (sim.T.inner - T_AMB_JS) / dT_inner_ss;
-  const tnOuter = (sim.T.outer - T_AMB_JS) / dT_outer_ss;
-  const tnIron  = (sim.T.iron  - T_COLOR_LO) / TRANGE;
+  // Per-region tnorm for coils/iron — ABSOLUTE scale: 0 = T_amb, 1 = T_COIL_HOT.
+  // Anchored to the real IR data (session 1, 2026-06-23): inner coil hit 79°C @7.8A,
+  // the hottest reading ever measured. Colour only changes when the actual
+  // temperature changes — NOT when I changes (a prior *relative* scale divided by
+  // I-dependent T_ss(I), so bumping I made the coil "cool" instantly and steady
+  // state always painted full-hot regardless of I — both wrong).
+  const T_COIL_HOT = 80.0;   // [°C] colour-ramp ceiling for coils
+  const dT_hot = T_COIL_HOT - T_AMB_JS;
+  const tnInner = (sim.T.inner - T_AMB_JS) / dT_hot;
+  const tnOuter = (sim.T.outer - T_AMB_JS) / dT_hot;
+  // Core/separator: same absolute scale as the coils, then a visual boost — the
+  // real core/ring only reach ~45°C @7.8A (tnorm ≈0.31 on this scale), which would
+  // look nearly frozen silver. 1.8x lifts that to a clearly visible warm-metal
+  // shift while keeping writeRampMetal's own clamp to [0,1]; matches the real IR
+  // image (docs/thermal_test.png): coils bright, ring/core moderately warm.
+  const tnIron  = (sim.T.iron - T_AMB_JS) / dT_hot * 1.8;
   const tnByReg = [0, tnInner, tnOuter, tnIron];
   // Disc relative scale: blue = coolest part of plate (top rim), red = hottest
   // (bottom centre). Only stretch once the in-plate spread is physically meaningful
@@ -1843,13 +1892,16 @@ function loop() {
 
   // Paint meshes
   paintMesh(baseM);
+  paintMesh(coilM);
   paintMesh(woodM);
   paintMesh(plateM);
   updateScaleBar();
 
-  // Update disc Z position (levitation gap tracks current I)
+  // Update disc Z position — spring-mass response toward z_eq(I): the disc bobs
+  // for ~10s after a current step, then settles (matches the real rig behaviour).
   const I_display = getI();
-  const liftY = levLiftY(I_display);
+  if (!paused) levStep(I_display, wall_dt);
+  const liftY = levLiftY();
   plateM.mesh.position.y = -ctr.y + liftY;
   plateLabelObj.position.y = plateCentroid.y + liftY + size * 0.05;
 
@@ -1870,9 +1922,9 @@ function loop() {
   document.getElementById('vPdisc').textContent = P_disc.toFixed(2) + ' W';
   document.getElementById('vPcoil').textContent = P_coil_now.toFixed(1) + ' W';
 
-  const gapMm = levGapPhysMm(I_display);
+  // Live gap = the spring-mass state, so telemetry shows the bob-and-settle too.
   document.getElementById('tLevGap').textContent =
-    I_display >= I_LEV_MIN ? 'Levitation Gap: '+gapMm.toFixed(1)+' mm' : 'Levitation Gap: 0.0 mm';
+    'Levitation Gap: ' + lev.z.toFixed(1) + ' mm';
   document.getElementById('tPmax').textContent  = Tmax.toFixed(2)+' °C';
   setV('tPmean', Tmean); setV('tPss', Tss);
   setV('tIn',  sim.T.inner); setV('tOut', sim.T.outer); setV('tFe',  sim.T.iron);
@@ -1889,28 +1941,28 @@ function loop() {
   document.getElementById('tBplate').textContent = (ROM.B_max * emScale).toFixed(3) + ' T';
   document.getElementById('tJmax').textContent = (ROM.J_max * emScale * 1e-6).toFixed(3) + ' A/mm²';
 
-  // Field-line "flow" pulse — always animates on the wall clock, independent of
-  // sim pause/speed (purely a visual flow cue, not tied to any physics quantity).
+  // Field-line "flow" pulse + opacity, tied to I_display: the FIELD SHAPE is static
+  // (linear problem — geometry doesn't change with I), but flow speed and brightness
+  // scale with |I|/I_em_ref so B=0 reads as still+invisible and higher I flows faster.
   if (fieldLineGroup.visible) {
-    const dashOffset = -(now / 1000) * FIELD_LINE_FLOW_SPEED;
-    for (const o of fieldLineMats) o.mat.dashOffset = dashOffset;
+    const iFrac = Math.min(2.0, Math.abs(emScale));   // 0->0A, 1->I_em_ref, capped at 2x
+    flFlowPhase += wall_dt * FIELD_LINE_FLOW_SPEED * iFrac;
+    for (const o of fieldLineMats) {
+      o.mat.dashOffset = -flFlowPhase;
+      o.mat.opacity = fieldLineOpacityPct * (0.15 + 0.85 * o.amp) * Math.min(1, iFrac);
+    }
   }
-
-  // Bloom glow tied to whether current is actually flowing — gentle "active coil"
-  // cue rather than a constant stylistic effect.
-  bloomPass.strength = I_display > 0.01 ? 0.42 : 0.0;
 
   drawChart();
   drawCurrentChart();
   controls.update();
-  composer.render();
+  renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
 }
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   labelRenderer.setSize(innerWidth, innerHeight);
-  composer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 });

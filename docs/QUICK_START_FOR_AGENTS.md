@@ -85,9 +85,25 @@
 ### HTML Twin (build_twin_html_fem.py)
 1. No JS errors in headless Playwright test
 2. Color: center core + separator ring use writeRampMetal() (silver→warm orange); coils use writeRampCopper() (dark red-brown→orange-yellow)
-3. Levitation gap z_eq driven by I (z_eq=4.1mm @ 5A)
+3. Levitation gap: z_eq(I)=4.1+2·21.4·ln(I/5) mm — LIÊN TỤC từ lift-off ≈4.54A
+   (4.1mm @5A, ≈18.5mm @7A), kèm spring-mass dynamics (đĩa dao động ~9s rồi lắng).
+   Display: `Z_GAP_EXAG=2.0` (SAME hệ số zex như độ dày đĩa) — gap KHÔNG còn bake
+   vào geometry Python (`z_disc_bot = z_coil_top`, đĩa ngồi ngay trên coil top);
+   toàn bộ gap hiển thị = `lev.z * 2.0` cộng ở runtime (JS `levLiftY()`).
 4. Time history: inner/outer coil temps + plate T_max plotted live
 5. Geometry 100% procedural from params.yaml — STL NOT used for body (see "3D body geometry" section below)
+6. Geometry đã khớp thiết bị thật từ 2026-07-01 session 4 (khung gỗ r=174..194,
+   air gaps để trống, coil màu vecni nâu sậm) — chi tiết trong section 3D Body
+   Geometry bên dưới
+7. **4 render fixes (2026-07-02)**: (a) gap display — xem mục 3 ở trên; (b) B-field
+   lines giờ phản ứng với I: opacity + tốc độ dash flow scale theo `emScale =
+   I_display/I_em_ref` (0 khi I=0, nhanh/đậm hơn khi I tăng, geometry hình dạng vẫn
+   TĨNH vì bài toán tuyến tính); (c) màu coil chuyển sang thang TUYỆT ĐỐI cố định
+   `T_COIL_HOT=80°C` (neo theo IR session 1: inner coil 79°C@7.8A) thay vì chia cho
+   T_ss(I) — trước đây tăng I làm màu "nguội" tức thời; core/separator dùng cùng
+   thang ×1.8 boost; (d) bỏ hẳn bloom (`EffectComposer`/`UnrealBloomPass` removed,
+   `renderer.render()` trực tiếp) + vật liệu lì hơn cho coil/core/wood
+   (`envMapIntensity` 0.8→0.15-0.25, chỉ đĩa nhôm giữ metallic 0.45).
 
 ---
 
@@ -125,45 +141,89 @@ data_io.py (sensor CSV → calibrate_UA)
 
 ---
 
-## 3D Body Geometry trong digital_twin_fem.html (updated 2026-07-01 session 3)
+## 3D Body Geometry trong digital_twin_fem.html (updated 2026-07-01 session 3; corrected same day theo quan sát mô hình thật)
 
 **Tất cả geometry được xây dựng PROCEDURALLY từ params.yaml — STL file chỉ dùng tham khảo hình dáng.**
+
+### GROUND TRUTH — mặt cắt bán kính của thiết bị thật (user xác nhận 2026-07-01, xem docs/real_model.png)
+Đây là cấu trúc VẬT LÝ THẬT. Mọi geometry/render phải khớp với bảng này — các AIR GAP
+là khe hở KHÔNG KHÍ thật, có chiều sâu, KHÔNG được lấp bằng vật liệu rắn:
+```
+r =   0..25    lõi trung tâm — SẮT TỪ (user xác nhận trực quan; xem note conflict bên dưới)
+r =  25..28    AIR GAP ~2–3mm (khe hở thật giữa lõi và inner coil)
+r =  28..78    INNER COIL, 1000 vòng — dây đồng + lớp keo/nhựa thông cách điện màu nâu sậm
+r =  78..81    AIR GAP ~3–3.5mm
+r =  81..101   SEPARATOR / IRON RING — sắt từ (user xác nhận trực quan; magnet test PENDING)
+r = 101..104   AIR GAP ~2mm
+r = 104..124   OUTER COIL, 500 vòng — cấu tạo giống inner coil
+r = 124..~174  AIR ~50mm — outer coil đứng HOÀN TOÀN ĐỘC LẬP, vách ngoài tiếp xúc không khí
+r = ~174+      khung gỗ plywood BÁT GIÁC (8 cạnh) — KHÔNG ôm sát coil
+```
+**Note conflict (chưa giải quyết):** CLAUDE.md ghi magnet-contact test 2026-07-01 cho
+lõi trung tâm = KHÔNG hút nam châm → non-ferromagnetic (`iron_core.mu_r=1.0` trong
+params.yaml). Nhưng user mô tả trực quan lõi là "sắt từ". Separator ring cũng vậy:
+user nói sắt từ nhưng params.yaml đang model là air (mu_r=1.0, magnet test pending).
+Nếu xác nhận ferromagnetic → set mu_r=100–1000 và RE-RUN EM (kết quả lực/loss sẽ đổi).
 
 ### Coordinate System (Z-up, mm)
 ```
 z = 0         → sàn (đáy tấm gỗ)
 z = 8         → đáy cụm cuộn dây (coil assembly bottom)
 z = 60        → đỉnh cụm cuộn dây (coil assembly top)
-z = 63.8      → đáy đĩa nhôm levitating (z_coil_top + 3.8mm gap)
-z = 63.8+zex  → đỉnh đĩa (zex = thickness × display_z_exaggeration từ params)
+z = 60        → đáy đĩa nhôm trong BAKED geometry (= z_coil_top, KHÔNG bake gap —
+                fixed 2026-07-02; gap vật lý được cộng ở JS runtime qua lev.z*2.0)
+z = 60+zex    → đỉnh đĩa lúc nghỉ (zex = thickness × display_z_exaggeration từ params)
 ```
 
-### Region Labels (reg) — JavaScript coloring và Three.js mesh
+### Region Labels (reg) — theo thiết bị thật (code đã khớp từ 2026-07-01 session 4)
 | reg | Phần | Material | r_in..r_out (mm) | z (mm) | Three.js mesh | Màu nhiệt |
 |-----|------|----------|-----------------|--------|---------------|-----------|
-| 0 | Levitating disc (đĩa nhôm) | Aluminium | 0..80 | 63.8..top | `plateM` | FEM vertex field (writeRamp) |
-| 1 | Inner coil + gap-filler | Copper wire | 25..78 | 8..60 | `baseM` | writeRampCopper (dark red-brown→orange-yellow) |
-| 2 | Outer coil | Copper wire | 104..124 | 8..60 | `baseM` | writeRampCopper |
-| 3 | Center core (lõi giữa) | Ceramic/Al₂O₃ | 0..25 | 8..60 | `baseM` | writeRampMetal (silver-gray→warm orange) |
-| 4 | Plywood octagonal frame | Wood | 130..165 | 0..60 | `woodM` | Flat brown (WOOD_RGB, static) |
-| 5 | Separator / iron ring | Passive metal | 78..104 | 8..60 | `baseM` | writeRampMetal |
+| 0 | Levitating disc (đĩa nhôm) | Aluminium | 0..80 | 60..top (baked; gap runtime) | `plateM` | FEM vertex field (writeRamp) |
+| 1 | Inner coil (1000T) | Đồng + keo cách điện nâu sậm | 28..78 | 8..60 | `coilM` | writeRampCopper |
+| 2 | Outer coil (500T) | Đồng + keo cách điện nâu sậm | 104..124 | 8..60 | `coilM` | writeRampCopper |
+| 3 | Center core (lõi giữa) | Sắt từ (per user; model hiện mu_r=1.0) | 0..25 | 8..60 | `baseM` | writeRampMetal |
+| 4 | Plywood octagonal frame | Wood | 174..194 (từ `device_frame` trong params.yaml) | 0..60 | `woodM` | Flat brown (WOOD_RGB, static) |
+| 5 | Separator / iron ring | Sắt từ (per user; magnet test pending) | 81..101 | 8..60 | `baseM` | writeRampMetal |
+| — | Air gaps (KHÔNG mesh, để trống) | Air | 25..28, 78..81, 101..104, 124..174 | — | — | — |
 
-### Three.js Mesh Split (materials)
+### ✅ 3 sai lệch render đã FIX (2026-07-01 session 4)
+User đối chiếu render với mô hình thật (real_model.png) và chỉ ra 3 lỗi; đã sửa
+trong build_twin_html_fem.py, verify bằng headless Playwright (0 JS errors):
+1. **Khung gỗ ôm sát coil** — TRƯỚC: `r_frame_in = r_o_out + 6.0` ≈ 130mm, nuốt mất
+   ~50mm không khí. SAU: đọc từ block `device_frame` trong params.yaml
+   (air_gap_mm=50, wall_thickness_mm=20) → frame r=174..194mm, outer coil đứng độc lập.
+2. **Air gaps bị lấp đặc** — TRƯỚC: khe 25..28mm lấp bằng vật liệu coil (`V_coregap`);
+   separator lấp toàn bộ 78..104mm. SAU: bỏ hẳn V_coregap; separator chỉ còn đúng
+   81..101mm (đọc từ `outer_iron_ring` trong params.yaml); cả 4 khe không khí
+   (25-28, 78-81, 101-104, 124-174) là khoảng trống hình học thật.
+3. **Coil trông như nhựa phát sáng** — TRƯỚC: COPPER_COLD=[0.52,0.18,0.07] đỏ bão hòa,
+   metalness=0.68 chung với các phần kim loại. SAU: tách mesh `coilM` riêng
+   (roughness=0.30, metalness=0.20 — vecni bóng phủ dây đồng, không phải kim loại
+   trần); COPPER_COLD=[0.30,0.14,0.08] nâu sô-cô-la sậm khớp ảnh thật,
+   COPPER_HOT=[0.93,0.55,0.16] cam ấm (bớt neon).
+Ngoài ra: label "Center Core (ceramic)" → "Center Core" (vật liệu đang tranh chấp),
+và expose `window.twinDebug = {camera, controls, size}` để test headless đặt camera.
+
+### Three.js Mesh Split (materials) — matte pass 2026-07-02, xem "4 render fixes" ở trên
 ```javascript
-baseM  = makeMesh(metallic parts: reg 1,2,3,5)  // roughness=0.42, metalness=0.68
-woodM  = makeMesh(plywood frame: reg 4)           // roughness=0.88, metalness=0.02
-plateM = makeMesh(aluminium disc: reg 0)          // roughness=0.35, metalness=0.75
+// makeMesh(sub, roughness, metalness, envMapIntensity=0.8)
+baseM  = makeMesh(core + separator: reg 3,5)  // roughness=0.60, metalness=0.30, envInt=0.25 — kim loại xỉn/oxit
+coilM  = makeMesh(coils: reg 1,2)             // roughness=0.80, metalness=0.05, envInt=0.15 — vecni lì, hấp thụ sáng
+woodM  = makeMesh(plywood frame: reg 4)       // roughness=0.90, metalness=0.00, envInt=0.05
+plateM = makeMesh(aluminium disc: reg 0)      // roughness=0.45, metalness=0.65, envInt=0.45 — kim loại thật duy nhất
 ```
+Bloom postprocessing (`EffectComposer`/`UnrealBloomPass`) đã bị XÓA hoàn toàn
+(2026-07-02) — render trực tiếp qua `renderer.render(scene, camera)`. Trước đó
+bloom.strength=0.42 gần như luôn bật (mặc định I=5A) gây chói/loá kim loại.
 
-### Triangle Counts (geometry)
+### Triangle Counts (geometry, sau fix session 4)
 ```
 center core     : ~960 tris   r=0..25mm     (build_solid_core)
-core→inner gap  : ~960 tris   r=25..28mm    (revolve_ring, seamless fill)
-inner coil      : ~960 tris   r=28..78mm    (revolve_ring, solid toroid)
-separator ring  : ~960 tris   r=78..104mm   (revolve_ring, fills entire gap)
+inner coil      : ~960 tris   r=28..78mm    (revolve_ring, solid toroid; khe 25-28 để trống)
+separator ring  : ~960 tris   r=81..101mm   (revolve_ring; khe 78-81 và 101-104 để trống)
 outer coil      : ~960 tris   r=104..124mm  (revolve_ring, solid toroid)
-wood frame      :  ~96 tris   r=130..165mm  (build_octagonal_base + build_octagonal_frame, 8 sides)
-TOTAL body      : ~4896 tris
+wood frame      :  ~96 tris   r=174..194mm  (octagon 8 cạnh, cách coil 50mm air)
+TOTAL body      : ~3936 tris
 levitating disc :  ~3072 tris (build_disc_mesh, FEM field mapped)
 ```
 
@@ -189,8 +249,14 @@ writeRamp(col, idx, tnorm)       // scientific: blue→cyan→green→yellow→r
 writeRampCopper(col, idx, tnorm) // copper: dark red-brown (cold) → orange-yellow (hot)
 writeRampMetal(col, idx, tnorm)  // metal: silver-gray (cold) → warm orange (hot)
 ```
-`tnorm` = normalized temperature 0 (T_amb) → 1 (T_steady at current I).
+Disc (`writeRamp`): `tnorm` adaptive/relative — see `colorScaleMode` (auto/relative/absolute).
+Coils/core/ring (`writeRampCopper`/`writeRampMetal`, fixed 2026-07-02): `tnorm` = ABSOLUTE
+scale `(T - T_amb) / (T_COIL_HOT=80°C - T_amb)`, anchored to IR session 1 (inner coil
+79°C@7.8A, hottest ever measured) — NOT divided by the current-dependent T_ss(I) anymore
+(that made the color flip "cold" instantly whenever I changed, and pin to full-hot at any
+steady state). Core/separator (`tnIron`) apply the same absolute scale ×1.8 boost (real
+core/ring only reach ~45°C, tnorm≈0.31 unboosted — would look frozen silver).
 
 ---
 
-## Tài liệu này cập nhật: 2026-07-01
+## Tài liệu này cập nhật: 2026-07-02

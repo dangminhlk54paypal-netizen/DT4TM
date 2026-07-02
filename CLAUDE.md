@@ -226,6 +226,77 @@ P and hA). Transient RMS residual ≈3°C (same quality). Effective C_coil = 0.2
       writeRampMetal() (silver-gray→warm orange, for core/separator). Separate Three.js meshes:
       baseM (roughness=0.42, metalness=0.68) / woodM (0.88, 0.02) / plateM (0.35, 0.75).
       Total body tris: ~4896. Disc: ~3072 tris. Output: outputs/digital_twin_fem.html (625 KB).
+- [x] build_twin_html_fem.py — GEOMETRY MATCHED TO REAL DEVICE (2026-07-01 session 4),
+      user verified vs docs/real_model.png: (1) wood frame moved 130..165 → **174..194mm**
+      (new `device_frame` block in params.yaml: air_gap_mm=50, wall_thickness_mm=20 —
+      outer coil stands free in ~50mm air); (2) air gaps 25-28/78-81/101-104mm now REAL
+      voids — V_coregap removed, separator mesh shrunk 78..104 → **81..101mm** (reads
+      `outer_iron_ring` radii); (3) coils split into own mesh `coilM` (roughness 0.30,
+      metalness 0.20 — glossy varnish, not bare metal), COPPER_COLD darkened to
+      [0.30,0.14,0.08] chocolate-brown per photo, COPPER_HOT softened to [0.93,0.55,0.16].
+      Body tris 4896→3936. Label "Center Core (ceramic)"→"Center Core" (material disputed).
+      `window.twinDebug={camera,controls,size}` exposed for headless tests. Verified via
+      Playwright: 0 JS errors, screenshots confirm gaps + free-standing frame.
+- [x] μ_r SENSITIVITY TEST (2026-07-01): user visually claims center core AND separator
+      ring are ferromagnetic (conflicts with negative magnet test on core; ring test
+      pending). EM sensitivity at 5A: ring-only μ_r=1000 → P_plate +168%, F_z +178%;
+      core-only → +32%/+28%; both → P_plate 9.7→32.9W, F_z 1.69→5.78N (×2 conv).
+      NOT negligible IF ferro — but observed levitation (~1.69N vs 1.60N gravity,
+      z_eq=4.1mm ≈ user's "2-3× disc thickness") matches μ_r=1, NOT μ_r=1000 (plate
+      would fly much higher). DECISION (user, 2026-07-01): keep μ_r=1.0 for now,
+      re-verify by magnet test later.
+- [x] build_twin_html_fem.py — LEVITATION GAP PHYSICS + BODY HEAT COLORS (2026-07-02):
+      (1) Gap: replaced wrong "z_eq ∝ I with hard 4.64A cutoff" (jumped 0→3.8mm) by an
+      exponential force-decay model F(I,z)=(I/5)²·F1·e^(−(z−z1)/z0), z0=21.4mm from the
+      two EM anchors (F(5A,1mm)=1.85N, F(5A,4.1mm)=mg=1.60N) → z_eq(I)=4.1+2·z0·ln(I/5),
+      CONTINUOUS lift-off at I_min≈4.54A, 4.1mm@5A, ≈18.5mm@7A. Plus spring-mass disc
+      dynamics (ω=√(g/z0)≈21 rad/s, ζ=0.02, wall-time integration): disc bobs ~9s after
+      a current step then settles — matches the real rig behaviour user described.
+      Telemetry gap now shows the live spring state.
+      (2) Body heat: core/separator colour was frozen (absolute 29–125°C scale → tnorm
+      ~0.15 at 45°C) — now normalised to the inner coil's steady rise + sqrt perceptual
+      boost in writeRampMetal. ROOT CAUSE was also physical: iron node had P_ref=0 and
+      only air coupling (hA=0.06) → +2.4K after 30min. Added CONTACT CONDUCTION inner
+      coil → iron node (`G_iron_cond_W_per_K: 0.06`, `hA_iron: 0.244` in params.yaml,
+      fit to IR session 1: core 45°C@7.8A steady, ratio 0.32, τ≈4min; low-confidence IR,
+      refit with thermocouples later). Now T_iron_ss(5A)=35.6°C ✓. Verified headless:
+      0 JS errors, gap curve continuous (0/4.5A, 4.1/5A, 19/7A), bob-and-settle observed,
+      coils golden + separator warm after 30 sim-min.
+- [x] build_twin_html_fem.py — 4 render fixes (2026-07-02, docs/HTML_TWIN_FIX_PLAN_2026-07-02.md):
+      (1) Gap displayed too high (~87 display-mm, disc floating above the whole
+      device): root cause was a 3.8mm gap BAKED into the disc geometry (Python
+      `z_disc_bot`) stacked with a `LIFT_BASE` JS offset AND `Z_GAP_EXAG=8.0` — all
+      three added on top of each other. Fixed: disc now bakes at `z_disc_bot=
+      z_coil_top` (sits on coil top), `LIFT_BASE` removed entirely, `Z_GAP_EXAG`
+      8.0→2.0 (same factor as the disc-thickness exaggeration) → gap = `lev.z×2.0`
+      only, 4.1mm@5A → 8.2 display-mm. Verified: settled display gain matches
+      lev.z×2.0 to 5 decimal places.
+      (2) B-field lines were static geometry that never reacted to I (dashOffset
+      ran on wall-clock only, opacity only followed the slider). Field SHAPE stays
+      static (linear problem, correct), but flow speed + opacity now scale with
+      `emScale=I_display/I_em_ref`: 0 at I=0 (invisible, frozen), faster/brighter
+      as I rises (capped 2x). Verified: opacity=0 at I=0, dashOffset actively
+      advancing at I=13A.
+      (3) Coil colour didn't track real heating: `tnInner`/`tnOuter` were divided
+      by the CURRENT-DEPENDENT `T_ss(I)`, so bumping I made the coil look
+      "instantly cooler" and any steady state at any I painted full-hot — visible
+      as flicker-with-I in sine scenarios. Fixed: absolute fixed scale `T_COIL_HOT
+      =80°C` (anchored to IR session 1: inner coil 79°C@7.8A, the hottest reading
+      ever measured), independent of I — colour only moves when the real
+      temperature moves. `tnIron` uses the same absolute scale ×1.8 boost (core/
+      ring only reach ~45°C @7.8A, tnorm≈0.31 unboosted). Verified: colour holds
+      steady immediately after an I step (temp hasn't moved yet), only drifts as
+      sim time passes.
+      (4) Studio-bright glare: `UnrealBloomPass`+`EffectComposer` (strength 0.42,
+      on whenever I>0.01 — i.e. almost always) plus `envMapIntensity=0.8` on every
+      mesh made all metal read as glossy chrome sliding highlights on rotate.
+      Fixed: composer/bloom pipeline removed entirely (`renderer.render()`
+      direct); `makeMesh()` gained a per-mesh `envInt` param — coils envInt=0.15
+      roughness=0.80 metalness=0.05 (matte varnish), core/separator envInt=0.25
+      roughness=0.60 metalness=0.30 (dull oxidised metal), wood envInt=0.05, only
+      the aluminium disc keeps real metalness (0.65, envInt=0.45). Verified:
+      0 JS errors across 5 camera angles, no sliding white highlights, matches
+      docs/real_model.png (dark matte coils, only the disc is shiny).
 
 ## Conventions
 - SI units; geometry entered in mm in params.yaml (code converts to m).

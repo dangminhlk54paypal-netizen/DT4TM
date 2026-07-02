@@ -115,6 +115,14 @@ outer_iron_ring:
   z_bottom_mm: -52.0
   B_sat_T: 1.5              # only relevant if mu_r >> 1; kept for future use
   material_note: "PENDING — colleague will provide material properties (ask for: ferromagnetic Y/N, material name, sigma if known)"
+
+# --- Octagonal plywood housing (visual only, used by build_twin_html_fem.py) ---
+# Real device: outer coil (r=124mm) stands FREE with ~50mm of air before the
+# octagonal plywood frame walls (user-verified vs docs/real_model.png, 2026-07-01).
+device_frame:
+  air_gap_mm: 50.0          # air between outer coil r_outer and frame inner wall -> r_in = 174mm
+  wall_thickness_mm: 20.0   # plywood wall thickness -> frame r = 174..194mm
+
 separator_ring:
   material: pending_colleague_confirmation
   sigma_S_per_m: 0.0        # conservative until confirmed
@@ -299,13 +307,20 @@ validation_data:
 # (similar quality to old fit). Treat tau as order-of-magnitude (fit from narrated
 # timeline +-~10s uncertainty; a logged repeat run would sharpen it).
 # air_node_hA_far_W_per_K kept at 40.0 (not enough independent data to refit).
-# hA_iron: UNCHANGED placeholder (no reliable core data; center core is non-
-# ferromagnetic and non-conductive -- no eddy loss there anyway).
+# Iron/core node (2026-07-02): heated by CONTACT CONDUCTION from the inner coil
+# (G_iron_cond), not just via the air pocket -- without it the node stayed ~2K
+# above ambient after 30 min while the real core/separator reach 36-45C.
+# Anchored on HIKMICRO session 1 (7.8A steady, amb 29C): core 45C (+16K) while
+# inner coil +50K -> steady ratio ~0.32; time constant ~4 min. Solving
+# tau = C/(G+hA) = 240s with the 0.32 ratio (C = 73 J/K) gives G=0.06, hA=0.244.
+# CAVEAT: core IR reading is low-confidence (shiny surface, wrong emissivity) --
+# order-of-magnitude fit; refit with contact thermocouples later.
 lumped_thermal:
   hA_inner_W_per_K: 3.5611    # refit 2026-07-01 with corrected coil radii (was 2.2479)
   hA_outer_W_per_K: 4.3446    # refit 2026-07-01 with corrected coil radii (was 1.8788)
   coil_C_scale: 0.2241        # refit 2026-07-01 — effective mass 22.4% of solid-Cu estimate
                                # (was 0.434 with wrong narrow radii; C_solid is now 3.67x bigger)
-  hA_iron_W_per_K: 0.06       # unchanged placeholder (no reliable core data point)
+  hA_iron_W_per_K: 0.244      # iron/core -> local air (fit 2026-07-02, see note above)
+  G_iron_cond_W_per_K: 0.06   # inner coil -> iron/core contact conduction (fit 2026-07-02)
   air_node_C_J_per_K: 3000.0     # shared local-air thermal mass (illustrative)
   air_node_hA_far_W_per_K: 40.0  # local air -> far ambient (illustrative, unchanged)
