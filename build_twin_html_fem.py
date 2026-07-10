@@ -942,14 +942,12 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     # 4c. Disc-radius compare mode (2026-07-03, user request; SSOT-derived count
     # since WP-HTML 2026-07-10 -- see plate_variant_radii_mm()): bake EVERY
     # aluminium/3mm plate_library radius so the UI can swap the live disc
-    # without a rebuild. As of 2026-07-10 that's 5 radii (50/65/80/100/101mm)
-    # -- the 5th, r=100mm ("Al Ø200mm"), was previously excluded by a stale
-    # hardcoded 4-radius tuple; it now gets the SAME from-scratch EM+ROM+lev
-    # solve and lift-off check as every other variant (see the printed
-    # "lift@5A=" line below), so it's not less-validated than the rest, just
-    # newly surfaced. Each OTHER radius gets its own from-scratch EM+ROM+lev
-    # solve (same reasoning as --plate-radius: a wider/narrower disc genuinely
-    # changes the eddy distribution and lift force, not just a scale factor).
+    # without a rebuild. As of 2026-07-10 (real-disc data swap) that's 4 radii
+    # (65/70/75/80mm -- the team's real measured Ø130/140/150/160mm discs;
+    # Ø160mm/r=80mm is the standard test disc). Each radius gets its own
+    # from-scratch EM+ROM+lev solve (same reasoning as --plate-radius: a
+    # wider/narrower disc genuinely changes the eddy distribution and lift
+    # force, not just a scale factor).
     # The active build's own radius is reused as-is (already solved above) to
     # avoid solving it twice.
     print("[VARIANTS] Solving EM+ROM for disc-radius compare mode:")

@@ -649,3 +649,96 @@ detail for every entry, unabridged, in roughly chronological order.
       Both HTML outputs rebuilt + Playwright-verified: `levGapEqMm(5)=4.1`,
       `I_LEV_MIN=4.543A`(R80)/`6.450A`(R101), `saturated=False`, 5 variants,
       0 JS errors on both files.
+
+## 2026-07-10 — plate_library real-disc data swap + center core/iron ring material flip
+
+Two separate user-supplied data updates in one session, both cascading into
+re-runs of the full pipeline.
+
+**1. `plate_library` replaced with the team's real measured discs.** User supplied a
+table of physically-owned aluminium discs (radius/diameter/thickness/mass). Old
+entries (Al Ø100/200/202mm, Cu Ø160mm — never real stocked discs) dropped; new
+entries: Al Ø130/140/150/160mm (r=65/70/75/80mm, mass_g=113/126/142/159 — all within
+~3% of idealized ρV, good tolerance check), Ø160mm marked as the standard test disc
+(matches `plate_material` default r=80mm). 3 hollow/annular discs (Al Ø110/55mm,
+r_out=55mm/r_in=27.5mm bored hole, 3 thicknesses 3.5/2.8/1.8mm, mass_g=79/60/41)
+recorded in a NEW separate key `plate_library_annulus_TODO` — deliberately kept OUT
+of `plate_library` because `thermal_solver.py`/`em_solver.py` only mesh solid discs
+from r=0 (no hole/inner-radius support), and every `plate_library` consumer
+(`digital_twin.py`'s RadioButtons, `sim_plates.py`, `build_twin_html_fem.py`'s
+`plate_variant_radii_mm()`) treats every entry as solid — mixing the annulus data in
+would have silently computed wrong physics (hole treated as solid metal). Idealized
+annulus mass runs 10-18% BELOW mass_g for all three (unlike the solid discs' ~3%
+match) — unexplained, flagged for whoever adds hole-geometry support later, not
+blocking. Verified: `plate_variant_radii_mm()` now correctly returns exactly
+`[65.0, 70.0, 75.0, 80.0]`; `sim_plates.py --no-em` and `config.py` run clean.
+Updated stale references: `digital_twin.py` docstring, `build_twin_html_fem.py`'s
+disc-compare-mode comment (was "5 radii", now 4), CLAUDE.md's "5 live-swappable" →
+"4 live-swappable".
+
+**2. Coil/core geometry RE-MEASURED + center core/iron ring material FLIPPED to
+confirmed iron.** User supplied a fresh ruler-measured cross-section of the rig,
+superseding the 2026-07-01 "physical layout description" pass: center core
+r=0-25.9mm (was 25.0mm), inner coil now 27.9-61.9mm/34mm wide (was 28-78mm/50mm —
+a big narrowing), iron ring now 64.9-79.9mm/15mm wide (was 81-101mm/20mm), outer
+coil now 82.9-102.9mm/20mm wide (unchanged width, was 104-124mm), coil/core height
+53mm (was 52mm), `device_frame.air_gap_mm`/`wall_thickness_mm` re-derived from two
+new frame-distance measurements (27.5mm/22.5mm, was 50mm/20mm). Separately, and more
+consequentially: user re-tested the center core with a magnet and confirmed it DOES
+attract — directly contradicting the "CONFIRMED NON-FERROMAGNETIC" 2026-07-01 result
+recorded in CLAUDE.md at the time. Flagged this contradiction to the user explicitly
+before touching anything (AskUserQuestion) rather than silently overwriting a locked
+result; user confirmed the new magnet test is correct and the old one was wrong.
+Also confirmed the iron ring (previously "magnet test PENDING") is the same
+material. Restored `iron_core.mu_r=1000.0`/`sigma_S_per_m=1.0e6` (the pre-2026-07-01
+placeholder value, per docs/physics.md's original "e.g. mu_r=1000" — git history
+confirms this was the value before the erroneous non-ferromagnetic downgrade) and
+applied the same to `outer_iron_ring` (was `mu_r=1.0`/PENDING).
+
+Re-ran the full pipeline (`em_solver.py`, `thermal_solver.py`, `rom.py`,
+`build_twin_html_fem.py`, `sim_plates.py`) against the new params.yaml. Losses
+redistributed a lot but total barely moved: P_plate 9.67W→**25.8W** (plate now
+geometrically overlaps the iron ring), P_iron 0W→**5.76W** (iron self-heats now),
+P_coil 128.2W→**106.4W** (smaller coil mean radii → less resistance), P_total
+137.9W→**138.0W** (near-coincidence). B_max=0.66T, unsaturated (B_sat=1.5T). I²-check
+still 3.998≈4.000. `validate_domain_size()` now PASSES again (all diffs <1%, e.g.
+P_plate 0.767%) — was FAILing at 2.71% before this session for unrelated/unknown
+reasons (flagged in the WP-PEAK entry above), incidentally resolved by this rebuild.
+`thermal_solver.py` energy balance still exactly 0.000% (plate-only FEM check,
+structurally unaffected by the iron-material flip). `solve_em_saturating()`'s
+pre-existing M5 guard (see WP-PEAK entry above — "currently inert... will fire
+loudly if someone flips [outer_iron_ring.mu_r]") fired exactly as designed: now
+prints a WARNING every run since the ring really is high-mu_r, since its own Picard
+saturation correction still only tracks `iron_core` (docs/AUDIT_FIX_PLAN_2026-07-04.md
+M5, not fixed in this session, not urgent since B_max is well under B_sat).
+
+**Consequential regression, flagged as an OPEN QUESTION rather than fixed**: lift
+force with the new iron material is much stronger than before at the same floor
+height (F(3.8mm) 1.69N→4.10N), pushing predicted `z_eq` from 4.1mm→**11.7mm** (visible
+gap 7.1mm→**14.7mm**) — but the real observed visible gap is still 7-8mm (unchanged,
+2026-07-01 observation). This BREAKS the previously exact match (was validated:
+z_eq=4.1mm→7.1mm visible ≈ 2.4× disc thickness, matching the user's "2-3×"
+observation). Explicitly asked the user how to handle this (AskUserQuestion) before
+writing anything into CLAUDE.md as new ground truth: user chose to keep the new
+geometry/material data as-is and record the mismatch as an open question, rather
+than reverse-fit `mu_r` down to force the old gap to reappear (suspected cause:
+`mu_r=1000` is a mild-steel-*like* placeholder, never actually measured via a B-H
+curve — the real effective permeability may be much lower). Updated
+`params.yaml levitation.z_gap_5A_mm`/`z_decay_mm` to the new physics-predicted
+values (11.7mm/11.79mm, from `run_rig_validation()`'s full F(z) sweep and the
+existing F(1mm)/F(5mm) decay-length method respectively) with an explicit
+OPEN QUESTION comment, rather than leaving the old (now inconsistent) 4.1mm/13.6mm
+in place. Also flagged `lumped_thermal`'s `hA_inner`/`hA_outer`/`coil_C_scale` as
+STALE (fitted against the old P_inner/P_outer(7.8A)=150.3/161.6W; new values are
+127.3/131.7W, ~15-18% lower, plus P_iron/P_plate are no longer ~0) — left UNCHANGED
+pending a proper weighted-least-squares refit against `validation_data` (NEXT item,
+not a quick substitution). Updated CLAUDE.md ("Device numbers", "First quantitative
+result", "Real-rig validation", "Code status", NEXT list) and
+`docs/QUICK_START_FOR_AGENTS.md` (added a "GROUND TRUTH v2" geometry table,
+superseding but not deleting the old "session 3" v1 table, and closed out its
+"Note conflict (chưa giải quyết)" callout — it had predicted almost exactly this
+outcome: "Nếu xác nhận ferromagnetic → set mu_r=100-1000 và RE-RUN EM"). Rebuilt
+`outputs/digital_twin_fem.html` (1002 KB, placeholder API key verified, no
+`AIzaSy...` pattern present) — not yet Playwright-verified in this session (the
+underlying physics is mid-open-question, so a full visual QA pass was deferred
+rather than rubber-stamping a demo that currently shows an unvalidated ~15mm gap).

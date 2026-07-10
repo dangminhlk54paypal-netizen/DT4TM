@@ -50,15 +50,21 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   voltage_V=190 in params.
 - Turns: **inner=1000, outer=500** — CONFIRMED 2026-06-23 by thermal data (inner
   coil runs hotter: more turns → more R → more loss).
-- **COIL RADII — CORRECTED 2026-07-01** from physical layout description:
-  - Inner coil (1000T): r=**28–78mm** (50mm wide) — WAS WRONG (old: 28–43mm, 15mm wide)
-  - Outer coil (500T): r=**104–124mm** (20mm wide) — WAS WRONG (old: 46.5–61.5mm)
-  - Air gap between inner coil and iron ring: r≈78–81mm (~3mm)
-  - **Iron/separator ring**: r=**81–101mm** (20mm wide) — magnet test PENDING on this ring
-  - Air gap between iron ring and outer coil: r≈101–104mm (~2mm)
-  - After outer coil: ~50mm air to structural device frame edge
-  - Device cross-section: core(0-25) | gap | inner(28-78) | gap | iron-ring(81-101) | gap | outer(104-124)
-  - Levitating plate R=80mm sits entirely above inner coil — plate edge at 80mm ≈ inner coil edge at 78mm
+- **COIL RADII — RE-MEASURED 2026-07-10** by direct ruler measurement of the rig
+  (supersedes the 2026-07-01 "physical layout description" pass):
+  - Center core: r=**0–25.9mm** (was 0–25mm; diameter measured 51.8mm)
+  - Air gap core→inner coil: 2mm (25.9–27.9mm)
+  - Inner coil (1000T): r=**27.9–61.9mm** (34mm wide) — WAS WRONG (2026-07-01: 28–78mm, 50mm wide)
+  - Air gap inner coil→iron ring: 3mm (61.9–64.9mm)
+  - **Iron ring**: r=**64.9–79.9mm** (15mm wide) — WAS WRONG (2026-07-01: 81–101mm, 20mm wide);
+    material now **CONFIRMED IRON** (see below, was PENDING)
+  - Air gap iron ring→outer coil: 3mm (79.9–82.9mm)
+  - Outer coil (500T): r=**82.9–102.9mm** (20mm wide, unchanged width) — WAS WRONG (2026-07-01: 104–124mm)
+  - After outer coil: 25–30mm air to frame's near wall, 50mm total to frame's outer edge
+  - Device cross-section: core(0-25.9) | gap | inner(27.9-61.9) | gap | iron-ring(64.9-79.9) | gap | outer(82.9-102.9)
+  - Levitating plate R=80mm now overlaps the iron-ring region (64.9–79.9mm), NOT just
+    the inner coil — a structurally different EM picture than the pre-2026-07-10 geometry
+    (where the disc edge sat just inside the inner coil's own outer edge at 78mm)
 - **CURRENT CONVENTION**: `current_A=5.0` in params.yaml is the **RMS-measured** value
   (multimeter). The phasor solver's LOSS chain (compute_losses→hA calibration)
   intentionally treats it AS the amplitude — thermal predictions are correct as-is
@@ -66,16 +72,25 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   amplitude = I_rms×√2 = 7.07A: use `cfg.I_peak` (config.py) / pass
   `I_amplitude=cfg.I_peak` to `compute_lift_force()`/`solve_em()` — do NOT manually
   multiply F_z by 2.0 anymore (that pattern was replaced 2026-07-10, WP-PEAK).
-- **LIFT FORCE VALIDATED 2026-07-01** (corrected geometry + I_rms×√2):
-  F_z_max(5A_rms, z=1mm) ≈ 1.85N > F_gravity(163g)=1.60N → levitation possible ✓
-  Predicted z_eq ≈ **4.1mm** gap (plate bottom above coil top); plate top at z≈7.1mm
-  → visible ratio 7.1mm/3mm = **2.4× disc thickness** → matches user observation "2–3×" ✓
-- **CENTER CORE — CONFIRMED NON-FERROMAGNETIC (2026-07-01).** Magnet-contact test
-  (unpowered): no attraction. Also confirmed non-thermally-conductive (ceramic/Al₂O₃-
-  like). Model: `iron_core.mu_r=1.0`, `iron_core.sigma_S_per_m=0.0` → P_iron = 0 W.
-- **Outer iron ring (r=81–101mm): magnet test PENDING** — currently modeled as air
-  (mu_r=1.0, sigma=0) in `outer_iron_ring` block in params.yaml. If confirmed
-  ferromagnetic, set mu_r=100–1000, sigma=1e6 and re-run EM.
+- **CENTER CORE + IRON RING (r=64.9–79.9mm) — BOTH ferromagnetic, CONFIRMED 2026-07-10**
+  (magnet-attracted). Center core supersedes the 2026-07-01 "CONFIRMED NON-FERROMAGNETIC"
+  entry (that test is now considered wrong; user re-tested and confirmed attraction).
+  Iron ring was PENDING, now confirmed by the same test. Both: `mu_r=1000.0`,
+  `sigma_S_per_m=1.0e6` (mild-steel-*like* placeholder, docs/physics.md's original
+  "e.g. mu_r=1000" — exact alloy/B-H curve still unmeasured). P_iron now nonzero
+  (self-heats) — consistent with the "center core 45°C" IR reading below being real
+  self-heating, not just conduction as previously assumed. ⚠️ `solve_em_saturating()`
+  only Picard-corrects `iron_core`'s μᵣ, not `outer_iron_ring`'s (known gap,
+  docs/AUDIT_FIX_PLAN_2026-07-04.md M5) — now live since this ring is real iron
+  (solver prints a WARNING every run); not urgent since B_max=0.66T ≪ B_sat=1.5T.
+- ⚠️ **LIFT FORCE — MISMATCH since 2026-07-10 (OPEN QUESTION), was VALIDATED 2026-07-01.**
+  F_z(5A_rms peak, z=3.8mm) ≈ 4.10N ≫ F_gravity(163g)=1.60N — levitates with a much
+  bigger margin, but predicted z_eq moved to **11.7mm** (plate bottom)/**14.7mm** visible
+  — the real observed visible gap is **7–8mm** (2026-07-01), a ~7mm mismatch (previously
+  matched almost exactly: 4.1mm→7.1mm ≈ 2.4× disc thickness ✓). Suspect cause: the
+  `mu_r=1000` placeholder above may be too high (open magnetic circuit, real alloy
+  unknown). User asked to keep the new data as-is and record this as an open question
+  rather than reverse-fit μᵣ to match the old gap — do NOT treat z_eq as validated.
 
 ## Key physics points (see docs/physics.md)
 - Heat source q = ½·σ·ω²·|A_φ|² [W/m³] (cycle-averaged). NOT |∇T|²/σ.
@@ -86,15 +101,14 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
 - Skin depth in Al @50Hz ≈ 12mm ≫ 3mm plate → no fine through-thickness mesh.
 
 ## First quantitative result (î=5A RMS, T_amb=20°C, payload OFF, domain ±500mm)
-**CORRECTED + RE-CALIBRATED 2026-07-01 — coil radii fixed (inner 28–78mm, outer 104–124mm):**
-Plate eddy ≈ **9.67 W** (was 1.84W). Iron core = 0 W. Coil ohmic ≈ **128 W** (was 72.8W).
-Total ≈ **138 W**.
-**Lift force validated**: F_z_max(I_peak=7.07A) ≈ 1.85N > F_grav(163g)=1.60N ✓
-z_eq ≈ **4.1mm** gap; plate top visible at 7.1mm = 2.4× disc thickness (matches obs) ✓
-**Thermal re-calibrated 2026-07-01**: hA_inner=3.5611/hA_outer=4.3446/coil_C_scale=0.2241.
-Steady-state coil temps at 5A/20°C: T_inner≈40.5°C, T_outer≈38.5°C (unchanged from before
-— T_ss invariant when P and hA scale together). Transient RMS ≈3°C.
-**Iron ring r=81–101mm**: material PENDING colleague confirmation. Currently air (mu_r=1.0).
+**RE-MEASURED geometry + iron material CONFIRMED 2026-07-10** (see "Device numbers"):
+Plate eddy ≈ **25.8 W** (was 9.67W — plate now overlaps the iron ring). Iron core+ring
+eddy ≈ **5.76 W** (was 0 W — iron self-heats now). Coil ohmic ≈ **106.4 W** (inner
+52.3/outer 54.1W; was 128W — coil mean radii shrank). Total ≈ **138.0 W** (barely
+changed from 137.9W — coincidence, the loss REDISTRIBUTED, not just scaled). B_max in
+iron = 0.66T, unsaturated. I²-check 3.998≈4.000.
+⚠️ Lift force/z_eq mismatch (OPEN QUESTION) and thermal calibration STALE — see
+"LIFT FORCE" and "Real-rig validation" notes above/below, don't treat either as validated.
 
 ## Real-rig validation (HIKMICRO IR, 2026-06-23) — reference data
 Two measured AC 50Hz operating points (`validation_data` in params.yaml): **190V→5A**
@@ -104,11 +118,17 @@ Two measured AC 50Hz operating points (`validation_data` in params.yaml): **190V
 t=450s, plus a timestamped outer-coil trajectory used to fit the coil's time constant.
 **Caveat:** disc + center-core IR readings are UNRELIABLE (shiny aluminium, wrong
 emissivity) — only the dark-varnished **coil** readings are trustworthy for calibration.
+(Note 2026-07-10: the center-core 45°C reading is now also physically plausible as real
+self-heating, since the core is confirmed iron with nonzero P_iron — previously it was
+assumed to be pure conduction from the coils since the core itself had P=0.)
 Final calibrated lumped coil network (params.yaml `lumped_thermal`):
 `hA_inner=3.5611`/`hA_outer=4.3446`/`coil_C_scale=0.2241` → T_inner_ss≈40.5°C/
 T_outer_ss≈38.5°C at 5A/20°C. A two-node cooldown model (surface + winding-core
 reservoir) was added later — RMS residual on the ramp test = 2.5°C. Full calibration
 history (two rounds, why the numbers changed) → docs/CHANGELOG.md.
+⚠️ **STALE since 2026-07-10**: fitted against pre-remeasurement P_coil values (was
+150.3/161.6W at 7.8A, now 127.3/131.7W, ~15-18% lower, plus P_iron/P_plate are no
+longer ~0) — needs refitting, see NEXT list below.
 
 ## Data (repo root)
 - levitation_height_team28.csv — Table I from the problem PDF.
@@ -138,17 +158,21 @@ STATE ONLY — trimmed 2026-07-10 (WP-TRIM, docs/AUDIT_FIX_PLAN_2026-07-04.md).
       `check_saturation`/`solve_em_saturating` all take an optional
       `I_amplitude`/`B_scale` param (force/B-report path uses `cfg.I_peak`,
       loss path stays on `cfg.I` — see "CURRENT CONVENTION" above). I²-check
-      passes (4.000000). `run_rig_validation()` correctly brackets F_gravity,
-      prints z_eq≈4.1mm (plate-bottom) / visible gap≈7.1mm — MATCH.
-      ⚠️ **`validate_domain_size()` currently FAILS** (P_plate diff 2.71% >
-      1% tolerance) — was PASS (<0.06%) as of 2026-06-22, regressed silently
-      since (root cause not yet found, predates 2026-07-10's changes) —
-      re-verify before trusting the ±500mm em_domain again.
+      passes (3.998≈4.000). `run_rig_validation()` correctly brackets
+      F_gravity, prints z_eq≈11.7mm (plate-bottom) / visible gap≈14.7mm —
+      ⚠️ MISMATCH vs observed 7-8mm, see "LIFT FORCE" OPEN QUESTION above.
+      [x] RESOLVED 2026-07-10: `validate_domain_size()` now PASSES again
+      (all diffs <1%, e.g. P_plate 0.767%) — was FAILing at 2.71% as of
+      2026-07-10 (pre-remeasurement); re-ran clean after the geometry+iron
+      update above, root cause of the earlier regression still unknown but
+      no longer blocking.
 - [ ] PAUSED: `run_benchmark_validation()` (original TEAM28, 20A, no iron)
-      gives z_eq≈7.1mm vs 11.3mm expected (37% error), unexplained — paused
-      by user request 2026-06-23, not blocking. Untouched by all RMS/peak
-      work (its 20A is the original problem's own convention, not a
-      multimeter reading).
+      gives z_eq≈6.8mm vs 11.3mm expected (40% error; was 7.1mm/37% until
+      2026-07-10, when `outer_iron_ring`/`payload_model` were also disabled
+      for this call — they were previously left enabled, harmless while
+      `outer_iron_ring` was air-like but no longer once it became real iron)
+      — unexplained, paused by user request 2026-06-23, not blocking. Its
+      20A is the original problem's own convention, not a multimeter reading.
 - [x] `rom.py` — ThermalROM, I²-scaling exact (4.000000), τ=5.53min@R=80mm.
 - [x] `digital_twin.py` — interactive matplotlib twin (I/dial/speed sliders,
       plate RadioButtons matched by `radius_mm`+material — not a name string,
@@ -169,7 +193,7 @@ STATE ONLY — trimmed 2026-07-10 (WP-TRIM, docs/AUDIT_FIX_PLAN_2026-07-04.md).
       conduction; exact closed-form spring-mass levitation dynamics with
       current-dependent damping + sub-lift-off jitter, constants sourced from
       `params.yaml levitation:` block (not hardcoded); disc-radius compare
-      mode (5 live-swappable aluminium radii, SSOT-derived from
+      mode (4 live-swappable aluminium radii, SSOT-derived from
       `plate_library`, each with its own from-scratch EM+ROM+lev+field-line
       solve); dual input mode (Amps slider or Variac Dial in degrees, correct
       V conversion); live T_amb from Google Weather API (falls back to
@@ -180,9 +204,25 @@ STATE ONLY — trimmed 2026-07-10 (WP-TRIM, docs/AUDIT_FIX_PLAN_2026-07-04.md).
       `coil_G_wind_W_per_K`/`convection_exponent`, currently
       order-of-magnitude only), 7.75-8A levitation-oscillation amplitude data
       (fits WP-A's ζ damping law, currently has an internal spec conflict —
-      see docs/CHANGELOG.md), outer_iron_ring magnet test (μ_r=1.0 assumed,
-      unconfirmed), denser variac dial→I calibration table (only 3 anchor
-      points).
+      see docs/CHANGELOG.md), denser variac dial→I calibration table (only 3
+      anchor points), annulus/hollow-disc geometry support (3 real discs in
+      `plate_library_annulus_TODO`, r_out=55/r_in=27.5mm — solvers only mesh
+      solid discs from r=0, not wired in yet).
+- [ ] OPEN QUESTION (2026-07-10): iron_core/outer_iron_ring `mu_r=1000` is a
+      mild-steel-*like* placeholder (never measured — no B-H curve, no
+      resistivity test), and it makes the predicted levitation gap ~2x the
+      observed one (see "LIFT FORCE" bullet above). Needs either a real B-H/μᵣ
+      measurement, or accepting the mismatch as a known model limitation.
+      Also NEXT: refit `lumped_thermal` (hA_inner/hA_outer/coil_C_scale) — the
+      current values are STALE against the new P_coil numbers (see "First
+      quantitative result"); and generalize `solve_em_saturating()`'s Picard
+      loop to cover `outer_iron_ring` too (docs/AUDIT_FIX_PLAN_2026-07-04.md
+      M5 — not urgent right now since B_max=0.66T is unsaturated, but was a
+      silent gap before this ring had a real μᵣ to correct).
+- [x] RESOLVED 2026-07-10: `plate_library` replaced with the team's real
+      measured solid discs — Al Ø130/140/150/160mm, Ø160mm is the standard
+      test disc (matches `plate_material` default r=80mm); dropped the old
+      Ø100/Ø200/Ø202mm/Cu Ø160mm placeholders (not real stocked discs).
 - [x] RESOLVED 2026-07-10 (WP-Z0): R=80's `levitation.z_decay_mm` switched
       21.4mm→**13.6mm** — user confirmed the real rig's gap only "nudges up a
       little" at 7.75A, matching the smaller F1/F5-method value (now used for

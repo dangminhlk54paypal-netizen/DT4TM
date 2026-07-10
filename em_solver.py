@@ -502,6 +502,10 @@ def run_benchmark_validation():
     cfg = copy.deepcopy(cfg_base)
     cfg.raw["excitation"]["current_A"]  = float(bm["current_A"])
     cfg.raw["iron_core"]["enabled"]     = False                  # original benchmark has no core
+    if "outer_iron_ring" in cfg.raw:
+        cfg.raw["outer_iron_ring"]["enabled"] = False             # ditto -- no separator ring either
+    if "payload_model" in cfg.raw:
+        cfg.raw["payload_model"]["enabled"] = False                # ditto -- no payload in the original problem
     cfg.raw["plate_material"]["radius_mm"] = float(bm["plate_radius_mm"])
     cfg.raw["coils"]["inner"]["turns"]  = int(bm["inner_turns"])
     cfg.raw["coils"]["outer"]["turns"]  = int(bm["outer_turns"])

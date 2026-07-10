@@ -81,89 +81,93 @@ plate_material:
   cp_J_per_kgK: 900.0
   sigma_tempco_per_K: 3.9e-3   # α: σ(T)=σ0/(1+α(T-T0)); enabled in Phase 3
 
-# --- Copper coils — radii CORRECTED 2026-07-01 from physical layout description ---
+# --- Copper coils — geometry RE-MEASURED 2026-07-10 (direct ruler measurement of
+# the physical rig, superseding the 2026-07-01 "physical layout description" pass).
 # Actual rig cross-section (r in mm):
-#   0..25  center core (non-ferromagnetic)
-#   25..28 air gap ~2-3mm
-#   28..78 inner coil 1000 turns  <-- WAS WRONG (old: 28..43)
-#   78..81 air gap ~3mm
-#   81..101 iron/separator ring   (magnet-test PENDING for this ring)
-#   101..104 air gap ~2mm
-#   104..124 outer coil 500 turns <-- WAS WRONG (old: 46.5..61.5)
-#   124..174 air (~50mm) -> structural plate edge of device frame
-# Note: levitating Al disc R=80mm sits ABOVE this assembly;
-#       its edge (80mm) is just inside the inner coil outer edge (78mm).
+#   0..25.9    center core (IRON — magnet-attracted, see iron_core below)
+#   25.9..27.9 air gap 2mm
+#   27.9..61.9 inner coil 1000 turns, 34mm wide  <-- WAS WRONG (2026-07-01: 28..78, 50mm)
+#              (cross-check: measured OD 121mm -> r_outer=60.5mm, ~1.4mm from the
+#              34mm-wide chain value above -- within ruler-measurement tolerance,
+#              chain value used since it's the directly-stepped measurement)
+#   61.9..64.9 air gap 3mm
+#   64.9..79.9 iron ring, 15mm wide  <-- WAS WRONG (2026-07-01: 81..101, 20mm wide)
+#   79.9..82.9 air gap 3mm
+#   82.9..102.9 outer coil 500 turns, 20mm wide  <-- WAS WRONG (2026-07-01: 104..124)
+#   102.9..~130.4 air ~25-30mm -> near (inner) wall of octagonal wood frame
+#   ~130.4..~180.4 further ~50mm total (from outer coil) to the frame's OUTER edge
+# Note: levitating Al disc R=80mm sits ABOVE this assembly; its edge (80mm) now
+#       overlaps the iron-ring region (64.9..79.9mm), NOT just the inner coil
+#       (unlike the pre-2026-07-10 geometry where the disc edge sat just inside
+#       the inner coil's own outer edge at 78mm) -- re-run EM before trusting
+#       any disc-vs-field-region reasoning written before this update.
 coils:
-  height_mm: 52.0
+  height_mm: 53.0            # measured 2026-07-10: avg height of the concentric rings
   z_top_mm: 0.0
-  z_bottom_mm: -52.0
+  z_bottom_mm: -53.0
   wire_diameter_mm: 1.2
   sigma_Cu_S_per_m: 5.96e7
   fill_factor: 0.6      # placeholder: real winding has insulation between turns,
                         # so copper doesn't fill 100% of the wound cross-section.
                         # NOT yet wired into the EM/ohmic-loss formulas below.
-  inner:                    # INNER coil = 1000 turns — CONFIRMED CORRECTED 2026-07-01
+  inner:                    # INNER coil = 1000 turns — geometry RE-MEASURED 2026-07-10
     turns: 1000
-    r_inner_mm: 28.0
-    r_outer_mm: 78.0         # CORRECTED (was 43.0 — old model was 15mm wide, actual is 50mm)
+    r_inner_mm: 27.9
+    r_outer_mm: 61.9         # RE-MEASURED (was 78.0 — old model was 50mm wide, actual is 34mm)
     current_sign: +1
-  outer:                    # OUTER coil = 500 turns — CONFIRMED CORRECTED 2026-07-01
+  outer:                    # OUTER coil = 500 turns — geometry RE-MEASURED 2026-07-10
     turns: 500
-    r_inner_mm: 104.0        # CORRECTED (was 46.5)
-    r_outer_mm: 124.0        # CORRECTED (was 61.5)
+    r_inner_mm: 82.9         # RE-MEASURED (was 104.0)
+    r_outer_mm: 102.9        # RE-MEASURED (was 124.0, width unchanged at 20mm)
     current_sign: -1        # opposite winding direction -> reverse current
 
-# --- Center core (previously called "iron core") — CONFIRMED 2026-07-01 ---
-# Physical magnet-contact test (unpowered): NO attraction to a permanent magnet.
-# CONFIRMED NON-FERROMAGNETIC. mu_r = 1.0 (same as air, no flux concentration).
-# Also confirmed non-thermally-conductive (ceramic-like or aluminium-oxide Al2O3).
-# Electrically non-conductive -> sigma = 0, P_iron = 0 W (no eddy loss in core).
-# Electromagnetically this region is identical to air; kept enabled=true to preserve
-# geometry region for 3D visualization (build_twin_html_fem.py region 3).
-# Geometry (r_outer_mm etc.) unchanged -- confirm with ruler when next on the rig.
+# --- Center core — MATERIAL FLIPPED 2026-07-10: IS ferromagnetic (magnet-attracted).
+# SUPERSEDES the 2026-07-01 "CONFIRMED NON-FERROMAGNETIC" entry (unpowered magnet
+# test at the time read no attraction; user re-tested 2026-07-10 and confirmed it
+# DOES attract a magnet -- the earlier negative result is now considered wrong,
+# e.g. a coating/paint layer or a miss on the core vs. an adjacent non-magnetic
+# part). mu_r=1000/sigma=1e6 restored to the pre-2026-07-01 placeholder values
+# (docs/physics.md "e.g. mu_r=1000"; real material unconfirmed beyond "iron" --
+# treat as mild-steel-like until a B-H curve or resistivity measurement exists).
+# Radius updated from the new diameter measurement (51.8mm -> r=25.9mm, was 25.0mm).
 iron_core:
   enabled: true
-  mu_r: 1.0                 # CONFIRMED: non-ferromagnetic (magnet test negative 2026-07-01)
-  sigma_S_per_m: 0.0        # non-conductive (ceramic/oxide) -> no eddy loss in core
+  mu_r: 1000.0               # RESTORED 2026-07-10: confirmed ferromagnetic (magnet test positive)
+  sigma_S_per_m: 1.0e6       # solid iron -> eddy loss present (P_iron no longer 0W)
   r_inner_mm: 0.0           # central cylindrical core
-  r_outer_mm: 25.0
+  r_outer_mm: 25.9           # RE-MEASURED 2026-07-10 (was 25.0mm; diameter 51.8mm/2)
   z_top_mm: 0.0
-  z_bottom_mm: -52.0
-  B_sat_T: 1.5              # unused now (mu_r=1, no saturation); kept for reference
+  z_bottom_mm: -53.0
+  B_sat_T: 1.5              # mu_r>>1 now -- saturation check matters again, re-verify B_max
 
-# --- Iron/separator ring between inner coil and outer coil — CORRECTED 2026-07-01 ---
-# Physical position confirmed: r = 81..101mm (20mm wide), same height as coils (52mm).
-# Sits in the 23mm gap between inner coil outer edge (78mm) and outer coil inner edge (104mm).
-# Called "một lớp sắt" (iron layer) by user. Material properties PENDING colleague confirmation.
-# Center core (r=0..25mm) tested NON-ferromagnetic; this outer ring NOT YET tested.
-#
-# MATERIAL STATUS (2026-07-01):
-#   - Magnet-contact test: NOT YET DONE on this ring
-#   - Colleague will provide material data (mu_r, sigma, or material name) — update then.
-#   - Conservative assumption until confirmed: mu_r=1.0 (air-like), sigma=0.0 (non-conductive)
-#   - If ferromagnetic (e.g. mild steel): mu_r ≈ 100..1000, sigma ≈ 1e6 S/m → re-run EM
-#   - If non-ferromagnetic stainless / Al alloy: mu_r ≈ 1.0, sigma ≈ 1e6..1e7 S/m → eddy loss
-#   - If ceramic / plastic: mu_r=1.0, sigma=0.0 (same as current air model)
-#
-# EM effect: this region currently modeled as AIR in em_solver.material().
-# Geometry wired into EM solve via outer_iron_ring section below.
+# --- Iron ring between inner coil and outer coil — MATERIAL CONFIRMED 2026-07-10 ---
+# Physical position RE-MEASURED 2026-07-10: r = 64.9..79.9mm (15mm wide, was
+# 81..101mm/20mm wide), same height as coils (53mm). Sits in the 21mm gap between
+# the (also re-measured) inner coil outer edge (61.9mm) and outer coil inner edge
+# (82.9mm). Called "một lớp sắt"/"lõi sắt thứ 2" (iron layer / 2nd iron core) by
+# user -- material CONFIRMED IRON 2026-07-10 (magnet-attracted, same test as the
+# center core above), superseding the previous "PENDING colleague confirmation"
+# status. mu_r=1000/sigma=1e6 mild-steel-like placeholder (see iron_core comment;
+# same "real material unconfirmed beyond ferromagnetic" caveat applies).
 outer_iron_ring:
   enabled: true
-  mu_r: 1.0                 # PENDING colleague confirmation — conservative placeholder (air-like)
-  sigma_S_per_m: 0.0        # conservative: no eddy loss until material confirmed
-  r_inner_mm: 81.0
-  r_outer_mm: 101.0
+  mu_r: 1000.0               # CONFIRMED 2026-07-10: ferromagnetic (magnet test positive)
+  sigma_S_per_m: 1.0e6       # solid iron -> eddy loss present
+  r_inner_mm: 64.9            # RE-MEASURED 2026-07-10 (was 81.0)
+  r_outer_mm: 79.9            # RE-MEASURED 2026-07-10 (was 101.0, width 20mm->15mm)
   z_top_mm: 0.0
-  z_bottom_mm: -52.0
-  B_sat_T: 1.5              # only relevant if mu_r >> 1; kept for future use
-  material_note: "PENDING — colleague will provide material properties (ask for: ferromagnetic Y/N, material name, sigma if known)"
+  z_bottom_mm: -53.0
+  B_sat_T: 1.5              # mu_r>>1 now -- saturation check matters, re-verify B_max
+  material_note: "CONFIRMED 2026-07-10: ferromagnetic (magnet-attracted), same as iron_core. Exact alloy/B-H curve still unconfirmed -- mild-steel-like mu_r=1000 placeholder."
 
 # --- Octagonal plywood housing (visual only, used by build_twin_html_fem.py) ---
-# Real device: outer coil (r=124mm) stands FREE with ~50mm of air before the
-# octagonal plywood frame walls (user-verified vs docs/real_model.png, 2026-07-01).
+# RE-MEASURED 2026-07-10: outer coil (now r=102.9mm) to the frame's NEAR (inner)
+# wall is 25-30mm air (midpoint 27.5mm used below); total outer coil -> frame's
+# OUTER edge is 50mm, implying wall_thickness_mm=50-27.5=22.5mm (was air_gap=50,
+# wall=20 under the old, larger outer-coil-radius geometry).
 device_frame:
-  air_gap_mm: 50.0          # air between outer coil r_outer and frame inner wall -> r_in = 174mm
-  wall_thickness_mm: 20.0   # plywood wall thickness -> frame r = 174..194mm
+  air_gap_mm: 27.5          # air between outer coil r_outer and frame inner wall -> r_in = 130.4mm
+  wall_thickness_mm: 22.5   # plywood wall thickness -> frame r = 130.4..152.9mm
 
 # --- Payload Model ---
 # PLACEHOLDER, disabled by default. When enabled, EM adds P_payload_W and the
@@ -223,23 +227,42 @@ levitating_disc:
   plate_hot_display_C: 125.0  # display-only: JS heat-color ramp ceiling for the disc, not physics
 
 # --- Metal plate library (swap for comparison) ---
-# Al Ø202mm (2026-07-02, user feedback): covers the disc out to the separator
-# ring's outer edge (r=101mm per outer_iron_ring.r_outer_mm). This is a SEPARATE
-# entry, not a change to plate_material.radius_mm default (80mm is the real,
-# validated disc) -- select it at build time via
-# `python build_twin_html_fem.py --plate-radius 101`. EM/ROM MUST be re-solved
-# at this radius (not scaled from R=80) because the wider plate overlaps the
-# outer_iron_ring/outer-coil field region -- see CLAUDE.md WP-C results.
+# REPLACED 2026-07-10 with the team's real measured disc set (solid aluminium,
+# 3mm thick, radius/mass measured on the actual discs) -- the previous Ø100/
+# Ø200/Ø202mm (r=50/100/101mm) and Cu Ø160mm entries were not real stocked
+# discs and were dropped (--plate-radius still accepts any override at build
+# time, e.g. `python build_twin_html_fem.py --plate-radius 101`, this just
+# removed those radii from the default plate_library/disc-compare-mode list).
+# mass_g is the measured weight (reference/QA only, no code reads it yet) --
+# idealized rho*V mass (Al 2700 kg/m3, t=3mm) is within ~3% of mass_g for all
+# four, consistent with real machining/measurement tolerance.
+# Ø160mm ("Al Ø160mm", r=80mm) is the STANDARD disc used for rig tests --
+# matches plate_material's default radius_mm=80 above.
 # Ø = diameter (2×radius_mm), radius_mm = radius (the field the solver actually uses).
 plate_library:
-  - {name: "Al Ø100mm", radius_mm:  50.0, thickness_mm: 3.0, material: aluminium}
-  - {name: "Al Ø130mm", radius_mm:  65.0, thickness_mm: 3.0, material: aluminium}
-  - {name: "Al Ø160mm", radius_mm:  80.0, thickness_mm: 3.0, material: aluminium}
-  - {name: "Al Ø200mm", radius_mm: 100.0, thickness_mm: 3.0, material: aluminium}
-  # NOTE: Ø200mm and Ø202mm are two DIFFERENT discs (r=100 vs r=101mm) — check
-  # radius_mm, not just the name, before using either.
-  - {name: "Al Ø202mm", radius_mm: 101.0, thickness_mm: 3.0, material: aluminium}
-  - {name: "Cu Ø160mm", radius_mm:  80.0, thickness_mm: 3.0, material: copper}
+  - {name: "Al Ø130mm", radius_mm: 65.0, thickness_mm: 3.0, material: aluminium, mass_g: 113}
+  - {name: "Al Ø140mm", radius_mm: 70.0, thickness_mm: 3.0, material: aluminium, mass_g: 126}
+  - {name: "Al Ø150mm", radius_mm: 75.0, thickness_mm: 3.0, material: aluminium, mass_g: 142}
+  - {name: "Al Ø160mm", radius_mm: 80.0, thickness_mm: 3.0, material: aluminium, mass_g: 159}  # STANDARD test disc
+
+# --- Hollow/annular aluminium discs (measured 2026-07-10) --- NOT YET SIMULATED.
+# Real physical discs the team also has ("Al Ø110/55mm": outer r=55mm/Ø110mm,
+# bored-out inner hole r=27.5mm/Ø55mm, 3 stock thicknesses). Deliberately kept
+# OUT of plate_library above: thermal_solver.py/em_solver.py mesh SOLID discs
+# from r=0 only -- there is no inner-radius/hole geometry support in the FEM
+# mesh generation yet, and every plate_library consumer (digital_twin.py's
+# RadioButtons, sim_plates.py, build_twin_html_fem.py's disc-compare mode)
+# treats radius_mm as a solid disc, so mixing these in would silently compute
+# WRONG physics (treating the bored-out hole as solid metal). Data recorded
+# here for whoever adds annulus support later. mass_g is the measured weight;
+# idealized rho*V annulus mass (Al 2700 kg/m3) runs ~10-18% BELOW mass_g for
+# all three (unlike the solid discs above, which match to ~3%) -- unexplained,
+# possibly a denser alloy or extra rim geometry not captured by outer/inner
+# radius alone. Flag for whoever implements the hole geometry, not blocking.
+plate_library_annulus_TODO:
+  - {name: "Al Ø110/55mm t3.5", outer_radius_mm: 55.0, inner_radius_mm: 27.5, thickness_mm: 3.5, material: aluminium, mass_g: 79}
+  - {name: "Al Ø110/55mm t2.8", outer_radius_mm: 55.0, inner_radius_mm: 27.5, thickness_mm: 2.8, material: aluminium, mass_g: 60}
+  - {name: "Al Ø110/55mm t1.8", outer_radius_mm: 55.0, inner_radius_mm: 27.5, thickness_mm: 1.8, material: aluminium, mass_g: 41}
 
 # --- Levitation gap spring-mass-damper (WP-A/WP-D, docs/PLAN_SIM_FEEDBACK_2026-07-02.md) ---
 # JS reads these via PARAMS.lev (build_twin_html_fem.py lev_params()/romStep)
@@ -250,18 +273,26 @@ plate_library:
 # build showed a nonzero gap at 5A even though that disc doesn't lift until
 # ~6.45A). See lev_params() in build_twin_html_fem.py for the radius selection.
 levitation:
-  z_gap_5A_mm: 4.1     # [mm] equilibrium gap at I=5A_rms, R=80mm (locked 2026-07-01)
-  z_decay_mm: 13.6     # [mm] EM force decay length z0, R=80mm. WP-Z0 (2026-07-10,
-                        # docs/AUDIT_FIX_PLAN_2026-07-04.md OQ-4): two fitting methods
-                        # disagreed for this SAME disc -- 21.4mm (F(1mm)/F_grav crossing,
-                        # used until 2026-07-10) vs 13.6mm (F(1mm)/F(5mm) refit, used for
-                        # every OTHER plate radius via _lev_anchor() in
-                        # build_twin_html_fem.py). User confirmed the real rig's gap only
-                        # "nudges up a little" at 7.75A, matching the smaller 13.6mm value
-                        # (21.4mm predicted z_eq(7.75A)≈22.9mm; 13.6mm predicts ≈16.0mm) --
-                        # switched to 13.6mm so R=80 now uses the SAME method as every
-                        # other radius. Still order-of-magnitude (no real multi-current
-                        # gap measurement yet) -- see docs/CHANGELOG.md "WP-D".
+  # UPDATED 2026-07-10: both values below RECOMPUTED after the coil-radii remeasurement
+  # + center-core/iron-ring material flip to confirmed iron (mu_r=1000, see coils:/
+  # iron_core:/outer_iron_ring: above) -- superseding the 2026-07-01/WP-Z0 values (was
+  # z_gap_5A_mm=4.1, z_decay_mm=13.6). ⚠️ OPEN QUESTION (see CLAUDE.md "LIFT FORCE"):
+  # the new z_gap_5A_mm=11.7mm predicts a ~14.7mm VISIBLE gap, but the real observed
+  # visible gap is 7-8mm (2026-07-01) -- do NOT treat this as re-validated, it's the
+  # direct output of the current (possibly-too-high) mu_r=1000 placeholder, kept as-is
+  # per user request rather than reverse-fit back to the old observation.
+  z_gap_5A_mm: 11.7    # [mm] equilibrium gap at I=5A_rms, R=80mm, from run_rig_validation()'s
+                        # full F(z) vs F_grav sweep (crossing between z=10mm/12mm)
+  z_decay_mm: 11.79    # [mm] EM force decay length z0, R=80mm, same F(1mm)/F(5mm) method as
+                        # WP-Z0 below (z0=(5-1)/ln(F(1mm)/F(5mm)), F(1mm)=4.58N, F(5mm)=3.26N)
+  # --- Pre-2026-07-10 history (WP-Z0, docs/AUDIT_FIX_PLAN_2026-07-04.md OQ-4): two
+  # fitting methods disagreed for the SAME disc under the OLD (non-iron) geometry --
+  # 21.4mm (F(1mm)/F_grav crossing) vs 13.6mm (F(1mm)/F(5mm) refit, used for every OTHER
+  # plate radius via _lev_anchor() in build_twin_html_fem.py). User confirmed the real
+  # rig's gap only "nudges up a little" at 7.75A, matching the smaller 13.6mm value --
+  # switched to 13.6mm so R=80 used the SAME method as every other radius. See
+  # docs/CHANGELOG.md "WP-D". Both numbers are superseded by the 2026-07-10 iron update
+  # above; kept here for context on how the F1/F5 method itself was chosen.
   zeta0: 0.0            # damping ratio floor
   zeta1: 0.02           # damping ratio grows with (I/5A)^2; zeta(5A)=0.02 matches the
                         # observed ~9s settle time (2026-07-01). zeta(7.75A) only
@@ -436,6 +467,15 @@ validation_data:
 # tau = C/(G+hA) = 240s with the 0.32 ratio (C = 73 J/K) gives G=0.06, hA=0.244.
 # CAVEAT: core IR reading is low-confidence (shiny surface, wrong emissivity) --
 # order-of-magnitude fit; refit with contact thermocouples later.
+# STALE 2026-07-10: hA_inner/hA_outer/coil_C_scale below were fitted against the
+# PRE-remeasurement coil geometry (P_inner/P_outer(7.8A) was 150.3/161.6W). The
+# 2026-07-10 coil-radii + iron-material update (see coils:/iron_core:/
+# outer_iron_ring: above) gives P_inner/P_outer(7.8A)=127.3/131.7W (~15-18% lower)
+# and P_iron/P_plate are no longer ~0 -- these three numbers need refitting against
+# validation_data with the new losses (see CLAUDE.md NEXT list). Left UNCHANGED here
+# for now (not a quick substitution -- needs the same weighted least-squares refit
+# as the original calibration) -- predicted steady-state coil temps are unreliable
+# until that happens.
 lumped_thermal:
   hA_inner_W_per_K: 3.5611    # refit 2026-07-01 with corrected coil radii (was 2.2479)
   hA_outer_W_per_K: 4.3446    # refit 2026-07-01 with corrected coil radii (was 1.8788)

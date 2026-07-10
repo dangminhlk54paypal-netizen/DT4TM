@@ -141,15 +141,34 @@ data_io.py (sensor CSV → calibrate_UA)
 
 ---
 
-## 3D Body Geometry trong digital_twin_fem.html (updated 2026-07-01 session 3; corrected same day theo quan sát mô hình thật)
+## 3D Body Geometry trong digital_twin_fem.html (SUPERSEDED 2026-07-10 — xem GROUND TRUTH v2 bên dưới; giữ lại session-3 table cho lịch sử)
 
 **Tất cả geometry được xây dựng PROCEDURALLY từ params.yaml — STL file chỉ dùng tham khảo hình dáng.**
 
-### GROUND TRUTH — mặt cắt bán kính của thiết bị thật (user xác nhận 2026-07-01, xem docs/real_model.png)
-Đây là cấu trúc VẬT LÝ THẬT. Mọi geometry/render phải khớp với bảng này — các AIR GAP
-là khe hở KHÔNG KHÍ thật, có chiều sâu, KHÔNG được lấp bằng vật liệu rắn:
+### GROUND TRUTH v2 (2026-07-10, đo trực tiếp bằng thước trên rig thật — SUPERSEDES bảng session-3 bên dưới)
+Bán kính và vật liệu chính xác, đọc từ `coils:`/`iron_core:`/`outer_iron_ring:` trong params.yaml:
 ```
-r =   0..25    lõi trung tâm — SẮT TỪ (user xác nhận trực quan; xem note conflict bên dưới)
+r =    0..25.9   lõi trung tâm — SẮT (xác nhận hút nam châm 2026-07-10, mu_r=1000/sigma=1e6)
+r =  25.9..27.9  AIR GAP 2mm
+r =  27.9..61.9  INNER COIL, 1000 vòng, rộng 34mm (KHÁC session-3: khi đó ghi 28..78/50mm)
+r =  61.9..64.9  AIR GAP 3mm
+r =  64.9..79.9  IRON RING, rộng 15mm — SẮT (xác nhận hút nam châm 2026-07-10, cùng vật
+                 liệu lõi trung tâm; KHÁC session-3: khi đó ghi 81..101/20mm)
+r =  79.9..82.9  AIR GAP 3mm
+r =  82.9..102.9 OUTER COIL, 500 vòng, rộng 20mm (KHÁC session-3: khi đó ghi 104..124)
+r = 102.9..~130.4 AIR 25-30mm → vách trong khung gỗ
+r ~130.4..~180.4  khung gỗ plywood BÁT GIÁC (8 cạnh), tổng ~50mm từ outer coil ra mép ngoài
+```
+⚠️ **OPEN QUESTION (chưa giải quyết)**: mu_r=1000 là placeholder mild-steel-like (chưa đo
+B-H curve thật) — với giá trị này, lực nâng dự đoán z_eq≈11.7mm (khe nhìn thấy≈14.7mm),
+NHƯNG quan sát thực tế là 7-8mm. Xem CLAUDE.md mục "LIFT FORCE" để biết chi tiết — KHÔNG
+coi z_eq/khe hở hiện tại là đã validated.
+
+### GROUND TRUTH v1 (2026-07-01 session 3, xem docs/real_model.png) — SUPERSEDED, giữ cho lịch sử
+```
+r =   0..25    lõi trung tâm — SẮT TỪ (user xác nhận trực quan; từng có "note conflict" với
+               test 2026-07-01 nói KHÔNG hút — conflict này đã giải quyết 2026-07-10: user
+               re-test xác nhận CÓ hút, xem GROUND TRUTH v2 ở trên)
 r =  25..28    AIR GAP ~2–3mm (khe hở thật giữa lõi và inner coil)
 r =  28..78    INNER COIL, 1000 vòng — dây đồng + lớp keo/nhựa thông cách điện màu nâu sậm
 r =  78..81    AIR GAP ~3–3.5mm
@@ -159,11 +178,6 @@ r = 104..124   OUTER COIL, 500 vòng — cấu tạo giống inner coil
 r = 124..~174  AIR ~50mm — outer coil đứng HOÀN TOÀN ĐỘC LẬP, vách ngoài tiếp xúc không khí
 r = ~174+      khung gỗ plywood BÁT GIÁC (8 cạnh) — KHÔNG ôm sát coil
 ```
-**Note conflict (chưa giải quyết):** CLAUDE.md ghi magnet-contact test 2026-07-01 cho
-lõi trung tâm = KHÔNG hút nam châm → non-ferromagnetic (`iron_core.mu_r=1.0` trong
-params.yaml). Nhưng user mô tả trực quan lõi là "sắt từ". Separator ring cũng vậy:
-user nói sắt từ nhưng params.yaml đang model là air (mu_r=1.0, magnet test pending).
-Nếu xác nhận ferromagnetic → set mu_r=100–1000 và RE-RUN EM (kết quả lực/loss sẽ đổi).
 
 ### Coordinate System (Z-up, mm)
 ```

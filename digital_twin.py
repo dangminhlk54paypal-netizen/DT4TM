@@ -6,8 +6,9 @@ Features:
     slider (Carroll & Meynell CMV 10 E-1, 0–270) that drives I via the
     measured dial->current table (params.yaml power_supply)
   • Time-speed slider (1×–200×)
-  • Metal plate selector from plate_library (Al Ø100/130/160/200/202, Cu Ø160)
-    → automatically rebuilds ROM when a new plate is selected
+  • Metal plate selector from plate_library (Al Ø130/140/150/160mm, Ø160mm
+    is the standard test disc) → automatically rebuilds ROM when a new plate
+    is selected
   • I(t) scenarios: step / ramp / sine / pulse / manual
   • Space = pause/resume
 """
