@@ -122,13 +122,17 @@ emissivity) — only the dark-varnished **coil** readings are trustworthy for ca
 self-heating, since the core is confirmed iron with nonzero P_iron — previously it was
 assumed to be pure conduction from the coils since the core itself had P=0.)
 Final calibrated lumped coil network (params.yaml `lumped_thermal`):
-`hA_inner=3.5611`/`hA_outer=4.3446`/`coil_C_scale=0.2241` → T_inner_ss≈40.5°C/
-T_outer_ss≈38.5°C at 5A/20°C. A two-node cooldown model (surface + winding-core
-reservoir) was added later — RMS residual on the ramp test = 2.5°C. Full calibration
-history (two rounds, why the numbers changed) → docs/CHANGELOG.md.
-⚠️ **STALE since 2026-07-10**: fitted against pre-remeasurement P_coil values (was
-150.3/161.6W at 7.8A, now 127.3/131.7W, ~15-18% lower, plus P_iron/P_plate are no
-longer ~0) — needs refitting, see NEXT list below.
+`hA_inner=3.0605`/`hA_outer=3.5986`/`coil_C_scale=0.2241` → T_inner_ss≈79.25°C/
+T_outer_ss≈74.00°C at 7.8A/29°C (exact match to Session 1 IR readings). A two-node
+cooldown model (surface + winding-core reservoir) was added later — RMS residual on
+the ramp test = 2.5°C (pre-2026-07-10 fit, not yet re-verified against new hA). Full
+calibration history (three rounds now, why the numbers changed) → docs/CHANGELOG.md.
+✅ **REFITTED 2026-07-11**: hA_inner/hA_outer re-solved via steady-state energy
+balance against the new post-remeasurement P_inner/P_outer (127.3/131.7W at 7.8A,
+down from 150.3/161.6W). ⚠️ `coil_C_scale=0.2241` still HELD at its 2026-07-01 value
+pending a full weighted-least-squares refit against `thermal_ramp_test` — steady-state
+temps are trustworthy, transient shape (τ, cooldown curve) may drift until that's done.
+See NEXT list below.
 
 ## Data (repo root)
 - levitation_height_team28.csv — Table I from the problem PDF.
@@ -212,17 +216,30 @@ STATE ONLY — trimmed 2026-07-10 (WP-TRIM, docs/AUDIT_FIX_PLAN_2026-07-04.md).
       anchor points), annulus/hollow-disc geometry support (3 real discs in
       `plate_library_annulus_TODO`, r_out=55/r_in=27.5mm — solvers only mesh
       solid discs from r=0, not wired in yet).
+- [ ] NEXT (2026-07-11): full weighted-least-squares refit of `coil_C_scale`
+      against `validation_data.thermal_ramp_test` — hA_inner/hA_outer were
+      refitted this session (steady-state, closed-form) but coil_C_scale was
+      deliberately held at its 2026-07-01 value (needs an iterative transient
+      fit, out of scope for a same-session pass). Until this is done, transient
+      shape (τ, cooldown curve) may drift even though steady-state T is exact.
+- [ ] NEXT (2026-07-11): `docs/REPORT_WHY_CUSTOM_CODE_DE.md` (untracked, dated
+      2026-07-10) is now out of sync with the English `REPORT_WHY_CUSTOM_CODE.md`
+      (commit 19e4161 added a "section 2.5" to the English version only) —
+      either port section 2.5 to the DE version or drop it if no longer needed.
 - [ ] OPEN QUESTION (2026-07-10): iron_core/outer_iron_ring `mu_r=1000` is a
       mild-steel-*like* placeholder (never measured — no B-H curve, no
       resistivity test), and it makes the predicted levitation gap ~2x the
       observed one (see "LIFT FORCE" bullet above). Needs either a real B-H/μᵣ
       measurement, or accepting the mismatch as a known model limitation.
-      Also NEXT: refit `lumped_thermal` (hA_inner/hA_outer/coil_C_scale) — the
-      current values are STALE against the new P_coil numbers (see "First
-      quantitative result"); and generalize `solve_em_saturating()`'s Picard
-      loop to cover `outer_iron_ring` too (docs/AUDIT_FIX_PLAN_2026-07-04.md
-      M5 — not urgent right now since B_max=0.66T is unsaturated, but was a
-      silent gap before this ring had a real μᵣ to correct).
+- [x] RESOLVED 2026-07-11: `solve_em_saturating()`'s Picard loop generalized to
+      correct BOTH `iron_core` AND `outer_iron_ring` (was iron_core-only,
+      docs/AUDIT_FIX_PLAN_2026-07-04.md M5). No change to current numerical
+      output (both regions still unsaturated, B_max=0.66T ≪ B_sat=1.5T) — this
+      makes the code correct once a real B-H measurement raises either μᵣ.
+- [x] RESOLVED 2026-07-11: `lumped_thermal` hA_inner/hA_outer refitted against
+      the new post-2026-07-10 P_coil numbers (steady-state energy balance,
+      exact match to Session 1: T_inner_ss=79.25°C≈79°C, T_outer_ss=74.00°C=
+      74°C). `coil_C_scale` still NEXT — see below.
 - [x] RESOLVED 2026-07-10: `plate_library` replaced with the team's real
       measured solid discs — Al Ø130/140/150/160mm, Ø160mm is the standard
       test disc (matches `plate_material` default r=80mm); dropped the old

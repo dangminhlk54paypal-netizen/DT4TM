@@ -790,3 +790,73 @@ acted on this session): stale pre-2026-07-10 coil-geometry numbers in
 `build_twin_html_fem.py --bake-key` defaulting to the placeholder even on the
 user's own machine with `local/.env.local` present (by design, per the
 2026-07-04 security fix — flagged as a possible UX mismatch, not changed).
+
+---
+
+## 2026-07-11 — Post-remeasurement cleanup: 4-phase fix from a Fable full-project review
+
+User asked "fable" (an external review agent) to audit the whole project for
+whether the 2026-07-10 geometry re-measurement (commit 389d219: coil radii,
+iron confirmation) had been fully propagated into the thermal model, what bugs
+it might have left behind, and what stale code/docs were still hanging around.
+The review returned 4 priorities; user approved doing all 4 in one pass.
+
+**Phase A — Correctness sync (commit 9c4c753).** The WP-PEAK fix Fable flagged
+as "uncommitted" in `em_solver.py` turned out to already be committed (04e6900,
+same session as the audit — see the "WP-PEAK follow-up" entry above); re-verified
+via `git diff`/`git log` before touching anything, so no duplicate fix was made.
+What was actually stale: `CLAUDE.md`'s `rom.py` bullet still said
+`τ=5.53min@R=80mm` (pre-remeasurement value) — re-ran `python rom.py`, got
+τ=244.3s=4.07min, updated the doc. `params.yaml`'s `power_ref_W` (used only by
+`sim_plates.py --no-em`'s fallback path) still had the 2026-07-01 value 9.67 —
+updated to 25.825 (current P_plate at 5A) with a comment noting the two prior
+stale values (9.67W, and an even older wrong 2.63W) for context.
+
+**Phase B — Thermal calibration refit (commit fb2bd78).** `lumped_thermal`
+(hA_inner/hA_outer) was fit 2026-07-01 against P_inner/P_outer=150.3/161.6W
+@7.8A; the 2026-07-10 geometry update dropped these to 127.3/131.7W (~15-18%
+lower) plus added nonzero P_iron/P_plate, so the old hA values no longer
+reproduce the measured Session 1 steady-state temps. Re-derived hA via the
+same steady-state energy-balance method as the original fit (mirrors the
+coupled inner↔iron node solve in `build_twin_html_fem.py:384-394`), using the
+new P_inner/P_outer and the existing `validation_data.thermal_at_7p8A`
+(T_inner=79°C, T_outer=74°C, T_amb=29°C measured). Result: `hA_inner`
+3.5611→**3.0605**, `hA_outer` 4.3446→**3.5986** (both down ~14-17%, expected
+since coil losses fell while total system loss rose via plate/iron self-heating).
+Verified by hand-solving the 2×2 coupled system with the new hA: T_inner_ss=
+79.25°C (measured 79°C), T_outer_ss=74.00°C (measured 74°C exact). `coil_C_scale`
+(0.2241) deliberately left UNCHANGED — refitting it properly requires an
+iterative weighted-least-squares fit against the `thermal_ramp_test` trajectory,
+which is a separate, longer task; documented as NEXT in both `params.yaml` and
+`CLAUDE.md` rather than guessed at.
+
+**Phase C — Generalize saturation correction (commit aa9537c).** Since
+2026-07-10, `outer_iron_ring` is confirmed ferromagnetic (`mu_r=1000.0`, same
+as `iron_core`), but `solve_em_saturating()`'s Picard loop only ever corrected
+`iron_core`'s μ_r(B) — `outer_iron_ring` stayed pinned at its linear value,
+silently (a known gap since docs/AUDIT_FIX_PLAN_2026-07-04.md M5, dormant only
+because `outer_iron_ring.mu_r` used to be 1.0/air-like). Rewrote the function
+to track both regions independently: separate `iron_idx`/`oir_idx` element
+selection, separate `nu_iron`/`nu_oir` arrays and `mu_r_lin`/`B_sat` per region,
+single unified convergence check on the vector-potential field. Verified
+byte-for-byte unchanged losses before/after (P_plate=25.81W, P_iron=5.86W,
+P_coil=106.44W) — both regions are still unsaturated at 5A (B_max=0.66T ≪
+B_sat=1.5T, μ_r_core≈993/μ_r_ring≈984), so this is a correctness fix for
+*future* B-H data, not a behavior change today.
+
+**Phase D — Code cleanliness (commit 418160e).** Documentation-only: expanded
+the comment around `build_twin_html_fem.py`'s `T_AMB_FALLBACK_C = 29.0` JS
+constant to explain the intentional split (FEM solves at physics-reference
+T_amb=20°C per the professor's "keep it simple" directive; the *display*
+fallback of 29°C matches the HIKMICRO validation session's actual ambient, used
+only when the live Google Weather API call fails). Similarly annotated
+`data_io.py`'s `_mock_stream` hard-coded constants (`T_amb=20.0`,
+`dT_core_ss=25.0`, `dT_disc_ss=11.46`, `tau_core_s=300.0`, `tau_disc_s=632.0`)
+as test-fixture-only values that don't read `params.yaml` and don't track the
+current calibration — meant to generate a plausible-looking mock CSV for
+`data_io.py --mode calibrate`, not to be physically authoritative.
+
+**Not done this session (see CLAUDE.md NEXT list):** full transient
+least-squares refit of `coil_C_scale`; porting the English report's "section
+2.5" (commit 19e4161) into the still-untracked German
+`docs/REPORT_WHY_CUSTOM_CODE_DE.md`.
