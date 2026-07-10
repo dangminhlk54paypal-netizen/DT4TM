@@ -167,12 +167,16 @@ STATE ONLY — trimmed 2026-07-10 (WP-TRIM, docs/AUDIT_FIX_PLAN_2026-07-04.md).
       update above, root cause of the earlier regression still unknown but
       no longer blocking.
 - [ ] PAUSED: `run_benchmark_validation()` (original TEAM28, 20A, no iron)
-      gives z_eq≈6.8mm vs 11.3mm expected (40% error; was 7.1mm/37% until
-      2026-07-10, when `outer_iron_ring`/`payload_model` were also disabled
-      for this call — they were previously left enabled, harmless while
-      `outer_iron_ring` was air-like but no longer once it became real iron)
-      — unexplained, paused by user request 2026-06-23, not blocking. Its
-      20A is the original problem's own convention, not a multimeter reading.
+      gives z_eq≈**14.5mm** vs 11.3mm expected (28% error, overshoot; was
+      6.8mm/40% error UNDERSHOOT until 2026-07-11, when a missed WP-PEAK call
+      site was fixed — this function called `compute_lift_force(cfg)` without
+      `I_amplitude=cfg.I_peak`, so F_z was ~2× too small at every z; the
+      sibling `run_rig_validation()` got this fix in commit c37e8b8
+      (2026-07-10) but this call site was overlooked). Confirms the RMS/peak
+      bug was real and explains part of the old gap, but a real residual
+      error remains (now 28% over instead of 40% under) — still unexplained,
+      still not blocking. Its 20A is the original problem's own convention,
+      not a multimeter reading.
 - [x] `rom.py` — ThermalROM, I²-scaling exact (4.000000), τ=5.53min@R=80mm.
 - [x] `digital_twin.py` — interactive matplotlib twin (I/dial/speed sliders,
       plate RadioButtons matched by `radius_mm`+material — not a name string,

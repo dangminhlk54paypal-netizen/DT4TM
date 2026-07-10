@@ -742,3 +742,51 @@ outcome: "Nếu xác nhận ferromagnetic → set mu_r=100-1000 và RE-RUN EM").
 `AIzaSy...` pattern present) — not yet Playwright-verified in this session (the
 underlying physics is mid-open-question, so a full visual QA pass was deferred
 rather than rubber-stamping a demo that currently shows an unvalidated ~15mm gap).
+
+---
+
+## 2026-07-11 — WP-PEAK follow-up: `run_benchmark_validation()` missed the RMS/peak fix
+
+Codebase audit (Explore-agent scan for undocumented bugs, prompted by user
+asking "còn lỗi tiềm ẩn nào cần giải quyết không") found that `em_solver.py`'s
+`run_benchmark_validation()` (line 549) still called `compute_lift_force(cfg)`
+with no `I_amplitude` argument — falling back to `cfg.I` (RMS-measured value)
+as the phasor amplitude, instead of the true amplitude `cfg.I_peak = cfg.I *
+sqrt(2)`. Per the CURRENT CONVENTION (see "Device numbers" in CLAUDE.md /
+`config.Config.I_peak` docstring), the force chain must use `I_peak` — only
+the loss chain is allowed to treat RMS-as-amplitude. Because Lorentz force
+scales with amplitude², this under-supplied every `F_z` in the benchmark
+sweep by a factor of ~2.
+
+This is the same bug WP-PEAK (2026-07-10, commit c37e8b8) already fixed in
+the sibling function `run_rig_validation()` (line 614) — `git blame` showed
+line 549 unchanged since `e0ee206d` (2026-06-15), i.e. it predates the
+WP-PEAK fix entirely and was simply missed when that commit swept the file.
+
+**Fix**: `compute_lift_force(cfg)` → `compute_lift_force(cfg, I_amplitude=cfg.I_peak)`
+at line 549, with a short comment mirroring `run_rig_validation()`'s existing
+WP-PEAK comment block so a future pass doesn't reintroduce the gap a third time.
+
+**Verification**: re-ran `python em_solver.py` — the benchmark's interpolated
+z_eq moved from **6.8mm → 14.5mm** (expected 11.3mm from
+`levitation_height_team28.csv`). This is the predicted direction (force was
+too small → equilibrium point was too close in; fixing the amplitude pushes
+the balance point further out, toward 11.3mm) and confirms the bug was real —
+but the result now *overshoots* (28% over) instead of *undershooting* (40%
+under), so a separate, still-unexplained physics/mesh discrepancy remains.
+Re-ran `python thermal_solver.py` as an unrelated regression check: energy
+balance still exactly 0.000% (unaffected, as expected — that solver doesn't
+touch `compute_lift_force`). Did not touch `run_rig_validation()` or any other
+`compute_lift_force`/`solve_em` call site — grep confirmed all other sites
+already pass `I_amplitude`/`cfg.I_peak` correctly. The `run_benchmark_validation()`
+"PAUSED... unexplained" status in CLAUDE.md remains appropriate — this fix
+narrows the gap but does not close it — only the specific 6.8mm/40% figure
+was stale and has been updated to 14.5mm/28% (overshoot).
+
+Also surfaced by the same audit but explicitly deferred by the user (not
+acted on this session): stale pre-2026-07-10 coil-geometry numbers in
+`docs/REPORT_WHY_CUSTOM_CODE.md`/`_DE.md`; hardcoded copper `rho`/`cp` in
+`build_twin_html_fem.py:363` duplicating `params.yaml material_props.copper`;
+`build_twin_html_fem.py --bake-key` defaulting to the placeholder even on the
+user's own machine with `local/.env.local` present (by design, per the
+2026-07-04 security fix — flagged as a possible UX mismatch, not changed).

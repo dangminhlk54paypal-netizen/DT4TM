@@ -540,13 +540,18 @@ def run_benchmark_validation():
     print(f"  {'z_bottom (mm)':>14}  {'F_z (N)':>10}  {'F_z/mg':>8}  {'note'}")
     print(f"  {'-'*50}")
 
+    # WP-PEAK (docs/AUDIT_FIX_PLAN_2026-07-04.md): force needs the TRUE phasor
+    # amplitude (I_peak = I_rms*sqrt(2)), not I_rms used as-if-amplitude (the
+    # loss chain's calibrated convention -- see config.Config.I_peak docstring).
+    # Mirrors the fix already applied to run_rig_validation() below (commit
+    # c37e8b8, 2026-07-10) -- this call site was missed by that commit.
     z_sweep = np.array([3, 4, 5, 6, 7, 8, 9, 10, 11, 11.3, 13, 15, 18])   # mm
     F_vals  = []
     for z_mm in z_sweep:
         cfg.raw["plate_material"]["z_bottom_mm"] = float(z_mm)
         cfg.geometry = Geometry(plate_radius_m=R, plate_thickness_m=t,
                                 plate_z_bottom_m=float(z_mm) * 1e-3)
-        F_z = compute_lift_force(cfg)
+        F_z = compute_lift_force(cfg, I_amplitude=cfg.I_peak)
         F_vals.append(F_z)
         ratio = F_z / F_grav
         note = "<-- balanced" if abs(ratio - 1.0) < 0.15 else ""
