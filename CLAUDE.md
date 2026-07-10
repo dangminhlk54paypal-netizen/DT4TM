@@ -177,7 +177,7 @@ STATE ONLY — trimmed 2026-07-10 (WP-TRIM, docs/AUDIT_FIX_PLAN_2026-07-04.md).
       error remains (now 28% over instead of 40% under) — still unexplained,
       still not blocking. Its 20A is the original problem's own convention,
       not a multimeter reading.
-- [x] `rom.py` — ThermalROM, I²-scaling exact (4.000000), τ=5.53min@R=80mm.
+- [x] `rom.py` — ThermalROM, I²-scaling exact (4.000000), τ=4.07min@R=80mm (re-measured after 2026-07-10 geometry update).
 - [x] `digital_twin.py` — interactive matplotlib twin (I/dial/speed sliders,
       plate RadioButtons matched by `radius_mm`+material — not a name string,
       scenario picker). `--dt`/`--window` CLI defaults read from

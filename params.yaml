@@ -23,8 +23,8 @@ excitation:
   voltage_V: 190.0       # MEASURED operating voltage (rig, main op point: 190V -> 5A_rms)
   current_ref_A: 5.0    # reference point (5A_rms = operating condition)
   frequency_Hz: 50.0
-  power_ref_W: 9.67     # aluminum plate eddy loss at I_ref=5A_rms (EM solver, corrected
-                        # coil radii 2026-07-01, payload OFF). Old value was 2.63W (wrong coil radii).
+  power_ref_W: 25.825   # aluminum plate eddy loss at I_ref=5A_rms (EM solver, re-measured
+                        # geometry 2026-07-10, payload OFF). Previous: 9.67W (old coil radii 2026-07-01), 2.63W (wrong).
 
 # --- AC power supply (variac) — identified 2026-07-02 from rig photo (docs/rig_photo.jpg) ---
 # Carroll & Meynell "Stelltransformator" CMV 10 E-1: variable autotransformer,
