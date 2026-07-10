@@ -304,83 +304,110 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
     Gives μ_r_eff → μ_r_lin for B → 0 and μ_r_eff → 1 for B >> B_sat.
     Under-relaxation (relax=0.5) stabilises convergence.
 
+    Handles saturation correction for BOTH iron_core and outer_iron_ring regions
+    (generalized 2026-07-11, previously iron_core only). Each region maintains
+    its own μ_r and saturation threshold.
+
     I_amplitude: forwarded to solve_em() for the coil source term. None
     (default) = cfg.I -- this loop's own nonlinear μ_r update (below) must
     stay on whatever convention the CALLER needs (compute_losses() relies on
     the default to keep P_plate/P_coil unchanged; force-oriented callers may
-    pass cfg.I_peak). Currently a no-op either way while iron_core.mu_r=1.0
-    (Lorentzian formula reduces to μ_r_eff≡1 regardless of B) -- see the
-    docstring note in check_saturation() for the reporting-side equivalent.
+    pass cfg.I_peak). Currently a no-op while μ_r=1.0 (Lorentzian reduces to
+    μ_r_eff≡1 regardless of B) -- see docstring in check_saturation().
 
-    Falls back to linear solve() if iron is disabled or not saturating.
+    Falls back to linear solve() if all iron regions are disabled.
     Returns the same dict as solve_em().
     """
-    # M5 (docs/AUDIT_FIX_PLAN_2026-07-04.md): this Picard loop only tracks
-    # iron_core's saturation, never outer_iron_ring's -- currently harmless
-    # (outer_iron_ring.mu_r=1.0, confirmed non-ferromagnetic pending a magnet
-    # test) but would silently go stale if someone later confirms the ring IS
-    # ferromagnetic and only bumps its mu_r without also generalizing this loop.
-    oir = cfg.raw.get("outer_iron_ring", {})
-    if oir.get("enabled", False) and float(oir.get("mu_r", 1.0)) > 5.0:
-        print("    WARNING: outer_iron_ring.mu_r > 5 but solve_em_saturating() "
-              "only applies the nonlinear saturation correction to iron_core "
-              "-- outer_iron_ring's μ_r stays fixed/linear even though it "
-              "would physically saturate. Generalize the Picard loop below "
-              "(see docs/AUDIT_FIX_PLAN_2026-07-04.md M5) before trusting "
-              "results with a ferromagnetic outer_iron_ring.")
-
     fe = cfg.iron
-    if not fe.get("enabled", False):
-        return solve_em(cfg, outer_bc=outer_bc, I_amplitude=I_amplitude)
-
-    B_sat    = float(fe.get("B_sat_T", 1.5))
-    mu_r_lin = float(fe.get("mu_r", 1000.0))
+    oir = cfg.raw.get("outer_iron_ring", {})
     mm = 1e-3
-    r0_fe = fe["r_inner_mm"] * mm
-    r1_fe = fe["r_outer_mm"] * mm
-    z0_fe = fe["z_bottom_mm"] * mm
-    z1_fe = fe["z_top_mm"] * mm
+
+    # Check if either ferromagnetic region is enabled
+    core_enabled = fe.get("enabled", False) and float(fe.get("mu_r", 1.0)) > 1.1
+    ring_enabled = oir.get("enabled", False) and float(oir.get("mu_r", 1.0)) > 1.1
+
+    if not (core_enabled or ring_enabled):
+        return solve_em(cfg, outer_bc=outer_bc, I_amplitude=I_amplitude)
 
     # Initial linear solve
     res = solve_em(cfg, outer_bc=outer_bc, I_amplitude=I_amplitude)
     coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
     z_all = coords[:, 1]
 
-    # Identify iron element indices once
-    iron_idx = [
-        e for e in range(len(tris))
-        if (r0_fe <= ridge[e, 0] <= r1_fe and
-            z0_fe <= (z_all[tris[e, 0]] + z_all[tris[e, 1]] + z_all[tris[e, 2]]) / 3.0 <= z1_fe)
-    ]
-    if not iron_idx:
+    # Identify element indices for both ferromagnetic regions (once)
+    iron_idx, oir_idx = [], []
+    if core_enabled:
+        r0_fe, r1_fe = fe["r_inner_mm"] * mm, fe["r_outer_mm"] * mm
+        z0_fe, z1_fe = fe["z_bottom_mm"] * mm, fe["z_top_mm"] * mm
+        iron_idx = [
+            e for e in range(len(tris))
+            if (r0_fe <= ridge[e, 0] <= r1_fe and
+                z0_fe <= (z_all[tris[e, 0]] + z_all[tris[e, 1]] + z_all[tris[e, 2]]) / 3.0 <= z1_fe)
+        ]
+
+    if ring_enabled:
+        r0_oir, r1_oir = oir["r_inner_mm"] * mm, oir["r_outer_mm"] * mm
+        z0_oir, z1_oir = oir["z_bottom_mm"] * mm, oir["z_top_mm"] * mm
+        oir_idx = [
+            e for e in range(len(tris))
+            if (r0_oir <= ridge[e, 0] <= r1_oir and
+                z0_oir <= (z_all[tris[e, 0]] + z_all[tris[e, 1]] + z_all[tris[e, 2]]) / 3.0 <= z1_oir)
+        ]
+
+    if not (iron_idx or oir_idx):
         return res
 
+    # Prepare override array and initialize ν for both regions
     nu_e_override = [None] * len(tris)
-    nu_iron = np.full(len(iron_idx), 1.0 / (mu_r_lin * MU0))  # start from linear ν
+    nu_iron = np.full(len(iron_idx), 1.0 / (float(fe.get("mu_r", 1000.0)) * MU0)) if iron_idx else np.array([])
+    nu_oir = np.full(len(oir_idx), 1.0 / (float(oir.get("mu_r", 1000.0)) * MU0)) if oir_idx else np.array([])
+
+    B_sat_core = float(fe.get("B_sat_T", 1.5))
+    B_sat_ring = float(oir.get("B_sat_T", 1.5))
+    mu_r_lin_core = float(fe.get("mu_r", 1000.0))
+    mu_r_lin_ring = float(oir.get("mu_r", 1000.0))
 
     for it in range(max_iter):
         B_e = _compute_B_per_element(res)
-        B_iron = np.array([B_e[e] for e in iron_idx])
-        B_max  = B_iron.max() if len(B_iron) > 0 else 0.0
 
-        # New μ_r from Lorentzian saturation model
-        mu_r_eff    = 1.0 + (mu_r_lin - 1.0) / (1.0 + (B_iron / B_sat) ** 2)
-        nu_iron_new = 1.0 / (mu_r_eff * MU0)
+        # Extract B in each ferromagnetic region
+        B_iron = np.array([B_e[e] for e in iron_idx]) if iron_idx else np.array([])
+        B_oir = np.array([B_e[e] for e in oir_idx]) if oir_idx else np.array([])
+        B_max = float(np.concatenate([B_iron, B_oir]).max()) if (len(B_iron) > 0 or len(B_oir) > 0) else 0.0
 
-        # Under-relaxation: blend old and new ν
-        nu_iron = (1.0 - relax) * nu_iron + relax * nu_iron_new
-        for ii, e in enumerate(iron_idx):
-            nu_e_override[e] = nu_iron[ii]
+        # Update μ_r for iron_core
+        if iron_idx:
+            mu_r_eff_core = 1.0 + (mu_r_lin_core - 1.0) / (1.0 + (B_iron / B_sat_core) ** 2)
+            nu_iron_new = 1.0 / (mu_r_eff_core * MU0)
+            nu_iron = (1.0 - relax) * nu_iron + relax * nu_iron_new
+            for ii, e in enumerate(iron_idx):
+                nu_e_override[e] = nu_iron[ii]
+
+        # Update μ_r for outer_iron_ring
+        if oir_idx:
+            mu_r_eff_ring = 1.0 + (mu_r_lin_ring - 1.0) / (1.0 + (B_oir / B_sat_ring) ** 2)
+            nu_oir_new = 1.0 / (mu_r_eff_ring * MU0)
+            nu_oir = (1.0 - relax) * nu_oir + relax * nu_oir_new
+            for ii, e in enumerate(oir_idx):
+                nu_e_override[e] = nu_oir[ii]
 
         res_new = solve_em(cfg, nu_e_override=nu_e_override, outer_bc=outer_bc,
                            I_amplitude=I_amplitude)
 
-        # Convergence: relative change in A field
+        # Convergence check on vector potential
         dA_rel = float(np.abs(res_new["A"] - res["A"]).max() /
                        (np.abs(res_new["A"]).max() + 1e-30))
-        mu_r_mean = float(mu_r_eff.mean())
-        print(f"    [SAT {it+1:2d}] B_max={B_max:.3f}T  μ_r_mean={mu_r_mean:.0f}"
-              f"  ΔA_rel={dA_rel:.4f}", flush=True)
+
+        # Report both regions' μ_r if both present
+        mu_r_str = f"B_max={B_max:.3f}T"
+        if iron_idx and oir_idx:
+            mu_r_str += f"  μ_r_core={float(mu_r_eff_core.mean()):.0f}  μ_r_ring={float(mu_r_eff_ring.mean()):.0f}"
+        elif iron_idx:
+            mu_r_str += f"  μ_r_core={float(mu_r_eff_core.mean()):.0f}"
+        elif oir_idx:
+            mu_r_str += f"  μ_r_ring={float(mu_r_eff_ring.mean()):.0f}"
+
+        print(f"    [SAT {it+1:2d}] {mu_r_str}  ΔA_rel={dA_rel:.4f}", flush=True)
         res = res_new
 
         if dA_rel < tol and it >= 1:
