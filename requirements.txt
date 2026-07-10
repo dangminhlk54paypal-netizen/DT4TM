@@ -7,7 +7,7 @@ matplotlib>=3.7
 # Trực quan 3D + xuất AR (Phase 4-5)
 trimesh>=4.0          # GLB export (phase 4) — pip install trimesh
 # pyvista>=0.43       # optional interactive 3D window
-# qrcode>=7.4         # phase 5 QR code
+qrcode>=7.4           # phase 5 QR code — gen_qr.py
 
 # Sensor data I/O (Phase 7-8) — data_io.py
 pyserial>=3.5         # Arduino serial bridge; not needed for --port mock

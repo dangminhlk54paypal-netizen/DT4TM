@@ -40,6 +40,16 @@ class Config:
     @property
     def I(self):       return float(self.raw["excitation"]["current_A"])
     @property
+    def I_peak(self):
+        """Phasor-solve amplitude. `current_A` (self.I) is the RMS-MEASURED
+        value (multimeter) -- the loss chain (compute_losses -> hA calibration)
+        intentionally treats it AS the phasor amplitude, with the resulting ×2
+        force error absorbed into the thermal calibration constants (hA_inner/
+        hA_outer). The FORCE chain must NOT reuse that convention -- lift force
+        needs the true amplitude, self.I * sqrt(2). See CLAUDE.md "CURRENT
+        CONVENTION" and docs/AUDIT_FIX_PLAN_2026-07-04.md WP-PEAK."""
+        return self.I * math.sqrt(2.0)
+    @property
     def I_ref(self):   return float(self.raw["excitation"]["current_ref_A"])
     @property
     def freq(self):    return float(self.raw["excitation"]["frequency_Hz"])
@@ -76,6 +86,12 @@ class Config:
         dials = [a["dial"] for a in anchors]
         currents = [a["I"] for a in anchors]
         return float(_interp_clamped(dial, dials, currents))
+
+    def dial_to_voltage_V(self, dial: float) -> float:
+        """dial is degrees of rotation (0..dial_max); V scales linearly to output_V_max."""
+        ps = self.power_supply
+        dial = min(max(dial, ps["dial_min"]), ps["dial_max"])
+        return dial * ps["degree_to_volt_ratio"]
 
 
 def _interp_clamped(x, xs, ys):
@@ -114,4 +130,4 @@ if __name__ == "__main__":
     if c.power_supply:
         print(f"Power supply: {c.power_supply['name']}")
         for d in (0, 100, 220, 250, 270):
-            print(f"  dial {d:>3} -> {c.dial_to_current_A(d):.2f} A")
+            print(f"  dial {d:>3}deg -> {c.dial_to_voltage_V(d):.1f}V -> {c.dial_to_current_A(d):.2f} A")

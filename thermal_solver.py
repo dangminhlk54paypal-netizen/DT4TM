@@ -209,9 +209,6 @@ def solve_steady(cfg, P_total_override=None, em_losses=None):
 
     # --- convection boundaries on outer edges (EXCLUDING axis r=0) ---
     # boundary edge = edge lying on r=R, z=0, or z=t
-    def on_boundary(n):
-        return (abs(r[n] - R) < 1e-12) or (abs(z[n]) < 1e-12) or (abs(z[n] - t) < 1e-12)
-
     edges = {}
     for (i, j, m) in tris:
         for (a, bb) in [(i, j), (j, m), (m, i)]:

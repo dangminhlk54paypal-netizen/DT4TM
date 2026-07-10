@@ -6,7 +6,7 @@ Features:
     slider (Carroll & Meynell CMV 10 E-1, 0–270) that drives I via the
     measured dial->current table (params.yaml power_supply)
   • Time-speed slider (1×–200×)
-  • Metal plate selector from plate_library (Al Ø50/65/80/100, Cu Ø80)
+  • Metal plate selector from plate_library (Al Ø100/130/160/200/202, Cu Ø160)
     → automatically rebuilds ROM when a new plate is selected
   • I(t) scenarios: step / ramp / sine / pulse / manual
   • Space = pause/resume
@@ -139,17 +139,40 @@ def run_live(
 
     plate_lib  = cfg.raw.get("plate_library", [])
     plate_names = [s["name"] for s in plate_lib]
-    default_name = f"Al Ø{int(cfg.geometry.plate_radius_m*2e3)}mm"
+
+    # Find the plate_library entry that matches the ACTIVE (default) plate by
+    # value — radius_mm + material — not by reconstructing a name string and
+    # string-matching it (that broke silently when plate_library's naming
+    # convention didn't match: see CLAUDE.md H4 / docs/AUDIT_FIX_PLAN_2026-07-04.md).
+    default_radius_mm = cfg.geometry.plate_radius_m * 1e3
+    default_material  = cfg.plate.get("name", "aluminium")
+    default_spec = next(
+        (s for s in plate_lib
+         if abs(s["radius_mm"] - default_radius_mm) < 1e-6
+         and s.get("material", "aluminium") == default_material),
+        None,
+    )
+    if default_spec is not None:
+        default_name = default_spec["name"]
+    else:
+        # No plate_library entry matches the active plate_material config
+        # (radius+material) -- do NOT silently borrow an unrelated entry's
+        # name for it. That was the original H4 bug: the RadioButtons would
+        # show e.g. "Al Ø100mm" as pre-selected/active while the ROM actually
+        # running was for a different radius, and because state["plate_name"]
+        # already equalled that borrowed name, clicking it was a permanent
+        # no-op (see CLAUDE.md H4 / docs/AUDIT_FIX_PLAN_2026-07-04.md).
+        # Synthesize an honest, distinct label instead and add it as its own
+        # selectable entry so the UI can never lie about which plate is active.
+        default_name = (f"Active (Ø{2*default_radius_mm:.0f}mm "
+                         f"{default_material}, not in plate_library)")
+        plate_names = [default_name] + plate_names
+        print(f"[digital_twin] WARNING: active plate (radius_mm={default_radius_mm:.1f}, "
+              f"material={default_material}) has no matching plate_library entry -- "
+              f"showing it as '{default_name}' instead of mislabeling an unrelated entry.")
 
     # Cache ROM by plate name; pre-populate with default plate
-    _rom_cache: dict[str, object] = {}
-    for spec in plate_lib:
-        if spec["name"] == default_name:
-            _rom_cache[default_name] = rom_default
-            break
-    if not _rom_cache:
-        # fallback: assign first plate name
-        _rom_cache[plate_names[0] if plate_names else "default"] = rom_default
+    _rom_cache: dict[str, object] = {default_name: rom_default}
 
     # Shared mutable state
     state = {
@@ -484,15 +507,20 @@ def run_live(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def _parse():
+def _parse(transient: dict | None = None):
+    """CLI args. --dt/--window default from params.yaml's `transient` block
+    (dt_s/t_end_s) instead of duplicating those numbers as hardcoded literals."""
     import argparse
+    tr = transient or {}
     p = argparse.ArgumentParser(description="Thermal Digital Twin — TEAM 28-like")
     p.add_argument("--scenario", default="step",
                    choices=list(SCENARIOS.keys()) + ["manual"])
     p.add_argument("--I",      type=float, default=5.0, help="Current [A]")
     p.add_argument("--speed",  type=float, default=1.0, help="Initial speed (1–200)")
-    p.add_argument("--window", type=float, default=600.0, help="Time window [s]")
-    p.add_argument("--dt",     type=float, default=1.0,   help="Integration step [s]")
+    p.add_argument("--window", type=float, default=tr.get("t_end_s", 600.0),
+                   help="Time window [s] (default: params.yaml transient.t_end_s)")
+    p.add_argument("--dt",     type=float, default=tr.get("dt_s", 1.0),
+                   help="Integration step [s] (default: params.yaml transient.dt_s)")
     p.add_argument("--no-em",  action="store_true",
                    help="Skip EM solve, use placeholder (fast startup)")
     p.add_argument("--interval", type=int, default=100, help="Frame interval [ms]")
@@ -500,11 +528,11 @@ def _parse():
 
 
 if __name__ == "__main__":
-    args = _parse()
     from config import load_config
     from rom import ThermalROM
 
     cfg = load_config()
+    args = _parse(cfg.raw.get("transient", {}))
 
     em = None
     if not args.no_em:

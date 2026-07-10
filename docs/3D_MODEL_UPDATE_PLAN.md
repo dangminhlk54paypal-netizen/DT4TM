@@ -99,5 +99,6 @@ CỬU vào lõi/vành đệm KHI CHƯA CẤP ĐIỆN, xem có bị hút không. 
 5. Đo thực tế bán kính các cuộn dây trên rig (so với `coils.inner/outer` hiện tại
    trong params.yaml) — STL và params.yaml không khớp hoàn toàn ở vài bán kính, nên
    CONFIRM lại bằng thước đo thật, không chỉ tin STL hoặc tin params.yaml.
-6. `build_twin_html.py` (bản lumped-only, không phải bản chính) CHƯA được đồng bộ
-   vành đệm procedural — chỉ cần làm nếu user còn dùng file đó.
+6. ~~`build_twin_html.py` (bản lumped-only, không phải bản chính) CHƯA được đồng bộ
+   vành đệm procedural — chỉ cần làm nếu user còn dùng file đó.~~ **Đã moot: file này
+   đã bị xóa 2026-07-02, commit ec64ec1 — mục này không còn áp dụng.**

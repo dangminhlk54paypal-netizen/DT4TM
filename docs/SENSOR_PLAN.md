@@ -140,6 +140,46 @@ einzelne `calibrate_UA()`-Anpassung.
 
 ---
 
+## Kontaktlose Scheiben-Validierung: Differenzmessung MIT/OHNE Scheibe (2026-07-02)
+
+Idee (User): statt einen Sensor an der levitierenden Scheibe zu befestigen, eine
+Größe an der QUELLE messen, die sich ändert, wenn die Scheibe aufgelegt wird —
+die Wirbelströme der Scheibe reflektieren eine Impedanz in den Spulenkreis.
+
+EM-Solver-Vorhersage (Impedanz aus komplexer Quellenleistung, Skript
+`disc_impedance_prediction.py`, Scratch — Ansatz: Z = 2S/î², S = ½jω∫A·J_s dV):
+
+| Größe | MIT Scheibe | OHNE Scheibe | Δ |
+|---|---|---|---|
+| Z_total | 11.03 + j27.29 Ω | 10.25 + j27.71 Ω | ΔR=+0.77 Ω, ΔL=−1.33 mH |
+| I bei V=190 V fest | 6.455 A | 6.431 A | **+0.024 A — NICHT messbar** |
+| P_wirk bei I=5 A_rms | 275.7 W | 256.3 W | **+19.4 W (+7.6%) — messbar** |
+| cos φ | 0.375 | 0.347 | +0.028 |
+
+- **Amperemeter allein reicht NICHT**: ΔR (Scheibe frisst Leistung, +0.77 Ω) und
+  ΔL (Wirbelstrom-Abschirmung senkt Induktivität, −1.33 mH → X sinkt) heben sich
+  in |Z| fast exakt auf → ΔI ≈ 0.02 A (~0.4%), unter der Ablesegenauigkeit.
+- **Wirkleistungsmessung funktioniert**: ΔP ≈ 19 W bei gleichem Strom = direkt
+  P_plate (physikalische Konvention, = 2× der 9.67 W in Solver-Konvention).
+  Benötigt ein ECHTES Wattmeter / Energiekosten-Messgerät (cos φ ≈ 0.37 —
+  V·I=950 VA ist NICHT die Wirkleistung!). → Einkaufsliste: Steckdosen-
+  Leistungsmesser mit Wirkleistungsanzeige (~15–25 €), am Variac-EINGANG
+  (240V-Seite) messen geht auch (Variac-Eigenverlust als Offset, kürzt sich
+  in der MIT/OHNE-Differenz heraus).
+- **Bonus-Befund (Modell-Check)**: |Z|_Modell = 29.4 Ω vs gemessen 190V/5A = 38 Ω
+  (−23%). Modell-Impedanz zu klein — Kandidaten: AC-Widerstand der Wicklung
+  (Skin/Proximity, Modell nutzt DC-R), Zuleitungen, ODER Separatorring doch
+  ferromagnetisch (μ_r>1 → L größer). Eine simple V+I-Messung OHNE Scheibe
+  trennt R- von L-Anteil (mit Wattmeter: R=P/I², X=√(|Z|²−R²)) und testet damit
+  auch die offene μ_r-Frage des Rings — ganz ohne Magnettest.
+- Scheibentausch Ø160→Ø202: ΔP nur ~4 W Unterschied → grenzwertig; die
+  MIT/OHNE-Differenz (19 W) ist das robustere Experiment.
+- Ergänzend, billigste Sofortmaßnahme fürs IR-Problem: **mattschwarzes
+  Isolierband / Kaminlack-Punkt** auf die Scheibenunterseite (ε≈0.95 bekannt)
+  → HIKMICRO-Ablesung wird vertrauenswürdig, ohne Kabel, Levitation ungestört.
+
+---
+
 ## Offene Fragen
 
 - [ ] Wo genau wird der Thermocouple an der Scheibe befestigt? (Unterseite Mitte vs. Rand)

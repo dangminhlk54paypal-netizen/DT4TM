@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf __pycache__ .DS_Store)",
+      "Bash(mkdir -p outputs docs)",
+      "Bash(mv -v em_field_loss.png rom_demo.png thermal_map.png thermal_2d_section.png thermal_3d.png plates_3d.png plates_compare.png stl_rz_projection.png plate.glb plate.obj digital_twin.html outputs/)",
+      "Bash(git mv *)",
+      "Bash(git merge *)",
+      "Bash(open /Users/minh/VSCode_Repo/DT4TM/outputs/digital_twin_fem.html)",
+      "Bash(python build_twin_html_fem.py 3D_model.stl)",
+      "Bash(python3 -c ' *)",
+      "Bash(python build_twin_html_fem.py)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "(git diff --cached; git diff HEAD) | grep -qE 'AIzaSy[0-9A-Za-z_-]{20,}' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Blocked: staged or unstaged changes contain what looks like a Google API key (AIzaSy...). Remove the secret before committing -- see the .env.local mechanism in build_twin_html_fem.py.\"}}' || true",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

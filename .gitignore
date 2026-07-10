@@ -15,3 +15,14 @@ outputs/*
 
 # Local-only source PDFs (problem brief / Aufgabenstellung)
 *.pdf
+
+# Local secrets (API keys) — entire folder never committed. build_twin_html_fem.py
+# reads GOOGLE_WEATHER_API_KEY from local/.env.local at build time; falls back
+# to a placeholder if absent. Whole folder ignored so any future local-only
+# secret file dropped in here is covered automatically.
+local/
+
+# Personal editor/tool config — not shared project config.
+# .claude/settings.json (the PreToolUse secret-scan hook) stays tracked.
+.claude/settings.local.json
+.vscode/

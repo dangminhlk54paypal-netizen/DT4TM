@@ -28,31 +28,40 @@ excitation:
 
 # --- AC power supply (variac) — identified 2026-07-02 from rig photo (docs/rig_photo.jpg) ---
 # Carroll & Meynell "Stelltransformator" CMV 10 E-1: variable autotransformer,
-# input 240V 50Hz, output 0..270V via rotary dial, feeding the coils THROUGH an
-# ammeter (blue multimeter in the photo). The dial scale reads 0..270 — at max the
-# rig draws 7.78A. Dial value ≈ output VOLTS (CMV units boost to 270V max), which
-# is why "dial 220" matches the professor's original 220V→5A reading.
-# Measured dial→current anchors (2026-07-02, disc levitating):
-#   dial 0   → 0 A      (off)
-#   dial 220 → 5.00 A   (main op point. DISCREPANCY: multimeter measured 190V→5A
-#                        on 2026-06-23 — voltage sag under load or dial offset;
-#                        re-measure V at the coil terminals next lab session)
-#   dial 270 → 7.78 A   (max; refines the earlier 7.8A reading)
+# input 240V 50Hz, feeding the coils THROUGH an ammeter (blue multimeter in the
+# photo). CORRECTED 2026-07-10 (was wrong 2026-07-02 -> 2026-07-10): the 0..270
+# scale printed on the rotary dial is DEGREES of rotation, NOT output Volts. The
+# output voltage instead scales ~linearly with rotation angle up to the input
+# voltage at full rotation:
+#   V(dial_deg) = (dial_deg / dial_max_deg) * output_V_max
+#   e.g. dial=270deg (max) -> V ~= 240V ; dial=220deg -> V ~= 220/270*240 = 195.5V
+# This RESOLVES the previously-flagged discrepancy: multimeter measured 190V->5A
+# at the coil terminals (2026-06-23) vs the calculated ~195.5V at dial=220deg —
+# only a ~5.5V gap, explained by sag under load, not a wrong dial reading.
+# Measured dial(deg)->current anchors (2026-07-02, disc levitating) are UNCHANGED
+# by this correction (the ammeter readings were never in question, only the
+# degree<->Volt interpretation was):
+#   dial 0deg   -> 0 A      (off)
+#   dial 220deg -> 5.00 A   (main op point, V~=195.5V calculated)
+#   dial 270deg -> 7.75-7.85 A (max; anchor uses midpoint 7.78A, V~=240V calculated)
 # NOT a constant impedance: Z(dial220)=44Ω vs Z(dial270)=34.7Ω (levitation height
 # and coil temperature change the load) → interpolate the table, don't assume I∝V
-# across the full range. Below lift-off (dial≲200) I∝dial is a fair first guess.
+# across the full range. Below lift-off (dial≲200deg) I∝dial is a fair first guess.
 # PURPOSE (user request 2026-07-02): drive the twin's INPUT from the dial/current
 # directly — thermal sensors stay validation-only. Phase 1: dial slider in the
 # HTML twin mapped through dial_to_current_A. Phase 2: live current sensing
 # (non-invasive CT clamp → Arduino → data_io.py), see docs/SENSOR_PLAN.md.
 power_supply:
-  name: "Carroll & Meynell CMV 10 E-1 (variac, 240V in, 0-270V out, 50Hz)"
+  name: "Carroll & Meynell CMV 10 E-1 (variac, 240V in, 0-270deg dial, 50Hz)"
   type: variac
   input_V: 240.0
+  output_V_max: 240.0        # voltage at dial_max_deg (variac tops out near mains input)
   frequency_Hz: 50.0
+  dial_unit: degrees          # CORRECTED 2026-07-10: dial scale is rotation angle, not Volts
   dial_min: 0.0
   dial_max: 270.0
-  # measured (dial, I_rms) anchors — extend with more readings next lab session
+  degree_to_volt_ratio: 0.88889   # = output_V_max / dial_max; V(dial) = dial * this ratio
+  # measured (dial_deg, I_rms) anchors — extend with more readings next lab session
   dial_to_current_A:
     - {dial: 0.0,   I: 0.0}
     - {dial: 220.0, I: 5.0}
@@ -156,11 +165,6 @@ device_frame:
   air_gap_mm: 50.0          # air between outer coil r_outer and frame inner wall -> r_in = 174mm
   wall_thickness_mm: 20.0   # plywood wall thickness -> frame r = 174..194mm
 
-separator_ring:
-  material: pending_colleague_confirmation
-  sigma_S_per_m: 0.0        # conservative until confirmed
-  mu_r: 1.0                 # conservative until confirmed; see outer_iron_ring above
-
 # --- Payload Model ---
 # PLACEHOLDER, disabled by default. When enabled, EM adds P_payload_W and the
 # thermal solver stacks the disc on top of the plate (see thermal_solver/rom which
@@ -186,9 +190,21 @@ thermal_bc:
   emissivity: 0.0
   # Coil→disc air coupling: Tinf_bot = T_amb + k_coil * P_coil_W.
   # Physical estimate: 3.8mm gap, conduction+radiation → k_coil ≈ 0.10–0.30 K/W.
-  # At 5A (P_coil≈73W): k=0.15 → Tinf_bot≈31°C → disc T_ss≈31–33°C (ΔT≈11–13K).
-  # Calibrate from thermocouple measurement once sensor data is available.
-  k_coil_coupling_K_per_W: 0.15
+  # RE-CALIBRATED 2026-07-02: this constant's own "ΔT≈11-13K at 5A" design intent
+  # was set against the OLD P_coil≈73W. The 2026-07-01 coil-radii fix bumped
+  # P_coil(5A) to 128.17W, but k was never revisited -- with the old k=0.15 this
+  # silently became Tinf_bot=39.2C (ΔT=19.2K), i.e. the disc's bottom-air BC ended
+  # up hotter than the design intent. Combined with the disc's OWN (also
+  # unvalidated) eddy-convection rise (~13.5K, see h_* above), the FEM's disc
+  # T_mean(5A)=46.9C ended up ABOVE the IR-calibrated inner coil T_ss(5A)=40.3C --
+  # physically backwards (coils are the heat source; IR sessions show coils as
+  # the hottest part of the device by a wide margin, see CLAUDE.md). Rescaled k
+  # so Tinf_bot again lands mid-way in the documented 11-13K range at the NEW
+  # P_coil: k=12K/128.17W≈0.094. Disc T_mean(5A) drops to ≈41.9C, now close to
+  # (not below by a wide margin) T_inner_ss(5A)=40.3C -- the remaining gap is
+  # bounded by the disc's OWN guessed h_top/h_bottom, which still need real
+  # thermocouple data to calibrate (see CLAUDE.md/SENSOR_PLAN.md NEXT item).
+  k_coil_coupling_K_per_W: 0.094
 
 # --- Levitating disc RENDER geometry (visual only; physics uses plate_material) ---
 # ONE flat solid disc whose radius is taken from plate_material.radius_mm above.
@@ -204,6 +220,7 @@ levitating_disc:
   # it; 0.5 ⇒ bottom runs ~1.7× the top of the hot-air rise. Thickness-mean is
   # preserved, so T_mean and the validated steady state are unchanged.
   bottom_heating_gradient: 0.5
+  plate_hot_display_C: 125.0  # display-only: JS heat-color ramp ceiling for the disc, not physics
 
 # --- Metal plate library (swap for comparison) ---
 # Al Ø202mm (2026-07-02, user feedback): covers the disc out to the separator
@@ -213,13 +230,16 @@ levitating_disc:
 # `python build_twin_html_fem.py --plate-radius 101`. EM/ROM MUST be re-solved
 # at this radius (not scaled from R=80) because the wider plate overlaps the
 # outer_iron_ring/outer-coil field region -- see CLAUDE.md WP-C results.
+# Ø = diameter (2×radius_mm), radius_mm = radius (the field the solver actually uses).
 plate_library:
-  - {name: "Al Ø50mm",  radius_mm:  50.0, thickness_mm: 3.0, material: aluminium}
-  - {name: "Al Ø65mm",  radius_mm:  65.0, thickness_mm: 3.0, material: aluminium}
-  - {name: "Al Ø80mm",  radius_mm:  80.0, thickness_mm: 3.0, material: aluminium}
-  - {name: "Al Ø100mm", radius_mm: 100.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Al Ø100mm", radius_mm:  50.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Al Ø130mm", radius_mm:  65.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Al Ø160mm", radius_mm:  80.0, thickness_mm: 3.0, material: aluminium}
+  - {name: "Al Ø200mm", radius_mm: 100.0, thickness_mm: 3.0, material: aluminium}
+  # NOTE: Ø200mm and Ø202mm are two DIFFERENT discs (r=100 vs r=101mm) — check
+  # radius_mm, not just the name, before using either.
   - {name: "Al Ø202mm", radius_mm: 101.0, thickness_mm: 3.0, material: aluminium}
-  - {name: "Cu Ø80mm",  radius_mm:  80.0, thickness_mm: 3.0, material: copper}
+  - {name: "Cu Ø160mm", radius_mm:  80.0, thickness_mm: 3.0, material: copper}
 
 # --- Levitation gap spring-mass-damper (WP-A/WP-D, docs/PLAN_SIM_FEEDBACK_2026-07-02.md) ---
 # JS reads these via PARAMS.lev (build_twin_html_fem.py lev_params()/romStep)
@@ -231,13 +251,17 @@ plate_library:
 # ~6.45A). See lev_params() in build_twin_html_fem.py for the radius selection.
 levitation:
   z_gap_5A_mm: 4.1     # [mm] equilibrium gap at I=5A_rms, R=80mm (locked 2026-07-01)
-  z_decay_mm: 21.4     # [mm] EM force decay length z0, R=80mm (locked 2026-07-01 via
-                        # the F(1mm)/F_grav crossing method). WP-C's independent
-                        # F(1mm)/F(5mm) refit gives 13.6mm for the SAME disc -- the two
-                        # methods disagree ~1.5x because F(z) isn't a clean single
-                        # exponential over this range (see _lev_anchor() docstring in
-                        # build_twin_html_fem.py). OPEN QUESTION for user -- see
-                        # docs/PLAN_SIM_FEEDBACK_2026-07-02.md.
+  z_decay_mm: 13.6     # [mm] EM force decay length z0, R=80mm. WP-Z0 (2026-07-10,
+                        # docs/AUDIT_FIX_PLAN_2026-07-04.md OQ-4): two fitting methods
+                        # disagreed for this SAME disc -- 21.4mm (F(1mm)/F_grav crossing,
+                        # used until 2026-07-10) vs 13.6mm (F(1mm)/F(5mm) refit, used for
+                        # every OTHER plate radius via _lev_anchor() in
+                        # build_twin_html_fem.py). User confirmed the real rig's gap only
+                        # "nudges up a little" at 7.75A, matching the smaller 13.6mm value
+                        # (21.4mm predicted z_eq(7.75A)≈22.9mm; 13.6mm predicts ≈16.0mm) --
+                        # switched to 13.6mm so R=80 now uses the SAME method as every
+                        # other radius. Still order-of-magnitude (no real multi-current
+                        # gap measurement yet) -- see docs/CHANGELOG.md "WP-D".
   zeta0: 0.0            # damping ratio floor
   zeta1: 0.02           # damping ratio grows with (I/5A)^2; zeta(5A)=0.02 matches the
                         # observed ~9s settle time (2026-07-01). zeta(7.75A) only
@@ -246,6 +270,7 @@ levitation:
   jit_mm: 0.3           # [display-mm] max sub-liftoff shimmer amplitude
   jit_freq1_rad_s: 27.0 # visual-only shimmer rates (incommensurate, NOT the physical 100Hz)
   jit_freq2_rad_s: 71.0
+  jit_fade_mm: 0.5      # display-only: jitter amplitude fades out once levitation gap exceeds this, in mm
   z_gap_exaggeration: 2.0  # display exaggeration, matches levitating_disc.display_z_exaggeration
 
 # --- Material properties (lookup by name in plate_library) ---
@@ -278,7 +303,9 @@ em_domain:
   fine_step_mm: 2.0         # fine step around device
   coarse_step_mm: 15.0      # coarse step in far air region (slightly larger for 1m box)
 
-# --- Transient (Phase 2) ---
+# --- Transient (Phase 2) --- WIRED 2026-07-10: digital_twin.py's --dt/--window
+# argparse flags now default from dt_s/t_end_s here instead of duplicating them
+# as hardcoded literals (see _parse() in digital_twin.py).
 transient: {dt_s: 1.0, t_end_s: 600.0}
 
 # --- Original benchmark (to validate EM solver; NO iron core, 20A) ---
@@ -311,6 +338,8 @@ benchmark_team28_original:
   initial_gap_mm: 3.8       # informational: rest position at t<=0 (winding-form thickness)
   expected_levitation_height_mm: 11.3
 
+# REFERENCE-ONLY: no code reads this block directly; lumped_thermal calibration
+# constants below were derived by hand against this data, not auto-fit from it.
 # --- Real-rig validation data (HIKMICRO IR camera session, 2026-06-23) ---
 # Two measured operating points (AC 50Hz). thermal_at_7p8A is the calibration
 # anchor for the coil lumped thermal network (see lumped_thermal below) --

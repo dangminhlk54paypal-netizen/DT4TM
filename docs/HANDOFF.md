@@ -75,7 +75,8 @@ in the TEAM 28 electrodynamic levitation device (TEMF). Validate against the rea
 - [x] digital_twin.py — interactive twin (current slider, plate selector, scenarios)
 - [x] visualize.py — revolve 2D→3D, export plate.glb
 - [x] sim_plates.py — compare plates across plate_library
-- [x] build_twin_html.py — Phase 5: standalone digital_twin.html (double-click to run)
+- [x] build_twin_html.py — Phase 5: standalone digital_twin.html (double-click to run).
+      **Deleted 2026-07-02 (commit ec64ec1), superseded by build_twin_html_fem.py.**
 - [x] data_io.py + arduino/thermal_sensor.ino — sensor bridge implemented (`SensorReader`,
       `calibrate_from_file()`, `live_compare()`); mock-data tested end-to-end via
       `mock_sensor_data.csv` / `--port mock`. **Waiting on the real Arduino rig** to log

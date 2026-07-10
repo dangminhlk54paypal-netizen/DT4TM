@@ -50,8 +50,15 @@ def make_mesh_em(cfg):
     ) + 20.0   # 20mm margin beyond outermost component
     r_fine_mm = max(110.0, r_device_mm)
     rs = _graded([(0, r_fine_mm, fs), (r_fine_mm, rmax, cs)]) * 1e-3
-    # Fine mesh covers from -60mm to max(15, z_plate_top+10)mm to track plate position
-    z_fine_top = max(15.0, p["z_bottom_mm"] + p["thickness_mm"] + 10.0)
+    # Fine mesh covers from -60mm to max(15, z_plate_top+10)mm to track plate
+    # position -- and the payload's top too, when enabled (M6,
+    # docs/AUDIT_FIX_PLAN_2026-07-04.md): a thick payload stacked on the plate
+    # would otherwise fall partly into the coarse mesh region with no warning.
+    z_top_mm = p["z_bottom_mm"] + p["thickness_mm"]
+    pl = cfg.raw.get("payload_model", {})
+    if pl.get("enabled", False):
+        z_top_mm += float(pl.get("thickness_mm", 0.0))
+    z_fine_top = max(15.0, z_top_mm + 10.0)
     zs = _graded([(zmin, -60, cs), (-60, z_fine_top, fs), (z_fine_top, zmax, cs)]) * 1e-3
     RR, ZZ = np.meshgrid(rs, zs, indexing="ij")
     coords = np.column_stack([RR.ravel(), ZZ.ravel()])
@@ -69,9 +76,14 @@ def make_mesh_em(cfg):
 # 2) ASSIGN MATERIALS by element centroid (r_c, z_c) [m]
 #    returns: nu (1/μ), sigma (S/m), Js (A/m², signed)
 # --------------------------------------------------------------------------
-def material(cfg, rc, zc):
+def material(cfg, rc, zc, I_amplitude: float | None = None):
+    """I_amplitude: override the phasor current amplitude used for the coil
+    source term (Js). None (default) uses cfg.I -- the RMS-measured value,
+    treated as amplitude, per the LOSS chain's calibrated convention (see
+    config.Config.I_peak docstring). Pass cfg.I_peak here for FORCE
+    computations, which need the true physical amplitude."""
     mm = 1e-3
-    I = cfg.I
+    I = cfg.I if I_amplitude is None else I_amplitude
     # --- aluminum plate ---
     p = cfg.plate
     if (rc <= p["radius_mm"] * mm and
@@ -112,12 +124,16 @@ def material(cfg, rc, zc):
 # --------------------------------------------------------------------------
 # 3) ASSEMBLY & SOLVE (complex system)
 # --------------------------------------------------------------------------
-def solve_em(cfg, nu_e_override=None, outer_bc: str = "dirichlet"):
+def solve_em(cfg, nu_e_override=None, outer_bc: str = "dirichlet",
+             I_amplitude: float | None = None):
     """Solve EM phasor system.
 
     nu_e_override: optional list/array of length len(tris).  Each entry is
     either None (use material()) or a float ν value that overrides material()
     for that element — used by solve_em_saturating for nonlinear iron ν.
+
+    I_amplitude: forwarded to material() for the coil source term. None
+    (default) = cfg.I, the loss-chain convention (see material() docstring).
 
     outer_bc: boundary condition on the FAR outer domain edge (r=r_max, z=z_min,
     z=z_max). The axis r=0 is ALWAYS A_φ=0 (physical symmetry condition, not a
@@ -150,7 +166,7 @@ def solve_em(cfg, nu_e_override=None, outer_bc: str = "dirichlet"):
             continue
         rc = (ri + rj + rm) / 3.0
         zc = (zi + zj + zm) / 3.0
-        nu, sigma, Js = material(cfg, rc, zc)
+        nu, sigma, Js = material(cfg, rc, zc, I_amplitude=I_amplitude)
         # Per-element ν override (for nonlinear iron saturation)
         if nu_e_override is not None and nu_e_override[e] is not None:
             nu = float(nu_e_override[e])
@@ -232,8 +248,20 @@ def _compute_B_per_element(res):
     return B_e
 
 
-def check_saturation(res, cfg=None):
+def check_saturation(res, cfg=None, B_scale: float = 1.0):
     """Compute max RMS |B| in the iron core region.
+
+    B_scale: multiply the computed B by this factor. `res` was solved at
+    whatever current amplitude its own solve_em()/solve_em_saturating() call
+    used -- by default that's cfg.I (the loss-chain's RMS-as-amplitude
+    convention). Since the EM problem is linear, B scales exactly linearly
+    with that amplitude, so passing B_scale=cfg.I_peak/cfg.I converts the
+    result to the TRUE physical B [T] (needed to meaningfully compare against
+    B_sat_T, a real material property) without re-solving. Leave at the
+    default 1.0 for internal callers (solve_em_saturating's own Picard loop
+    calls _compute_B_per_element directly, not through here, and must stay on
+    the loss chain's convention -- see WP-PEAK in
+    docs/AUDIT_FIX_PLAN_2026-07-04.md).
 
     Returns (B_max_iron, B_e) where:
         B_max_iron  [T]  — peak RMS B inside iron region (0 if iron disabled)
@@ -243,7 +271,7 @@ def check_saturation(res, cfg=None):
         from config import load_config
         cfg = load_config()
 
-    B_e = _compute_B_per_element(res)
+    B_e = _compute_B_per_element(res) * B_scale
 
     fe = cfg.iron
     B_max_iron = 0.0
@@ -266,7 +294,8 @@ def check_saturation(res, cfg=None):
 # 3c) NONLINEAR SOLVE — Picard iteration for iron saturation
 # --------------------------------------------------------------------------
 def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
-                        relax: float = 0.5, outer_bc: str = "dirichlet"):
+                        relax: float = 0.5, outer_bc: str = "dirichlet",
+                        I_amplitude: float | None = None):
     """EM solve with iron saturation via Picard (fixed-point) iteration.
 
     Saturation model (Lorentzian):
@@ -275,12 +304,34 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
     Gives μ_r_eff → μ_r_lin for B → 0 and μ_r_eff → 1 for B >> B_sat.
     Under-relaxation (relax=0.5) stabilises convergence.
 
+    I_amplitude: forwarded to solve_em() for the coil source term. None
+    (default) = cfg.I -- this loop's own nonlinear μ_r update (below) must
+    stay on whatever convention the CALLER needs (compute_losses() relies on
+    the default to keep P_plate/P_coil unchanged; force-oriented callers may
+    pass cfg.I_peak). Currently a no-op either way while iron_core.mu_r=1.0
+    (Lorentzian formula reduces to μ_r_eff≡1 regardless of B) -- see the
+    docstring note in check_saturation() for the reporting-side equivalent.
+
     Falls back to linear solve() if iron is disabled or not saturating.
     Returns the same dict as solve_em().
     """
+    # M5 (docs/AUDIT_FIX_PLAN_2026-07-04.md): this Picard loop only tracks
+    # iron_core's saturation, never outer_iron_ring's -- currently harmless
+    # (outer_iron_ring.mu_r=1.0, confirmed non-ferromagnetic pending a magnet
+    # test) but would silently go stale if someone later confirms the ring IS
+    # ferromagnetic and only bumps its mu_r without also generalizing this loop.
+    oir = cfg.raw.get("outer_iron_ring", {})
+    if oir.get("enabled", False) and float(oir.get("mu_r", 1.0)) > 5.0:
+        print("    WARNING: outer_iron_ring.mu_r > 5 but solve_em_saturating() "
+              "only applies the nonlinear saturation correction to iron_core "
+              "-- outer_iron_ring's μ_r stays fixed/linear even though it "
+              "would physically saturate. Generalize the Picard loop below "
+              "(see docs/AUDIT_FIX_PLAN_2026-07-04.md M5) before trusting "
+              "results with a ferromagnetic outer_iron_ring.")
+
     fe = cfg.iron
     if not fe.get("enabled", False):
-        return solve_em(cfg, outer_bc=outer_bc)
+        return solve_em(cfg, outer_bc=outer_bc, I_amplitude=I_amplitude)
 
     B_sat    = float(fe.get("B_sat_T", 1.5))
     mu_r_lin = float(fe.get("mu_r", 1000.0))
@@ -291,7 +342,7 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
     z1_fe = fe["z_top_mm"] * mm
 
     # Initial linear solve
-    res = solve_em(cfg, outer_bc=outer_bc)
+    res = solve_em(cfg, outer_bc=outer_bc, I_amplitude=I_amplitude)
     coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
     z_all = coords[:, 1]
 
@@ -321,7 +372,8 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
         for ii, e in enumerate(iron_idx):
             nu_e_override[e] = nu_iron[ii]
 
-        res_new = solve_em(cfg, nu_e_override=nu_e_override, outer_bc=outer_bc)
+        res_new = solve_em(cfg, nu_e_override=nu_e_override, outer_bc=outer_bc,
+                           I_amplitude=I_amplitude)
 
         # Convergence: relative change in A field
         dA_rel = float(np.abs(res_new["A"] - res["A"]).max() /
@@ -391,12 +443,21 @@ def compute_losses(cfg, res=None, outer_bc: str = "dirichlet"):
 #    F_z = -½ Re[ ∫ J_φ · B_r* · 2π r dA ]
 #    J_φ = -jωσ A_φ  (eddy current),  B_r = -∂A_φ/∂z  (radial magnetic field)
 # --------------------------------------------------------------------------
-def compute_lift_force(cfg, res=None):
+def compute_lift_force(cfg, res=None, I_amplitude: float | None = None):
     """Cycle-averaged lift force [N] on all conductors (plate + core).
     Positive = upwards (+z). Uses Lorentz integral on current EM mesh.
+
+    I_amplitude: forwarded to solve_em() when res is None (ignored if a
+    pre-solved res is passed in -- its amplitude is already baked in). None
+    (default) = cfg.I, UNCHANGED from before this parameter existed, so
+    existing callers that don't pass anything are unaffected. Force
+    computations that want the true physical amplitude should pass
+    cfg.I_peak explicitly (see config.Config.I_peak docstring / CLAUDE.md
+    "CURRENT CONVENTION") -- this replaces the old pattern of manually
+    multiplying the returned F_z by 2.0.
     """
     if res is None:
-        res = solve_em(cfg)
+        res = solve_em(cfg, I_amplitude=I_amplitude)
     A = res["A"]
     coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
     r_all, z_all = coords[:, 0], coords[:, 1]
@@ -525,22 +586,28 @@ def run_rig_validation():
     co = cfg.coils
 
     print(f"\n{'='*60}")
-    print(f"RIG LIFT-FORCE SWEEP: I={cfg.I}A  R={p['radius_mm']}mm  "
-          f"coils {co['inner']['turns']}/{co['outer']['turns']}")
+    print(f"RIG LIFT-FORCE SWEEP: I={cfg.I}A_rms (I_peak={cfg.I_peak:.3f}A)  "
+          f"R={p['radius_mm']}mm  coils {co['inner']['turns']}/{co['outer']['turns']}")
     print(f"Plate: m={m_plate*1e3:.1f}g  F_gravity={F_grav:.4f}N")
     print(f"Coil top z={co['z_top_mm']}mm  (z_bottom = gap above coil top)")
-    print(f"Observed: disc levitates at ~7-8 mm at 5A/190V (2026-07-01)")
+    print(f"Observed: disc levitates at ~7-8 mm VISIBLE gap (plate top above "
+          f"coil top) at 5A/190V (2026-07-01)")
     print(f"{'='*60}")
     print(f"  {'z_bottom (mm)':>14}  {'F_z (N)':>10}  {'F_z/mg':>8}  note")
     print(f"  {'-'*50}")
 
+    # WP-PEAK (docs/AUDIT_FIX_PLAN_2026-07-04.md): force needs the TRUE phasor
+    # amplitude (I_peak = I_rms*sqrt(2)), not I_rms used as-if-amplitude (the
+    # loss chain's calibrated convention -- see config.Config.I_peak docstring).
+    # This was previously a manual "×2.0 the returned F_z" patch at the caller;
+    # now handled cleanly via compute_lift_force's I_amplitude parameter.
     z_sweep = np.array([1, 2, 3, 3.8, 5, 6, 7, 8, 9, 10, 12, 15, 18])
     F_vals  = []
     for z_mm in z_sweep:
         cfg.raw["plate_material"]["z_bottom_mm"] = float(z_mm)
         cfg.geometry = Geometry(plate_radius_m=R, plate_thickness_m=t,
                                 plate_z_bottom_m=float(z_mm) * 1e-3)
-        F_z = compute_lift_force(cfg)
+        F_z = compute_lift_force(cfg, I_amplitude=cfg.I_peak)
         F_vals.append(F_z)
         ratio = F_z / F_grav
         note = "<-- balanced" if abs(ratio - 1.0) < 0.12 else ""
@@ -552,9 +619,19 @@ def run_rig_validation():
         z_ok = z_sweep[mask];  F_ok = F_arr[mask]
         if F_ok.max() >= F_grav >= F_ok.min():
             z_eq = float(np.interp(F_grav, F_ok[::-1], z_ok[::-1].astype(float)))
-            err  = abs(z_eq - 7.5)          # target midpoint of 7-8mm range
-            print(f"\n  → Predicted z_eq ≈ {z_eq:.1f} mm")
-            print(f"  → Observed ~7-8 mm:  {'MATCH ✓' if err < 2.0 else f'MISMATCH (Δ={err:.1f} mm)'}")
+            # z_eq above is the PLATE-BOTTOM equilibrium height; the "~7-8mm"
+            # user observation is the VISIBLE gap (plate TOP above coil top),
+            # i.e. z_eq + plate thickness (see CLAUDE.md "LIFT FORCE VALIDATED
+            # 2026-07-01": z_eq(bottom)=4.1mm + 3mm thickness = 7.1mm visible).
+            # Comparing z_eq directly against 7.5mm (as this code did before
+            # WP-PEAK) was an apples-to-oranges bug -- fixed by comparing the
+            # VISIBLE top instead, keeping z_eq itself labeled as plate-bottom.
+            visible_top_mm = z_eq + t * 1e3
+            err = abs(visible_top_mm - 7.5)     # target midpoint of the observed 7-8mm VISIBLE range
+            print(f"\n  → Predicted z_eq (plate bottom) ≈ {z_eq:.1f} mm  "
+                  f"(visible plate-top gap ≈ {visible_top_mm:.1f} mm)")
+            print(f"  → Observed visible gap ~7-8 mm:  "
+                  f"{'MATCH ✓' if err < 2.0 else f'MISMATCH (Δ={err:.1f} mm)'}")
         else:
             lo, hi = F_ok.min(), F_ok.max()
             print(f"\n  → F_z = [{lo:.3f}, {hi:.3f}] N does not bracket "
@@ -642,7 +719,10 @@ if __name__ == "__main__":
     print(f"  COIL losses      (ohmic)    : {L['P_coil_W']:8.3f} W")
     print(f"  TOTAL heat source           : {L['P_total_W']:8.3f} W")
     
-    B_max_iron, _ = check_saturation(L["res"], cfg)
+    # B is a real material property comparison (B_sat_T) -- report the TRUE
+    # physical B (I_peak-scaled), not L["res"]'s own loss-chain convention
+    # (cfg.I used as amplitude). See check_saturation()'s B_scale docstring.
+    B_max_iron, _ = check_saturation(L["res"], cfg, B_scale=cfg.I_peak / cfg.I)
     B_sat = float(cfg.iron.get("B_sat_T", 1.5))
     print(f"  MAX B in iron (RMS)         : {B_max_iron:.3f} T  (B_sat={B_sat} T)")
     if B_max_iron > B_sat:

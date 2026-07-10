@@ -21,7 +21,8 @@ DT4TM/
 ├── visualize.py                 ← Revolve 2D→3D, export outputs/plate.glb + thermal_3d.png
 ├── sim_plates.py                ← Batch compare plate materials from plate_library
 ├── build_twin_html_fem.py       ← Bake FEM+STL+ROM → outputs/digital_twin_fem.html
-├── build_twin_html.py           ← Older bake script (lumped ROM only, no FEM disc)
+│                                  (build_twin_html.py — older lumped-only bake script —
+│                                   deleted 2026-07-02, commit ec64ec1, superseded by this file)
 ├── data_io.py                   ← SensorReader (serial/mock) → calibrate_from_file() → rom.calibrate_UA()
 │
 ├── 3D_model.stl                 ← CAD geometry (meters, axisymmetric, ~467 KB)
@@ -147,10 +148,10 @@ build_twin_html_fem.py ◄──────────────────
 
 All generated files land in `outputs/` (gitignored, except `digital_twin_fem.html`).
 
+<!-- file sizes are approximate and drift over time; treat as order-of-magnitude -->
 | File | How to regenerate | Size |
 |---|---|---|
 | `outputs/digital_twin_fem.html` | `python build_twin_html_fem.py 3D_model.stl` | 568 KB |
-| `outputs/digital_twin.html` | `python build_twin_html.py 3D_model.stl` | 464 KB |
 | `outputs/plate.glb` | `python visualize.py` | ~247 KB |
 | `outputs/thermal_3d.png` | `python visualize.py --no-show` | — |
 | `outputs/thermal_2d_section.png` | `python visualize.py --no-show` | — |

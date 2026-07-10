@@ -28,6 +28,21 @@ from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+
+def _load_google_weather_key() -> str:
+    """Read GOOGLE_WEATHER_API_KEY from local/.env.local (gitignored folder,
+    repo root) if present, else from the environment, else fall back to the
+    placeholder. Keeps the real secret out of this tracked script and out of
+    the baked HTML unless a local secret file / env var is explicitly provided."""
+    env_path = os.path.join(HERE, "local", ".env.local")
+    if os.path.isfile(env_path):
+        with open(env_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("GOOGLE_WEATHER_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return os.environ.get("GOOGLE_WEATHER_API_KEY", "YOUR_KEY_HERE")
+
 from config import load_config, Geometry
 from em_solver import compute_losses, compute_lift_force
 from rom import ThermalROM
@@ -38,10 +53,10 @@ from rom import ThermalROM
 # PARAMS JSON export via lev_params() below -- the JS levitation-gap block
 # (search "Levitation gap physics") now reads PARAMS.lev instead of hardcoding
 # Z_GAP_5A_MM/Z_DECAY_MM. For the default R=80mm disc, lev_params() uses the
-# params.yaml `levitation.z_gap_5A_mm`/`z_decay_mm` defaults UNCHANGED (bit-
-# identical to the old hardcoded 4.1/21.4); for any OTHER --plate-radius build,
-# it recomputes fresh per-radius anchors from THIS dict (fixing the R=101
-# "wrong nonzero gap at 5A" bug flagged below).
+# params.yaml `levitation.z_gap_5A_mm`/`z_decay_mm` defaults (4.1/13.6mm as of
+# WP-Z0, 2026-07-10 -- was 4.1/21.4mm before, see below); for any OTHER
+# --plate-radius build, it recomputes fresh per-radius anchors from THIS dict
+# (fixing the R=101 "wrong nonzero gap at 5A" bug flagged below).
 #
 # All F_z values computed with em_solver.compute_lift_force() at the physical
 # PEAK current I_peak = 5A_rms*sqrt(2) = 7.0711A (CLAUDE.md "CURRENT CONVENTION"),
@@ -59,16 +74,21 @@ from rom import ThermalROM
 # point -- I_min_lev_A is the key new number, not a z_eq.
 #
 # z0 (decay length) is fit from two REAL points on the F(z) curve at z=1mm and
-# z=5mm: z0=(5-1)/ln(F(1mm)/F(5mm)) -- NOTE this differs from the z0=21.4mm
-# quoted in the 2026-07-01 CLAUDE.md entry for R=80, which instead anchored the
-# second point at the F=F_grav crossing itself (z0=(z_eq-1)/ln(F(1mm)/F_grav));
-# the two methods disagree by ~1.5x (13.6mm vs 21.4mm) because F(z) isn't a
-# clean single exponential over that range. This dict uses the F1/F5 method
-# consistently for both radii (reproducible from compute_lift_force() alone,
-# no F_grav/mass dependency baked into the shape fit). Treat z0 as order-of-
-# magnitude regardless of method (mesh-sensitive -- see the WP-C report for a
-# fine_step_mm convergence check that moved z_eq(R=80) by ~0.7mm and
-# I_min_lev(R=101) by ~0.5A between fine_step=2.0mm and 1.0mm).
+# z=5mm: z0=(5-1)/ln(F(1mm)/F(5mm)). WP-Z0 (2026-07-10, docs/AUDIT_FIX_PLAN_
+# 2026-07-04.md OQ-4) resolved a prior disagreement: an EARLIER z0=21.4mm for
+# R=80 (2026-07-01 CLAUDE.md entry, since removed) instead anchored the second
+# point at the F=F_grav crossing itself (z0=(z_eq-1)/ln(F(1mm)/F_grav)) -- the
+# two methods disagreed ~1.5x (13.6mm vs 21.4mm) because F(z) isn't a clean
+# single exponential over that range. User confirmed the real rig's gap only
+# "nudges up a little" at 7.75A, matching 13.6mm (21.4mm predicted
+# z_eq(7.75A)≈22.9mm, clearly too large) -- params.yaml's `levitation.
+# z_decay_mm` was switched to 13.6mm so R=80 now uses the SAME F1/F5 method as
+# this dict uses for every other radius (reproducible from
+# compute_lift_force() alone, no F_grav/mass dependency baked into the shape
+# fit). Treat z0 as order-of-magnitude regardless of method (mesh-sensitive --
+# see the WP-C report for a fine_step_mm convergence check that moved
+# z_eq(R=80) by ~0.7mm and I_min_lev(R=101) by ~0.5A between fine_step=2.0mm
+# and 1.0mm; no real multi-current gap measurement exists yet either).
 def _lev_anchor(radius_mm: float, plate_thickness_mm: float = 3.0) -> dict:
     """Recompute the lift-force anchors for one plate radius. Re-solves EM from
     scratch at the given radius (NOT scaled from another radius's result) --
@@ -78,7 +98,6 @@ def _lev_anchor(radius_mm: float, plate_thickness_mm: float = 3.0) -> dict:
     R_m = radius_mm * 1e-3
     t_m = plate_thickness_mm * 1e-3
     cfg.raw["plate_material"]["radius_mm"] = float(radius_mm)
-    cfg.raw["excitation"]["current_A"] = 5.0 * math.sqrt(2.0)   # I_peak convention
     m_kg = cfg.plate["rho_kg_per_m3"] * math.pi * R_m ** 2 * t_m
     F_grav = m_kg * 9.81
 
@@ -86,7 +105,13 @@ def _lev_anchor(radius_mm: float, plate_thickness_mm: float = 3.0) -> dict:
         cfg.raw["plate_material"]["z_bottom_mm"] = float(z_mm)
         cfg.geometry = Geometry(plate_radius_m=R_m, plate_thickness_m=t_m,
                                  plate_z_bottom_m=float(z_mm) * 1e-3)
-        return compute_lift_force(cfg)
+        # WP-PEAK (docs/AUDIT_FIX_PLAN_2026-07-04.md): force needs the TRUE
+        # phasor amplitude cfg.I_peak, not a manual current_A=5*sqrt(2) mutation
+        # (the old pattern here, now handled cleanly via compute_lift_force's
+        # own I_amplitude parameter). cfg.I stays at its natural params.yaml
+        # value (5.0A_rms) so cfg.I_peak = 5*sqrt(2) = 7.071A, numerically
+        # identical to the old hack.
+        return compute_lift_force(cfg, I_amplitude=cfg.I_peak)
 
     F1, F38, F5 = F_at(1.0), F_at(3.8), F_at(5.0)
     z0_mm = (5.0 - 1.0) / math.log(F1 / F5)
@@ -141,7 +166,7 @@ def lev_params(cfg) -> dict:
 
     if abs(radius_mm - default_radius) < 0.5:
         z_gap_5A = float(lv.get("z_gap_5A_mm", 4.1))
-        z_decay  = float(lv.get("z_decay_mm", 21.4))
+        z_decay  = float(lv.get("z_decay_mm", 13.6))
     else:
         anchor = LEV_ANCHORS.get(radius_mm) or _lev_anchor(radius_mm, cfg.plate["thickness_mm"])
         z_decay = float(anchor["z0_decay_mm"])
@@ -160,6 +185,11 @@ def lev_params(cfg) -> dict:
         "jit_freq1":          float(lv.get("jit_freq1_rad_s", 27.0)),
         "jit_freq2":          float(lv.get("jit_freq2_rad_s", 71.0)),
         "z_gap_exaggeration": float(lv.get("z_gap_exaggeration", 2.0)),
+        # WP-HTML (2026-07-10): jitter fade-out threshold, was a JS literal `0.5`
+        # (fadeIn = 1 - lev.z/0.5) in levStep(). A sibling agent may add this key
+        # to params.yaml's `levitation:` block concurrently -- default matches
+        # the old hardcoded behaviour exactly if the key isn't there yet.
+        "jit_fade_mm":        float(lv.get("jit_fade_mm", 0.5)),
     }
 
 
@@ -178,6 +208,7 @@ def power_supply_params(cfg) -> dict:
         "dial_min": float(ps["dial_min"]),
         "dial_max": float(ps["dial_max"]),
         "anchors":  [[float(a["dial"]), float(a["I"])] for a in anchors],
+        "degree_to_volt_ratio": float(ps["degree_to_volt_ratio"]),
     }
 
 
@@ -626,9 +657,98 @@ def compute_eddy_fraction(cfg, em: dict, rom) -> float:
     return float(min(max(f_eddy, 0.0), 1.0))
 
 
+# ─── Disc-radius compare mode (2026-07-03) ────────────────────────────────────
+# User-requested feature: let the live twin swap between several disc radii
+# WHILE the simulation runs, instead of only via separate `--plate-radius`
+# builds (WP-C/D). All candidate radii are aluminium, 3mm thick (same material/
+# thickness as the default disc — no material switching), so no other cfg
+# override is needed besides the radius + derived geometry.
+def plate_variant_radii_mm(cfg) -> list[float]:
+    """SSOT for the disc-radius compare-mode button list (WP-HTML fix, was a
+    hardcoded tuple that silently drifted from params.yaml's plate_library).
+    Derives the candidate radii directly from plate_library: any entry whose
+    material is aluminium and thickness is 3mm is a valid live swap target
+    (same material/thickness as every other variant -- no other cfg override
+    needed). Deduped, sorted ascending."""
+    radii = set()
+    for entry in cfg.raw.get("plate_library", []):
+        if entry.get("material") != "aluminium":
+            continue
+        if abs(float(entry.get("thickness_mm", 0.0)) - 3.0) > 1e-6:
+            continue
+        radii.add(float(entry["radius_mm"]))
+    return sorted(radii)
+
+
+def solve_plate_variant(base_cfg, radius_mm: float, z_disc_bot_mm: float) -> dict:
+    """Solve EM + ROM + disc mesh FROM SCRATCH for one plate radius (mirrors the
+    --plate-radius override in build(), factored out so it can run in a loop for
+    the disc-radius compare mode). Returns everything a JS-side plate swap needs:
+    the FEM-mapped mesh arrays + this radius's own ROM/lev constants."""
+    cfg_v = copy.deepcopy(base_cfg)
+    cfg_v.raw["plate_material"]["radius_mm"] = float(radius_mm)
+    cfg_v.geometry = Geometry(
+        plate_radius_m=float(radius_mm) * 1e-3,
+        plate_thickness_m=cfg_v.geometry.plate_thickness_m,
+        plate_z_bottom_m=cfg_v.geometry.plate_z_bottom_m,
+    )
+    em_v = compute_losses(cfg_v)
+    je_field_v = compute_eddy_field(em_v)
+    rom_v = ThermalROM().build(cfg_v, em_losses=em_v, verbose=False)
+    f_eddy_v = compute_eddy_fraction(cfg_v, em_v, rom_v)
+    V_v, dTe_v, dTa_v, Je_v = build_disc_mesh(cfg_v, rom_v, z_disc_bot_mm, je_field=je_field_v)
+
+    # WP-HTML (2026-07-10): this variant's OWN saturation-check + field-viz peaks
+    # -- these 6 keys were previously MISSING from rom_params_v, so switching disc
+    # variants in the JS (Object.assign(ROM, v.rom)) left them frozen at whatever
+    # the main/active build's disc showed (mixing physics from two different
+    # discs). Mirrors the main build's computation at the bottom of build() below.
+    from em_solver import check_saturation
+    # WP-PEAK: B_max_iron is compared against B_sat_T (a real material
+    # property) -- report the TRUE physical B (I_peak-scaled), not em_v["res"]'s
+    # own loss-chain convention. See check_saturation()'s B_scale docstring.
+    B_max_iron_v, _ = check_saturation(em_v["res"], cfg_v, B_scale=cfg_v.I_peak / cfg_v.I)
+    B_sat_v = float(cfg_v.iron.get("B_sat_T", 1.5))
+    # Keep (not discard) this variant's own field-line contours -- a wider/
+    # narrower disc genuinely reshapes the eddy/flux distribution (that's the
+    # whole point of solving from scratch instead of scaling), so the B-field
+    # visualization must swap per-variant too, not just the ROM scalars.
+    field_lines_v, B_max_v = compute_em_field_lines(em_v, cfg_v)
+    J_max_v = float(Je_v.max()) if Je_v is not None else 0.0
+
+    k_coil_v = float(cfg_v.bc.get("k_coil_coupling_K_per_W", 0.0))
+    rom_params_v = {
+        "T_amb":       float(rom_v.T_amb),
+        "tau":         float(rom_v.tau),
+        "I_ref":       float(rom_v.I_ref),
+        "dT_mean_ref": float(rom_v.dT_mean_ref),
+        "dT_max_ref":  float(rom_v.dT_ref.max()),
+        "UA":          float(rom_v.UA),
+        "alpha":       float(rom_v.alpha),
+        "P_ref":       float(rom_v.P_ref),
+        "k_coil":      k_coil_v,
+        "Tinf_bot_ref": float(cfg_v.bc["T_ambient_degC"]) + k_coil_v * em_v["P_coil_W"],
+        "f_eddy":      round(f_eddy_v, 4),
+        "f_air":       round(1.0 - f_eddy_v, 4),
+        "B_max_iron":  round(B_max_iron_v, 3),
+        "B_sat":       B_sat_v,
+        "saturated":   bool(B_max_iron_v > B_sat_v),
+        "I_em_ref":    float(cfg_v.I),
+        "B_max":       round(B_max_v, 4),
+        "J_max":       round(J_max_v, 1),
+    }
+    return {
+        "V": V_v, "dTe": dTe_v, "dTa": dTa_v, "Je": Je_v,
+        "rom": rom_params_v, "lev": lev_params(cfg_v),
+        "P_plate_W": float(em_v["P_plate_W"]),
+        "field_lines": field_lines_v,
+    }
+
+
 # ─── Main build function ──────────────────────────────────────────────────────
 
-def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = None) -> None:
+def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = None,
+          bake_key: bool = False) -> None:
     cfg = load_config()
 
     # WP-C (2026-07-02): optional plate-radius override, e.g. the Ø202mm disc
@@ -780,7 +900,10 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
 
     # 4. Collect all physics data for JS
     from em_solver import check_saturation
-    B_max_iron, _ = check_saturation(em["res"], cfg)
+    # WP-PEAK: B_max_iron is compared against B_sat_T (a real material
+    # property) -- report the TRUE physical B (I_peak-scaled), not em["res"]'s
+    # own loss-chain convention. See check_saturation()'s B_scale docstring.
+    B_max_iron, _ = check_saturation(em["res"], cfg, B_scale=cfg.I_peak / cfg.I)
     B_sat = float(cfg.iron.get("B_sat_T", 1.5))
     k_coil = float(cfg.bc.get("k_coil_coupling_K_per_W", 0.0))
     Tinf_bot = float(cfg.bc["T_ambient_degC"]) + k_coil * em["P_coil_W"]
@@ -809,7 +932,66 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     lev = lev_params(cfg)
     psup = power_supply_params(cfg)
     params = {"rom": rom_params, "lumped": lumped, "field_lines": field_lines, "lev": lev,
-              "power_supply": psup}
+              "power_supply": psup,
+              # WP-HTML (2026-07-10): bake turn counts + the disc heat-ramp ceiling
+              # from params.yaml instead of hardcoding them as JS/HTML literals.
+              "coils_inner_turns": int(cfg.coils["inner"]["turns"]),
+              "coils_outer_turns": int(cfg.coils["outer"]["turns"]),
+              "plate_hot_display_C": float(cfg.raw["levitating_disc"].get("plate_hot_display_C", 125.0))}
+
+    # 4c. Disc-radius compare mode (2026-07-03, user request; SSOT-derived count
+    # since WP-HTML 2026-07-10 -- see plate_variant_radii_mm()): bake EVERY
+    # aluminium/3mm plate_library radius so the UI can swap the live disc
+    # without a rebuild. As of 2026-07-10 that's 5 radii (50/65/80/100/101mm)
+    # -- the 5th, r=100mm ("Al Ø200mm"), was previously excluded by a stale
+    # hardcoded 4-radius tuple; it now gets the SAME from-scratch EM+ROM+lev
+    # solve and lift-off check as every other variant (see the printed
+    # "lift@5A=" line below), so it's not less-validated than the rest, just
+    # newly surfaced. Each OTHER radius gets its own from-scratch EM+ROM+lev
+    # solve (same reasoning as --plate-radius: a wider/narrower disc genuinely
+    # changes the eddy distribution and lift force, not just a scale factor).
+    # The active build's own radius is reused as-is (already solved above) to
+    # avoid solving it twice.
+    print("[VARIANTS] Solving EM+ROM for disc-radius compare mode:")
+    active_radius_mm = float(cfg.plate["radius_mm"])
+    # Always include whatever radius this build was actually invoked with (e.g. a
+    # future --plate-radius value outside the 4 defaults) so active_idx below can
+    # never fail to find a match.
+    variant_radii = sorted(set(plate_variant_radii_mm(cfg)) | {active_radius_mm})
+    plate_variants = []
+    for r in variant_radii:
+        if abs(r - active_radius_mm) < 0.5:
+            data = {"V": V_disc, "dTe": dTe_disc, "dTa": dTa_disc, "Je": Je_disc,
+                    "rom": rom_params, "lev": lev, "P_plate_W": float(em["P_plate_W"]),
+                    "field_lines": field_lines}
+            print(f"   Ø{2*r:.0f}mm disc : reusing active build")
+        else:
+            data = solve_plate_variant(cfg, r, z_disc_bot)
+            # lev_params() doesn't expose "levitates_at_5A_rms" directly -- re-derive
+            # I_min_lev from the returned z_gap_5A/z_decay the SAME way the JS side
+            # does (I_LEV_MIN = 5*exp(-z_gap_5A/(2*z_decay))) for an accurate log line.
+            i_min = 5.0 * math.exp(-data["lev"]["z_gap_5A_mm"] / (2 * data["lev"]["z_decay_mm"]))
+            print(f"   Ø{2*r:.0f}mm disc : P_plate={data['P_plate_W']*1e3:.1f} mW  "
+                  f"dT_mean_ref={data['rom']['dT_mean_ref']:.2f} K  "
+                  f"lift@5A={'YES' if i_min <= 5.0 else f'no (I_min={i_min:.2f}A)'}")
+        Je_v = data["Je"]
+        Jn_v = (Je_v / Je_v.max()) if (Je_v is not None and Je_v.max() > 0) \
+            else np.zeros(len(data["V"]) * 3, dtype=np.float32)
+        plate_variants.append({
+            "radius_mm": r,
+            "pos_b64":   base64.b64encode(data["V"].reshape(-1).astype("<f4").tobytes()).decode(),
+            "dT_b64":    base64.b64encode(data["dTe"].astype(np.float32).tobytes()).decode(),
+            "dtair_b64": base64.b64encode(data["dTa"].astype(np.float32).tobytes()).decode(),
+            "je_b64":    base64.b64encode(Jn_v.astype(np.float32).tobytes()).decode(),
+            "rom":       data["rom"],
+            "lev":       data["lev"],
+            "P_plate_W": data["P_plate_W"],
+            "field_lines": data["field_lines"],
+        })
+    active_idx = next(i for i, r in enumerate(variant_radii)
+                       if abs(r - active_radius_mm) < 0.5)
+    params["plate_variants"] = plate_variants
+    params["active_plate_idx"] = active_idx
 
     # 5. Encode binary data as base64
     pos_b64   = base64.b64encode(V.reshape(-1).astype("<f4").tobytes()).decode()
@@ -818,13 +1000,27 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     dtair_b64 = base64.b64encode(dTa_vtx.tobytes()).decode()
     je_b64    = base64.b64encode(Jn_vtx.tobytes()).decode()
 
+    # Key gating (security fix): by default ALWAYS bake the literal placeholder,
+    # regardless of whether local/.env.local or GOOGLE_WEATHER_API_KEY is present
+    # -- the previous unconditional call baked a real live key into this tracked
+    # output file. Only --bake-key opts into embedding a real key, with a loud
+    # warning so it's obvious the resulting file must not be committed as-is.
+    if bake_key:
+        google_key = _load_google_weather_key()
+        if google_key and google_key != "YOUR_KEY_HERE":
+            print(f"\n⚠️  Baking a REAL API key into {out_path} — "
+                  f"do not commit this file while it contains a real key")
+    else:
+        google_key = "YOUR_KEY_HERE"
+
     html = (TEMPLATE
             .replace("__POS_B64__",   pos_b64)
             .replace("__REG_B64__",   reg_b64)
             .replace("__DT_B64__",    dT_b64)
             .replace("__DTAIR_B64__", dtair_b64)
             .replace("__JE_B64__",    je_b64)
-            .replace("__PARAMS__",    json.dumps(params)))
+            .replace("__PARAMS__",    json.dumps(params))
+            .replace("__GOOGLE_WEATHER_KEY__", google_key))
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -886,7 +1082,9 @@ body{margin:0;overflow:hidden;background:var(--bg);color:var(--text);
 .panel-head .chev{font-size:.75rem;color:var(--muted);transition:transform .2s}
 .panel.collapsed .chev{transform:rotate(-90deg)}
 .panel.collapsed .panel-body{display:none}
-.panel-body{padding:14px 16px}
+.panel-body{padding:14px 16px;max-height:calc(100vh - 100px);overflow-y:auto}
+#ui{transition:top .3s ease}
+#ui.pulled-up{top:58px}   /* just under #headerBar (54px tall) -- never overlap it */
 .cg{margin-bottom:10px}
 .cg label{display:flex;justify-content:space-between;margin-bottom:4px;
           font-size:.82rem;color:var(--muted)}
@@ -957,8 +1155,8 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
   </div>
   <div class="hdr-mid">
     <span class="hdr-badge">FEM ROM (axisymmetric)</span>
-    <span class="hdr-badge">T_amb = 29 °C</span>
-    <span class="hdr-badge">I = 5 A, 220 V</span>
+    <span class="hdr-badge" id="tAmbBadge">T_amb = 29 °C</span>
+    <span class="hdr-badge" id="hdrIBadge">I = 5.00 A</span>
   </div>
   <div class="hdr-right">
     <button class="iconbtn" id="themeToggle">☀️ Light</button>
@@ -981,9 +1179,11 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
       <button class="sc-btn active" data-mode="amps">Amps</button>
       <button class="sc-btn" data-mode="dial">Variac Dial</button>
     </div>
+    <div style="font-size:.78rem;color:var(--muted);margin:2px 0 4px">Disc radius (compare mode)</div>
+    <div class="sc-group" id="plateGroup"></div>
     <div class="cg" id="ampsGroup">
       <label><span>Current I</span><span id="vI" class="val">5.0 A</span></label>
-      <input type="range" id="sI" min="0" max="20" step="0.5" value="5">
+      <input type="range" id="sI" min="0" max="20" step="0.1" value="5">
     </div>
     <div class="cg" id="dialGroup" style="display:none">
       <label><span>Variac dial (CMV 10 E-1)</span><span id="vDial" class="val">220</span></label>
@@ -1030,6 +1230,8 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
   <div class="panel" id="panelTelemetry">
     <div class="panel-head"><span>Thermal Telemetry</span><span class="chev">▾</span></div>
     <div class="panel-body">
+    <div class="row"><span>Room temp (T_amb)</span>
+      <span class="val" id="vTambInit">— °C</span></div>
     <div class="row"><span>Sim time</span>
       <span class="val" id="vT">0 s</span></div>
     <div class="row"><span>Current I(t)</span>
@@ -1052,11 +1254,11 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
       Bottom face runs hotter than the top as the coils' hot air builds up.</span></div>
     <hr class="div">
     <div class="row">
-      <div><span class="box" id="bIn"></span>Inner coil (1000t)</div>
+      <div><span class="box" id="bIn"></span>Inner coil (<span id="lblInnerTurns">1000</span>t)</div>
       <span class="val" id="tIn">25.0 °C</span>
       <span style="font-size:.7rem;color:#ff8844" id="tInSS"></span></div>
     <div class="row">
-      <div><span class="box" id="bOut"></span>Outer coil (500t)</div>
+      <div><span class="box" id="bOut"></span>Outer coil (<span id="lblOuterTurns">500</span>t)</div>
       <span class="val" id="tOut">25.0 °C</span>
       <span style="font-size:.7rem;color:#ff8844" id="tOutSS"></span></div>
     <div class="row">
@@ -1127,11 +1329,68 @@ const ROM    = PARAMS.rom;    // T_amb tau I_ref dT_mean_ref dT_max_ref alpha P_
 const LUMPED = PARAMS.lumped; // {nodes:{inner,outer,iron:{P_ref,C,hA}}}
 const FIELD_LINES = PARAMS.field_lines; // [{r:[mm],z:[mm],amp:[0..1]}, ...] meridian-plane ψ=const contours
 
-// Display ambient temperature: real lab condition (measured 29°C during IR validation session).
-// Physics ΔT is still baked at FEM T_ref=20°C; only the absolute baseline shifts for display.
-// TODO (future): fetch real-time ambient from OpenWeatherMap API for Darmstadt, Germany
-//   (Zipcode: 64289) and initialise T_AMB_JS dynamically on page load.
-const T_AMB_JS = 29.0;
+// Turn counts baked from params.yaml (WP-HTML fix, were JS/HTML literals
+// "1000t"/"500t"/"1000 turns"/"500 turns") -- fill the telemetry-panel labels.
+document.getElementById('lblInnerTurns').textContent = PARAMS.coils_inner_turns;
+document.getElementById('lblOuterTurns').textContent = PARAMS.coils_outer_turns;
+
+// Display ambient temperature: falls back to the real lab condition (measured
+// 29°C during the IR validation session, 2026-06-23) whenever a live reading
+// isn't available. Physics ΔT is still baked at FEM T_ref=20°C; only the
+// absolute baseline shifts for display.
+const T_AMB_FALLBACK_C = 29.0;
+
+// Optional live ambient lookup (Google Maps Platform Weather API,
+// currentConditions:lookup, Darmstadt DE @ 49.8728,8.6512) — this HTML is a
+// standalone client-side file with no server, so any key placed here IS
+// visible to anyone who views source. TEMP/LOCAL-TEST KEY ONLY — this key is
+// unrestricted (no HTTP-referrer/IP lock) and DID NOT SHIP with this repo:
+// do not commit this file with the key baked in, it would leak a billable
+// Google API key publicly. Get a properly-restricted key at
+// https://console.cloud.google.com/apis/credentials (enable "Weather API";
+// docs: https://developers.google.com/maps/documentation/weather).
+const GOOGLE_WEATHER_API_KEY = "__GOOGLE_WEATHER_KEY__";
+const DARMSTADT_LAT = 49.8728;
+const DARMSTADT_LON = 8.6512;
+
+async function fetchAmbientC(timeoutMs = 4000) {
+  if (!GOOGLE_WEATHER_API_KEY || GOOGLE_WEATHER_API_KEY === "YOUR_KEY_HERE") {
+    return { value: T_AMB_FALLBACK_C, live: false };
+  }
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const url = `https://weather.googleapis.com/v1/currentConditions:lookup?key=${GOOGLE_WEATHER_API_KEY}&location.latitude=${DARMSTADT_LAT}&location.longitude=${DARMSTADT_LON}&unitsSystem=METRIC`;
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error(`Google Weather API HTTP ${res.status}`);
+    const data = await res.json();
+    const t = data && data.temperature && data.temperature.degrees;
+    if (typeof t !== 'number' || !isFinite(t)) throw new Error('Malformed Google Weather API response');
+    return { value: t, live: true };
+  } catch (err) {
+    console.warn('[ambient] Google Weather API fetch failed, falling back to 29°C:', err);
+    return { value: T_AMB_FALLBACK_C, live: false };
+  }
+}
+// Top-level await (module script): blocks the rest of this module until we know
+// the baseline, so every T_AMB_JS-derived const below picks up the right value —
+// resolves immediately (no real fetch) unless OPENWEATHER_API_KEY is filled in.
+const ambient = await fetchAmbientC();
+const T_AMB_JS = ambient.value;
+{
+  const badge = document.getElementById('tAmbBadge');
+  if (badge) {
+    badge.textContent = `T_amb = ${T_AMB_JS.toFixed(1)} °C${ambient.live ? ' (live)' : ''}`;
+  }
+  // Telemetry-panel row: same initial value as the header badge, fetched once
+  // from the weather API at load and used as the model's own T_amb baseline
+  // (see T_AMB_JS above) -- shown as a first-class parameter, not just a badge.
+  const vTambInit = document.getElementById('vTambInit');
+  if (vTambInit) {
+    vTambInit.textContent = `${T_AMB_JS.toFixed(1)} °C${ambient.live ? ' (live)' : ''}`;
+  }
+}
 
 function b64Buf(b64){
   const s=atob(b64),a=new Uint8Array(s.length);
@@ -1287,9 +1546,11 @@ function resetSim() {
 }
 
 // ── Color mapping ─────────────────────────────────────────────────────────────
-//  T_amb → blue (HSL 240°),  125 °C → red (HSL 0°). Floor tracks the baked
-//  ambient (20 °C per params.yaml) instead of a stale hardcoded value.
-const T_COLOR_LO = T_AMB_JS, T_COLOR_HI = 125;
+//  T_amb → blue (HSL 240°),  PARAMS.plate_hot_display_C → red (HSL 0°). Floor
+//  tracks the baked ambient (20 °C per params.yaml) instead of a stale hardcoded
+//  value; ceiling now reads levitating_disc.plate_hot_display_C (WP-HTML fix,
+//  was a JS literal `125`) instead of a hardcoded literal.
+const T_COLOR_LO = T_AMB_JS, T_COLOR_HI = PARAMS.plate_hot_display_C;
 const STRUCT = new THREE.Color(0x5a5a68);   // neutral grey for housing
 function tcol(T) {  // allocating version — for UI swatches / legend only
   let t = (T - T_COLOR_LO) / (T_COLOR_HI - T_COLOR_LO);
@@ -1371,66 +1632,72 @@ const regionKey = {1:'inner', 2:'outer', 3:'iron'};
 // ── Levitation gap physics ────────────────────────────────────────────────────
 // The EM lift force decays ~exponentially with gap height z:
 //   F(I,z) = (I/5A)² · F1 · e^{−(z−z1)/z0}
-// Anchored on the EM solve (CLAUDE.md 2026-07-01): F(5A, z=1mm)=1.85N and the
-// observed equilibrium F(5A, z_eq=4.1mm) = F_grav = 1.60N (163g disc), giving a
-// decay length z0 = (4.1−1)/ln(1.85/1.60) ≈ 21.4mm. Solving F = F_grav for z:
 //   z_eq(I) = Z_GAP_5A_MM + 2·z0·ln(I/5)   (clamped at 0)
-// → CONTINUOUS lift-off at I_min = 5·e^{−4.1/(2·z0)} ≈ 4.54A: the gap grows
-// smoothly from 0 (no jump), passes 4.1mm at 5A, reaches ≈18.5mm at 7A.
+// → CONTINUOUS lift-off at I_min = 5·e^{−z_eq(5A)/(2·z0)}: the gap grows
+// smoothly from 0 (no jump) up to z_eq(5A) at 5A.
 // WP-D (2026-07-02): baked from params.yaml `levitation` via PARAMS.lev instead
-// of hardcoded here — for the default R=80mm disc this is bit-identical to the
-// old 4.1/21.4 literals; for any OTHER --plate-radius build, lev_params() (Python)
-// recomputes fresh per-radius anchors (fixes the R=101 "wrong nonzero gap" bug).
-const LEV = PARAMS.lev;
-const Z_GAP_5A_MM = LEV.z_gap_5A_mm;    // [mm] equilibrium gap at I=5A (R=80mm default)
+// of hardcoded here; for any --plate-radius build OTHER than R=80mm,
+// lev_params() (Python) recomputes fresh per-radius anchors (fixes the R=101
+// "wrong nonzero gap" bug).
+// z0 (decay length) CALIBRATION (WP-Z0, 2026-07-10, docs/AUDIT_FIX_PLAN_
+// 2026-07-04.md OQ-4): two fitting methods for z0 disagreed ~1.5x for the SAME
+// R=80mm disc — the F=F_grav-crossing method gave z0≈21.4mm (predicting
+// z_eq(7.75A)≈22.9mm), while the F(1mm)/F(5mm) shape-fit method (used for
+// every OTHER plate radius via _lev_anchor()) gives z0≈13.6mm. User confirmed
+// the real rig's gap only "nudges up a little" from 5A to 7.75-8A, matching
+// the smaller value — params.yaml `levitation.z_decay_mm` switched to 13.6mm
+// so R=80 now uses the SAME method as every other radius. Still
+// order-of-magnitude (no real multi-current gap measurement exists yet); if
+// one is taken, refit directly against it instead.
+const Z_OBS_7_75A_MM = null;   // [mm] fill in a real measured gap at 7.75A here to refit directly, once available
 
-// CALIBRATION OPEN (user question, docs/PLAN_SIM_FEEDBACK_2026-07-02.md WP-A #4):
-// at Z_DECAY_MM=21.4mm, z_eq(7.75A)≈22.9mm — user reports the real rig's gap only
-// "nudges up a little" from 5A to 7.75-8A, so 21.4mm is likely too large. Once the
-// real gap at 7.75A is measured (mm, or "x times disc thickness"), fill it in below
-// and Z_DECAY_MM refits itself; leave null to keep the params.yaml placeholder.
-const Z_OBS_7_75A_MM = null;
-let Z_DECAY_MM = LEV.z_decay_mm;      // [mm] EM force decay length z0 (from the two EM anchors)
-if (Z_OBS_7_75A_MM !== null) {
-  Z_DECAY_MM = (Z_OBS_7_75A_MM - Z_GAP_5A_MM) / (2 * Math.log(7.75 / 5.0));
-}
-const I_LEV_MIN   = 5.0 * Math.exp(-Z_GAP_5A_MM / (2 * Z_DECAY_MM));  // ≈4.54A lift-off (R=80mm)
-const Z_GAP_EXAG  = LEV.z_gap_exaggeration;  // display exaggeration factor — SAME as
+// Disc-radius compare mode (2026-07-03): every LEV_* constant below used to be a
+// one-time `const` derived from PARAMS.lev at load. They are now `let` + rebuilt
+// by applyLevParams() whenever the user swaps the active disc radius, so the
+// levitation model (equilibrium gap, lift-off current, oscillator ω/ζ) always
+// matches the CURRENTLY SELECTED plate's own EM/mass anchors instead of freezing
+// at whichever radius happened to be active when the page loaded.
+let LEV, Z_GAP_5A_MM, Z_DECAY_MM, I_LEV_MIN, Z_GAP_EXAG,
+    LEV_OMEGA, LEV_ZETA0, LEV_ZETA1, JIT_MM, JIT_FREQ1, JIT_FREQ2, JIT_FADE_MM;
+function applyLevParams(levObj, radiusMm) {
+  LEV = levObj;
+  Z_GAP_5A_MM = LEV.z_gap_5A_mm;   // [mm] equilibrium gap at I=5A
+  Z_DECAY_MM  = LEV.z_decay_mm;    // [mm] EM force decay length z0
+  if (Z_OBS_7_75A_MM !== null && Math.abs(radiusMm - 80.0) < 0.5) {
+    Z_DECAY_MM = (Z_OBS_7_75A_MM - Z_GAP_5A_MM) / (2 * Math.log(7.75 / 5.0));
+  }
+  I_LEV_MIN  = 5.0 * Math.exp(-Z_GAP_5A_MM / (2 * Z_DECAY_MM));  // lift-off current
+  Z_GAP_EXAG = LEV.z_gap_exaggeration;  // display exaggeration — SAME as
                              // display_z_exaggeration used for the disc thickness
                              // (params.yaml), so every z-axis dimension of the disc
                              // scales consistently (4.1mm@5A -> 8.2 display-mm).
+  // Disc vertical dynamics: m·z̈ = F(I,z) − mg − damping. Linearised about the
+  // equilibrium this is an underdamped oscillator with ω = √(g/z0).
+  LEV_OMEGA = Math.sqrt(9.81 / (Z_DECAY_MM * 1e-3));
+  // Eddy-current damping grows with B² ∝ I² (more current -> more braking on the
+  // bobbing disc): ζ(I) = ζ0 + ζ1·(I/5)². See CLAUDE.md WP-A for the open
+  // calibration note on why ζ1 stays physically-derived rather than fit to the
+  // overshoot-ratio acceptance target.
+  LEV_ZETA0 = LEV.zeta0;
+  LEV_ZETA1 = LEV.zeta1;
+  // Sub-liftoff jitter: below I_LEV_MIN the disc rests on the coil, but the AC
+  // force still pulses at 100Hz (i(t)² term) — shown as an aliased two-tone
+  // shimmer, amplitude ∝ I², fading out once the disc actually lifts.
+  JIT_MM    = LEV.jit_mm;
+  JIT_FREQ1 = LEV.jit_freq1;
+  JIT_FREQ2 = LEV.jit_freq2;
+  // Gap [mm] above which sub-liftoff jitter has fully faded (was a JS literal
+  // `0.5` inlined in levStep()'s fadeIn calc) -- read from PARAMS.lev, falls
+  // back to that same 0.5 if the key isn't present yet.
+  JIT_FADE_MM = LEV.jit_fade_mm !== undefined ? LEV.jit_fade_mm : 0.5;
+}
+applyLevParams(PARAMS.lev, PARAMS.plate_variants[PARAMS.active_plate_idx].radius_mm);
 
 function levGapEqMm(I) {
   if (I <= I_LEV_MIN) return 0.0;
   return Z_GAP_5A_MM + 2 * Z_DECAY_MM * Math.log(I / 5.0);
 }
-
-// Disc vertical dynamics: m·z̈ = F(I,z) − mg − damping. Linearised about the
-// equilibrium this is an underdamped oscillator with ω = √(g/z0) ≈ 21 rad/s.
-const LEV_OMEGA = Math.sqrt(9.81 / (Z_DECAY_MM * 1e-3));  // ≈21.4 rad/s
-
-// Eddy-current damping grows with B² ∝ I² (more current -> more braking on the
-// bobbing disc): ζ(I) = ζ0 + ζ1·(I/5)². ζ1=0.02 reproduces the original fixed
-// ζ=0.02 exactly at the 5A anchor (settle ≈4/(ζω)≈9s, matches the 2026-07-01
-// observation), giving ζ(7.75A)≈0.048.
-// NOTE (open calibration, same spirit as Z_DECAY_MM above): a pure I² law only
-// reaches ζ(7.75A)≈0.048 — the WP-A overshoot acceptance target ("<40% of the
-// 0->5A step overshoot, normalized") works out to needing ζ≈0.3 at 7.75A, which
-// a quadratic law can't reach without breaking the ζ(5A)=0.02 anchor. Flagging
-// this rather than silently forcing a steeper/unphysical law — revisit once
-// real oscillation-amplitude data at 7.75-8A exists.
-const LEV_ZETA0 = LEV.zeta0;
-const LEV_ZETA1 = LEV.zeta1;
 function levZeta(I) { return LEV_ZETA0 + LEV_ZETA1 * (I / 5.0) ** 2; }
-
-// Sub-liftoff jitter: below I_LEV_MIN the disc rests on the coil, but the AC
-// force still pulses at 100Hz (i(t)² term) — real rig "rung lạch cạch" chatter
-// starting around 0.1A, growing through 1-3A. 100Hz can't be resolved at 60fps,
-// so it's shown as an aliased two-tone shimmer, amplitude ∝ I², fading out once
-// the disc actually lifts (lev.z > 0.5mm).
-const JIT_MM    = LEV.jit_mm;    // [display-mm] max shimmer amplitude before liftoff
-const JIT_FREQ1 = LEV.jit_freq1; // [rad/s] visual-only shimmer rates (incommensurate, not physical 100Hz)
-const JIT_FREQ2 = LEV.jit_freq2;
 
 const lev = {z: 0.0, v: 0.0, jit: 0.0, jitPhase1: 0.0, jitPhase2: 0.0};   // gap [mm], velocity [mm/s]
 function levStep(I, dt) {
@@ -1454,7 +1721,7 @@ function levStep(I, dt) {
     if (lev.z < 0) { lev.z = 0; if (lev.v < 0) lev.v = 0; }   // floor contact
   }
 
-  const fadeIn = Math.max(0, 1 - lev.z / 0.5);
+  const fadeIn = Math.max(0, 1 - lev.z / JIT_FADE_MM);
   if (I > 0.05 && fadeIn > 0) {
     lev.jitPhase1 += JIT_FREQ1 * dt;
     lev.jitPhase2 += JIT_FREQ2 * dt;
@@ -1614,9 +1881,11 @@ scene.add(new THREE.LineSegments(flGeo,
 // (FIELD_LINES, see build_twin_html_fem.py compute_em_field_lines). Each 2D
 // meridian-plane line is revolved into N_THETA_FIELD copies around the
 // symmetry axis (CAD Z-up r,z → same rotation as `positions`: X=r·cosθ,
-// Y=z, Z=−r·sinθ). Static geometry, built once; toggled via vizMode and an
-// always-running dash-offset animation ("flow" cue), independent of pause.
-const N_THETA_FIELD = 24;
+// Y=z, Z=−r·sinθ). Geometry is STATIC per disc radius (linear problem — shape
+// doesn't change with I), but a different disc radius genuinely reshapes the
+// eddy/flux distribution, so buildFieldLines() is re-run (not just baked once)
+// whenever selectPlateVariant() swaps discs -- see there.
+const N_THETA_FIELD = 24;  // intentionally hardcoded (cosmetic render density, not physics)
 const fieldLineGroup = new THREE.Group();
 fieldLineGroup.position.set(-ctr.x, -ctr.y, -ctr.z);   // same (un-lifted) frame as baseM
 fieldLineGroup.visible = false;
@@ -1627,53 +1896,61 @@ function flColor(t, out) {   // blue(0) -> cyan(0.5) -> white(1)
   if (t < 0.5) { const k = t / 0.5; out.setRGB(0.10 * (1 - k), 0.30 + 0.70 * k, 1.0); }
   else         { const k = (t - 0.5) / 0.5; out.setRGB(k, 1.0, 1.0); }
 }
-const fieldLineMats = [];   // {mat, amp} — amp = this line's average |B|/B_max, for opacity weighting
+const fieldLineMats = [];   // {mat, line, amp, rankFrac} — amp = this line's average |B|/B_max
 const _flCol = new THREE.Color();
-for (const fl of FIELD_LINES) {
-  const n = fl.r.length;
-  let ampSum = 0;
-  for (let i = 0; i < n; i++) ampSum += fl.amp[i];
-  const avgAmp = ampSum / n;
-  for (let t = 0; t < N_THETA_FIELD; t++) {
-    const theta = t / N_THETA_FIELD * Math.PI * 2;
-    const ct = Math.cos(theta), st = Math.sin(theta);
-    const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const r = fl.r[i], z = fl.z[i];
-      pos[i*3] = r * ct; pos[i*3+1] = z; pos[i*3+2] = -r * st;
-      flColor(fl.amp[i], _flCol);
-      col[i*3] = _flCol.r; col[i*3+1] = _flCol.g; col[i*3+2] = _flCol.b;
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    // depthTest:false — flux loops physically thread through the solid iron
-    // core / coil windings (that's the point of a field-line diagram), which
-    // would otherwise occlude most of each loop. Render as an X-ray overlay
-    // on top of the opaque base/plate meshes instead.
-    const mat = new THREE.LineDashedMaterial({
-      vertexColors: true, transparent: true, opacity: fieldLineOpacityPct,
-      depthTest: false, dashSize: size * 0.018, gapSize: size * 0.012,
-    });
-    const line = new THREE.Line(geo, mat);
-    line.renderOrder = 10;
-    line.computeLineDistances();
-    fieldLineGroup.add(line);
-    fieldLineMats.push({mat, line, amp: avgAmp});
-  }
-}
-// Rank lines by field strength so line DENSITY responds to I, not just brightness:
-// at low I only the strongest flux tubes (hugging the coils) remain visible, and
-// the full baked set appears at I_em_ref. rankFrac ∈ [0,1): 0 = strongest line.
-{
-  const sorted = [...fieldLineMats].sort((a, b) => b.amp - a.amp);
-  sorted.forEach((o, i) => { o.rankFrac = i / sorted.length; });
-}
 const FL_GAP_BASE = size * 0.012;   // dash gap at I ≤ I_em_ref (shrinks above → denser flow)
 function applyFieldLineOpacity() {
   for (const o of fieldLineMats) o.mat.opacity = fieldLineOpacityPct * (0.15 + 0.85 * o.amp);
 }
-applyFieldLineOpacity();
+function buildFieldLines(linesData) {
+  // Tear down the previous disc's field lines (dispose GPU buffers) before
+  // rebuilding from linesData -- mutate fieldLineMats IN PLACE (length=0, not
+  // reassignment) since the render loop and applyFieldLineOpacity() close
+  // over this same array reference.
+  for (const o of fieldLineMats) { o.line.geometry.dispose(); o.mat.dispose(); }
+  fieldLineGroup.clear();
+  fieldLineMats.length = 0;
+  for (const fl of linesData) {
+    const n = fl.r.length;
+    let ampSum = 0;
+    for (let i = 0; i < n; i++) ampSum += fl.amp[i];
+    const avgAmp = ampSum / n;
+    for (let t = 0; t < N_THETA_FIELD; t++) {
+      const theta = t / N_THETA_FIELD * Math.PI * 2;
+      const ct = Math.cos(theta), st = Math.sin(theta);
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const r = fl.r[i], z = fl.z[i];
+        pos[i*3] = r * ct; pos[i*3+1] = z; pos[i*3+2] = -r * st;
+        flColor(fl.amp[i], _flCol);
+        col[i*3] = _flCol.r; col[i*3+1] = _flCol.g; col[i*3+2] = _flCol.b;
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      // depthTest:false — flux loops physically thread through the solid iron
+      // core / coil windings (that's the point of a field-line diagram), which
+      // would otherwise occlude most of each loop. Render as an X-ray overlay
+      // on top of the opaque base/plate meshes instead.
+      const mat = new THREE.LineDashedMaterial({
+        vertexColors: true, transparent: true, opacity: fieldLineOpacityPct,
+        depthTest: false, dashSize: size * 0.018, gapSize: size * 0.012,
+      });
+      const line = new THREE.Line(geo, mat);
+      line.renderOrder = 10;
+      line.computeLineDistances();
+      fieldLineGroup.add(line);
+      fieldLineMats.push({mat, line, amp: avgAmp});
+    }
+  }
+  // Rank lines by field strength so line DENSITY responds to I, not just
+  // brightness: at low I only the strongest flux tubes (hugging the coils)
+  // remain visible, full baked set at I_em_ref. rankFrac ∈ [0,1): 0=strongest.
+  const sorted = [...fieldLineMats].sort((a, b) => b.amp - a.amp);
+  sorted.forEach((o, i) => { o.rankFrac = i / sorted.length; });
+  applyFieldLineOpacity();
+}
+buildFieldLines(FIELD_LINES);
 function updateVizVisibility() {
   fieldLineGroup.visible = (vizMode === 'bfield' || vizMode === 'combined');
 }
@@ -1693,7 +1970,12 @@ controls.target.set(0, plateTopY*0.55, 0); controls.update();
 window.twinDebug = {camera, controls, size, plateM, coilInnerM, coilOuterM,
   coilM: coilInnerM,   // back-compat alias for existing headless tests
   ctr, scene, get lev() { return lev; }, get sim() { return sim; },
-  levStep, levGapEqMm, levZeta, I_LEV_MIN};   // WP-A: direct physics hooks for headless tests
+  levStep, levGapEqMm, levZeta, get I_LEV_MIN() { return I_LEV_MIN; },   // WP-A: direct physics hooks for headless tests
+  get ROM() { return ROM; }, get activePlateIdx() { return activePlateIdx; },
+  selectPlateVariant,   // disc-radius compare mode (2026-07-03): headless hooks
+  fieldLineGroup, get fieldLineMats() { return fieldLineMats; },   // per-variant B-field verification
+  get PARAMS() { return PARAMS; }, T_AMB_JS};   // WP-HTML: module-scoped consts aren't on
+                                       // window in a module script -- expose for tests
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 const dl = new THREE.DirectionalLight(0xffffff, 0.7);
 dl.position.set(1, 1.5, 0.8); scene.add(dl);
@@ -1784,12 +2066,76 @@ function regionAnchor(regIdx, thetaDeg, yPad) {
                            yTop + (yPad || 0) - ctr.y,
                            -rMax * Math.sin(th) - ctr.z);
 }
-addLabel('Inner Coil (1000 turns)', regionAnchor(1,  25, size*0.030));
-addLabel('Outer Coil (500 turns)',  regionAnchor(2, -40, size*0.015));
+addLabel(`Inner Coil (${PARAMS.coils_inner_turns} turns)`, regionAnchor(1,  25, size*0.030));
+addLabel(`Outer Coil (${PARAMS.coils_outer_turns} turns)`,  regionAnchor(2, -40, size*0.015));
 addLabel('Center Core',    regionAnchor(3,  90, size*0.008), 'iron');
 // Separator: keep LOW (yPad 0) and well left (θ=190°) — a back-side ring label
 // projects toward screen centre-height, where it collided with the plate label.
 addLabel('Separator Ring', regionAnchor(5, 190, 0), 'iron');
+
+// ── Disc-radius compare mode (2026-07-03) ────────────────────────────────────
+// User-requested feature: swap the live disc between every aluminium/3mm
+// radius in plate_library (see plate_variant_radii_mm() in the Python
+// builder -- SSOT, not a hardcoded count here) to visually compare how
+// fast/how much each one heats up, without rebuilding the HTML. All variants share the SAME mesh
+// topology (n_theta/meridian is fixed in params.yaml, only the radius scales),
+// so swapping is just: replace plateM's position/dT/dTa/je buffers in place,
+// swap in that radius's own ROM + levitation constants (a wider/narrower disc
+// genuinely changes the eddy loss and lift force, not just a display scale —
+// see CLAUDE.md WP-C), and reset the sim so the new disc's heat-up curve is
+// easy to read from a clean T_amb baseline (matches the plate-selector
+// convention already used in digital_twin.py).
+const PLATE_VARIANTS = PARAMS.plate_variants;
+let activePlateIdx = PARAMS.active_plate_idx;
+function decodeVariantPositions(v) {
+  const pos = new Float32Array(b64Buf(v.pos_b64));
+  for (let i = 0; i < pos.length; i += 3) {   // CAD Z-up -> Three.js Y-up
+    const y = pos[i+1], z = pos[i+2];
+    pos[i+1] = z; pos[i+2] = -y;
+  }
+  return pos;
+}
+function selectPlateVariant(idx) {
+  if (idx === activePlateIdx || !PLATE_VARIANTS[idx]) return;
+  const v = PLATE_VARIANTS[idx];
+  activePlateIdx = idx;
+
+  const pos = decodeVariantPositions(v);
+  // Same topology across radii (fixed n_theta/meridian) -> identical vertex
+  // count, so the existing BufferAttribute can be updated in place.
+  plateM.geo.attributes.position.array.set(pos);
+  plateM.geo.attributes.position.needsUpdate = true;
+  plateM.geo.computeBoundingSphere();
+  plateM.geo.computeVertexNormals();
+  plateM.dT  = new Float32Array(b64Buf(v.dT_b64));
+  plateM.dTa = new Float32Array(b64Buf(v.dtair_b64));
+  plateM.je  = new Float32Array(b64Buf(v.je_b64));
+
+  // ROM is referenced by object identity everywhere (romStep, plateTss,
+  // telemetry) -- mutate its fields in place rather than rebinding the const.
+  Object.assign(ROM, v.rom);
+  applyLevParams(v.lev, v.radius_mm);
+
+  // Field-line SHAPE also changes per disc radius (different eddy/flux
+  // distribution, not just a scale factor) -- rebuild the B-field overlay
+  // geometry from this variant's own contours, not just its ROM scalars.
+  buildFieldLines(v.field_lines);
+
+  resetSim();
+  lev.z = 0; lev.v = 0; lev.jit = 0; lev.jitPhase1 = 0; lev.jitPhase2 = 0;
+
+  // Reposition the plate label onto the new disc's own centroid (radius changed).
+  let sx = 0, sy = 0, sz = 0, n = 0;
+  for (let i = 0; i < pos.length; i += 3) { sx += pos[i]; sy += pos[i+1]; sz += pos[i+2]; n++; }
+  if (n) {
+    plateCentroid.set(sx/n - ctr.x, sy/n - ctr.y, sz/n - ctr.z);
+    plateLabelObj.position.set(plateCentroid.x, plateCentroid.y + levLiftY() + size*0.05, plateCentroid.z);
+  }
+
+  // B_max_iron/saturation badge must repaint too -- v.rom now carries this
+  // variant's OWN EM peaks (WP-HTML fix), not the previously-active disc's.
+  updateEmBadges();
+}
 
 // ── Heat particles — faint glowing motes rising from the coils, shown only
 // once a body is noticeably above ambient (>2 K). Purely decorative; does not
@@ -1803,7 +2149,7 @@ function makeGlowDot() {
   g.fillStyle = grad; g.fillRect(0, 0, 32, 32);
   return new THREE.CanvasTexture(c);
 }
-const N_HEAT_PARTICLES = 70;
+const N_HEAT_PARTICLES = 70;  // intentionally hardcoded (cosmetic particle count, not physics)
 const particlePos  = new Float32Array(N_HEAT_PARTICLES * 3);
 const particleSeed = new Float32Array(N_HEAT_PARTICLES);
 function resetParticle(i) {
@@ -1824,7 +2170,11 @@ particles.visible = false;
 scene.add(particles);
 const particleTopY = gapTop + modelH * 0.10;
 function updateHeatParticles(dt) {
-  const hot = Math.max(sim.T.inner, sim.T.outer, sim.T.iron) - ROM.T_amb > 2.0;
+  // Compare against T_AMB_JS (the shared display baseline used by every other
+  // "is this hot" decision in this file), not ROM.T_amb (the physics ambient,
+  // 20°C per params.yaml, which can lag/mismatch T_AMB_JS) -- avoids a paradox
+  // where particles render "hot" off cold coils right after page load.
+  const hot = Math.max(sim.T.inner, sim.T.outer, sim.T.iron) - T_AMB_JS > 2.0;
   particles.visible = hot;
   if (!hot) return;
   const arr = particleGeo.attributes.position.array;
@@ -1935,7 +2285,7 @@ function totalPower(I) {
 // ── Rolling chart canvas ──────────────────────────────────────────────────────
 const chartCanvas = document.getElementById('chart');
 const ctx = chartCanvas.getContext('2d');
-const CHART_WIN = 600; // 10 min window
+const CHART_WIN = 600; // 10 min window; intentionally hardcoded (cosmetic chart span, not physics)
 
 function drawGrid(W, H, nRows) {
   ctx.strokeStyle = 'rgba(120,140,180,.12)'; ctx.lineWidth = 1; ctx.setLineDash([]);
@@ -2091,6 +2441,24 @@ document.querySelectorAll('.sc-btn[data-sc]').forEach(btn => {
 });
 document.getElementById('reset').onclick = resetSim;
 
+// ── Disc-radius compare mode: build the radio buttons from PARAMS.plate_variants
+// (not hardcoded here) so the radius list always matches what Python baked.
+{
+  const grp = document.getElementById('plateGroup');
+  PLATE_VARIANTS.forEach((v, i) => {
+    const b = document.createElement('button');
+    b.className = 'sc-btn' + (i === activePlateIdx ? ' active' : '');
+    b.textContent = `Ø${(2 * v.radius_mm).toFixed(0)}mm`;
+    b.title = `dT_mean_ref=${v.rom.dT_mean_ref.toFixed(1)}K @ I_ref=${v.rom.I_ref}A`;
+    b.onclick = () => {
+      grp.querySelectorAll('.sc-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      selectPlateVariant(i);
+    };
+    grp.appendChild(b);
+  });
+}
+
 // ── Visualization mode (Thermal / B Field / Eddy J / Combined) ───────────────
 document.querySelectorAll('.sc-btn[data-viz]').forEach(btn => {
   btn.onclick = () => {
@@ -2115,6 +2483,18 @@ const setBox = (id, T) => document.getElementById(id).style.background =
 // CSS can't animate a transition into `width:fit-content` (browsers treat it as
 // a non-interpolable keyword and just snap), so measure the header's natural
 // shrink-to-fit width in JS and transition between two explicit px values.
+// Thermal Telemetry / Time History are the two tall, content-heavy panels
+// (long row lists / chart canvas) — while either is open, pull the whole
+// panel row up toward the header so it clears more room below for the 3D
+// simulation instead of pushing further down over it.
+function updatePulledUp() {
+  const uiEl = document.getElementById('ui');
+  const tallPanelOpen = ['panelTelemetry', 'panelChart'].some(id => {
+    const p = document.getElementById(id);
+    return p && !p.classList.contains('collapsed');
+  });
+  uiEl.classList.toggle('pulled-up', tallPanelOpen);
+}
 document.querySelectorAll('.panel-head').forEach(h => {
   const panel = h.parentElement;
   h.onclick = () => {
@@ -2135,8 +2515,10 @@ document.querySelectorAll('.panel-head').forEach(h => {
       panel.classList.remove('collapsed');
       requestAnimationFrame(() => requestAnimationFrame(() => { panel.style.width = ''; }));
     }
+    updatePulledUp();
   };
 });
+updatePulledUp();   // reflect the default (both open) state immediately on load
 
 // ── Dark / light theme toggle ─────────────────────────────────────────────────
 const themeBtn = document.getElementById('themeToggle');
@@ -2235,15 +2617,20 @@ const T_ss_outer = T_AMB_JS + LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA +
 document.getElementById('tInSS').textContent  = `→${T_ss_inner.toFixed(0)}°`;
 document.getElementById('tOutSS').textContent = `→${T_ss_outer.toFixed(0)}°`;
 
-// Iron saturation status (static, baked at build time)
-{
+// Iron/plate EM badges (B_max_iron/saturation) — was a one-shot block that never
+// re-ran after a disc-radius swap (selectPlateVariant Object.assign(ROM, v.rom)
+// updates the underlying numbers but nothing repainted the badge). Now a named
+// function called both at initial load and at the end of selectPlateVariant().
+function updateEmBadges() {
   const bmax = ROM.B_max_iron, bsat = ROM.B_sat;
   const satEl = document.getElementById('tBmax');
   satEl.textContent = `${bmax.toFixed(3)} T / ${bsat} T`;
   satEl.style.color = ROM.saturated ? '#ff4444' : '#88ff88';
-  if (ROM.saturated)
-    document.getElementById('satRow').title = 'WARNING: iron core is magnetically saturated — μ_r=1000 is invalid!';
+  document.getElementById('satRow').title = ROM.saturated
+    ? 'WARNING: iron core is magnetically saturated — μ_r=1000 is invalid!'
+    : '';
 }
+updateEmBadges();
 // Bottom air temperature seen by the disc. It is set by the LIVE coil temperature
 // (coilAirDrive), so it warms slowly with the copper mass rather than jumping with
 // I² — this is the thermal-inertia effect. Updated every frame in the loop.
@@ -2275,6 +2662,24 @@ function dialToCurrentA(dial) {
   }
   return xs[xs.length-1][1];
 }
+// Inverse of dialToCurrentA — approximates the variac DIAL ANGLE (degrees) for
+// a given current, so Dial-input mode's slider can sync from Amps-input mode.
+function dialFromCurrentA(I) {
+  const xs = PS_ANCHORS;
+  if (I <= xs[0][1]) return xs[0][0];
+  if (I >= xs[xs.length-1][1]) return xs[xs.length-1][0];
+  for (let i = 1; i < xs.length; i++) {
+    if (I <= xs[i][1]) {
+      const [x0, y0] = xs[i-1], [x1, y1] = xs[i];
+      return x0 + (I - y0) / (y1 - y0) * (x1 - x0);
+    }
+  }
+  return xs[xs.length-1][0];
+}
+// dial scale is DEGREES of rotation, NOT Volts (corrected 2026-07-10) — the
+// output voltage scales linearly with angle up to ~input voltage at full turn.
+const DEG_TO_VOLT_RATIO = (PARAMS.power_supply && PARAMS.power_supply.degree_to_volt_ratio) || 0.88889;
+function dialToVoltageV(dial) { return dial * DEG_TO_VOLT_RATIO; }
 const sDial = document.getElementById('sDial');
 sDial.oninput = () => {
   targetI = dialToCurrentA(+sDial.value);
@@ -2368,6 +2773,8 @@ function loop() {
     ? sim.t.toFixed(1)+' s' : (sim.t/60).toFixed(2)+' min';
   document.getElementById('vIC').textContent = I_display.toFixed(2)+' A';
   document.getElementById('vP').textContent  = totalPower(I_display).toFixed(1)+' W';
+  document.getElementById('hdrIBadge').textContent =
+    `I = ${I_display.toFixed(2)} A, ~${dialToVoltageV(dialFromCurrentA(I_display)).toFixed(0)} V`;
 
   // Power breakdown: disc eddy vs coil ohmic
   const s2disp = (I_display / ROM.I_ref) ** 2;
@@ -2448,6 +2855,12 @@ if __name__ == "__main__":
                      help="Override plate_material.radius_mm (mm) for this build only "
                           "(params.yaml default is unchanged). E.g. --plate-radius 101 for "
                           "the Ø202mm disc. Output gets a _R<radius> filename suffix.")
+    ap.add_argument("--bake-key", action="store_true",
+                     help="Bake the REAL Google Weather API key (from local/.env.local or "
+                          "GOOGLE_WEATHER_API_KEY) into the output HTML. DEFAULT (flag absent): "
+                          "always writes the literal placeholder 'YOUR_KEY_HERE', even if a real "
+                          "key is available locally -- do not pass this flag for a build you "
+                          "intend to commit.")
     args = ap.parse_args()
 
     out_dir = os.path.join(HERE, "outputs")
@@ -2457,4 +2870,4 @@ if __name__ == "__main__":
     else:
         out_name = "digital_twin_fem.html"
     out = os.path.join(out_dir, out_name)
-    build(args.stl, out, plate_radius_mm=args.plate_radius)
+    build(args.stl, out, plate_radius_mm=args.plate_radius, bake_key=args.bake_key)

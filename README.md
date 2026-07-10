@@ -34,10 +34,11 @@ python rom.py               # real-time ROM demo (I² scaling + transient)
 python digital_twin.py      # interactive live twin (slider I, plate selector)
 python visualize.py --no-show   # revolve 2D→3D, export outputs/plate.glb
 python sim_plates.py            # compare plates from plate_library
-python build_twin_html.py 3D_model.stl   # bake standalone AR twin → outputs/digital_twin.html
+# build_twin_html.py deleted 2026-07-02 (commit ec64ec1) — superseded by build_twin_html_fem.py below
 python build_twin_html_fem.py            # FEM-accurate bake → outputs/digital_twin_fem.html (R=80mm, default disc)
 python build_twin_html_fem.py --plate-radius 101   # same, but Ø202mm disc → outputs/digital_twin_fem_R101.html
 python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
+python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
 ```
 
 ## Layout
@@ -52,9 +53,10 @@ rom.py              # real-time ROM: I^2 + first-order transient + σ(T)
 digital_twin.py     # interactive live loop I(t) -> T(r,z,t)
 visualize.py        # revolve 2D->3D, export GLB/OBJ (+ optional PyVista)
 sim_plates.py       # compare thermal response across plate_library
-build_twin_html.py      # bake STL + physics -> outputs/digital_twin.html (lumped)
+# (build_twin_html.py deleted 2026-07-02, commit ec64ec1 — superseded by build_twin_html_fem.py below)
 build_twin_html_fem.py  # FEM-based bake  -> outputs/digital_twin_fem.html
 data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA()
+gen_qr.py           # QR code for the hosted digital_twin_fem.html (URL via CLI arg)
 arduino/thermal_sensor/thermal_sensor.ino  # MAX31855x2 firmware, 1Hz CSV over serial
 3D_model.stl                    # colleague's CAD (source, meters, axisymmetric)
 levitation_height_team28.csv    # Table I from the PDF (levitation height, validation)
@@ -72,8 +74,12 @@ outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin
 - [x] **Phase 3** — Twin loop (interactive). Measured-data ingestion: pending real sensors.
 - [x] **Phase 4** — Revolve 2D→3D, export GLB/OBJ.
 - [x] **Phase 5** — Standalone interactive AR twin (`digital_twin.html`). QR: optional.
-- [ ] **Phase 6a** — Domain validation: Dirichlet vs Neumann BC comparison (1×1m box).
-- [ ] **Phase 6b** — Re-run pipeline with T_amb=20°C, regenerate `digital_twin_fem.html`.
+- [x] **Phase 6a** — Domain validation: Dirichlet vs Neumann BC comparison (1×1m box).
+      See `validate_domain_size()` in `em_solver.py` — PASS, diffs <0.06% at ±500mm domain.
+- [x] **Phase 6b** — Re-run pipeline with T_amb=20°C, regenerate `digital_twin_fem.html`.
+      Done 2026-06-22: full pipeline (config → em_solver → thermal_solver → rom →
+      visualize → build_twin_html_fem) re-ran with T_amb=20°C, ±500mm domain; all
+      outputs regenerated.
 - [x] **Phase 8** — `data_io.py` + `arduino/thermal_sensor.ino`: `SensorReader` (serial or
   mock) -> `calibrate_from_file()` -> `rom.calibrate_UA()`. Tested against `mock_sensor_data.csv`.
 - [ ] **Phase 7** — Sensor hardware: build the real Arduino rig (Arduino + thermocouple +
