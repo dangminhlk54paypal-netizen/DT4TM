@@ -120,9 +120,16 @@ class SensorReader:
 
         Core (near the coils, P_coil dominates losses) heats faster and further
         than the disc (larger thermal mass, only eddy + coupled hot-air heating).
+
+        NOTE: Hard-coded constants below are for TESTING ONLY. They do not read from
+        params.yaml and do not match the current calibrated lumped_thermal values
+        (hA_inner/hA_outer/coil_C_scale). This mock stream is used to test the
+        data_io.py → rom.calibrate_UA() pipeline without needing the real hardware.
+        For validation against actual measured data, use a real CSV from the Arduino
+        sensor (see SENSOR_PLAN.md) or calibrate_from_file(csv_path).
         """
-        T_amb, dT_core_ss, dT_disc_ss = 20.0, 25.0, 11.46
-        tau_core_s, tau_disc_s = 300.0, 632.0
+        T_amb, dT_core_ss, dT_disc_ss = 20.0, 25.0, 11.46  # Arbitrary test values
+        tau_core_s, tau_disc_s = 300.0, 632.0  # Arbitrary test time constants [s]
         t = 0.0
         while True:
             T_core = T_amb + dT_core_ss * (1 - math.exp(-t / tau_core_s)) + random.gauss(0, 0.15)

@@ -1332,10 +1332,14 @@ const FIELD_LINES = PARAMS.field_lines; // [{r:[mm],z:[mm],amp:[0..1]}, ...] mer
 document.getElementById('lblInnerTurns').textContent = PARAMS.coils_inner_turns;
 document.getElementById('lblOuterTurns').textContent = PARAMS.coils_outer_turns;
 
-// Display ambient temperature: falls back to the real lab condition (measured
-// 29°C during the IR validation session, 2026-06-23) whenever a live reading
-// isn't available. Physics ΔT is still baked at FEM T_ref=20°C; only the
-// absolute baseline shifts for display.
+// Display ambient temperature fallback: 29°C (measured lab condition, IR validation
+// session 2026-06-23). NOTE: physics T_ref in FEM solve is 20°C (per professor
+// guidelines: "take everything as simple as possible"); here we use 29°C as a
+// display-only fallback when live weather data is unavailable. This mismatch
+// (20°C physics vs 29°C display) is intentional: T predictions are accurate
+// relative to whatever ambient is used; baking 29°C here matches the real lab
+// ambient from the calibration session. Offline FEM was solved once at 20°C,
+// so ramp tests and steady-state equations use T_ref=20°C throughout.
 const T_AMB_FALLBACK_C = 29.0;
 
 // Optional live ambient lookup (Google Maps Platform Weather API,
