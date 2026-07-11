@@ -28,7 +28,7 @@ Source scripts stay flat in the repo root (no `src/` subfolder); docs are in
 `docs/`, generated files land in `outputs/`.
 ```bash
 python config.py            # print normalized parameters
-python em_solver.py         # AC eddy losses + I² check + benchmark (z_eq≈7.1mm vs 11.3 expected — improved, not yet matching, see CLAUDE.md)
+python em_solver.py         # AC eddy losses + I² check + benchmark (z_eq≈14.5mm vs 11.3 expected — PAUSED, see CLAUDE.md)
 python thermal_solver.py    # solve heat + energy balance (expect "error=0.000%")
 python rom.py               # real-time ROM demo (I² scaling + transient)
 python digital_twin.py      # interactive live twin (slider I, plate selector)
@@ -36,7 +36,7 @@ python visualize.py --no-show   # revolve 2D→3D, export outputs/plate.glb
 python sim_plates.py            # compare plates from plate_library
 # build_twin_html.py deleted 2026-07-02 (commit ec64ec1) — superseded by build_twin_html_fem.py below
 python build_twin_html_fem.py            # FEM-accurate bake → outputs/digital_twin_fem.html (R=80mm, default disc)
-python build_twin_html_fem.py --plate-radius 101   # same, but Ø202mm disc → outputs/digital_twin_fem_R101.html
+python build_twin_html_fem.py --plate-radius 75   # same, but Ø150mm disc → outputs/digital_twin_fem_R75.html
 python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
 ```
@@ -68,8 +68,8 @@ outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin
 ## Roadmap
 - [x] **Phase 1a** — Axisymmetric heat solver, verified by energy balance.
 - [x] **Phase 1b** — EM solver (AC eddy currents) — real losses computed; original-benchmark
-      lift-force check improved (z_eq≈7.1mm vs 11.3mm expected, was 3.4mm) after fixing
-      the benchmark's coil geometry — not yet fully matching, see CLAUDE.md.
+      lift-force check currently PAUSED at z_eq≈14.5mm vs 11.3mm expected (28% overshoot,
+      2026-07-11 after an RMS/peak bugfix) — not yet fully matching, see CLAUDE.md.
 - [x] **Phase 2** — Real-time ROM (I² + first-order transient + σ(T) correction).
 - [x] **Phase 3** — Twin loop (interactive). Measured-data ingestion: pending real sensors.
 - [x] **Phase 4** — Revolve 2D→3D, export GLB/OBJ.

@@ -81,10 +81,15 @@ Ghi chú từng công cụ:
   Nên câu so sánh đúng không phải "code vs PyVista" mà là "solver tự viết +
   PyVista để hiển thị".
 - **Python tự viết** trả giá bằng việc phải tự kiểm chứng — và ta đã làm:
-  energy balance 0.000 %, I²-scaling đúng 4.000000, lực nâng dự đoán
-  F_z ≈ 1.85 N > trọng lực 1.60 N và khe hở cân bằng z_eq ≈ 4.1 mm khớp quan sát
-  thực tế "đĩa nổi cỡ 2–3 lần bề dày", nhiệt độ cuộn dây hiệu chuẩn theo dữ liệu
-  IR thật (HIKMICRO, sai số RMS ≈ 3 °C trên transient).
+  energy balance 0.000 %, I²-scaling đúng 4.000000, nhiệt độ cuộn dây hiệu
+  chuẩn theo dữ liệu IR thật (HIKMICRO, sai số RMS ≈ 2.5 °C trên transient).
+  ⚠️ **Cập nhật 2026-07-11**: số liệu lực nâng bên dưới đã cũ (tính trên hình
+  học trước khi đo lại 2026-07-10). Số hiện tại: F_z(5A, z=3.8mm) ≈ 4.10N ≫
+  trọng lực 1.60N, nhưng khe hở cân bằng dự đoán z_eq ≈ 11.7mm (đáy đĩa, mặt
+  trên nhìn thấy ≈14.7mm) so với quan sát thực tế chỉ 7-8mm nhìn thấy — một
+  sai lệch còn để mở (xem CLAUDE.md "LIFT FORCE" / `docs/BUG_REGISTER_2026-07-11.md`).
+  Thí nghiệm với mô hình bão hòa μᵣ phi tuyến đã loại trừ bão hòa sắt như
+  nguyên nhân (lực đổi <0.1%) — nguyên nhân thật vẫn chưa rõ.
 
 ---
 
@@ -259,9 +264,11 @@ data_io.py + arduino/thermal_sensor.ino   gen_qr.py
 
 - ✅ **Phase 1a** — Solver nhiệt đối xứng trục, kiểm chứng energy balance 0.000 %.
 - ✅ **Phase 1b** — Solver EM (dòng xoáy AC, phasor); tổn hao thực tính được;
-  hình học cuộn dây được sửa theo đo đạc thực (2026-07-01): đĩa Ø160 mm,
-  cuộn trong 1000 vòng r=28–78 mm, cuộn ngoài 500 vòng r=104–124 mm.
-- ✅ **Phase 2** — ROM real-time (I² + transient + σ(T)); τ ≈ 5.5 phút @ R=80 mm.
+  hình học cuộn dây được đo lại bằng thước (2026-07-10, thay thế ước lượng
+  2026-07-01): đĩa Ø160 mm, cuộn trong 1000 vòng r=27.9–61.9 mm, cuộn ngoài
+  500 vòng r=82.9–102.9 mm.
+- ✅ **Phase 2** — ROM real-time (I² + transient + σ(T)); τ ≈ 4.07 phút @ R=80 mm
+  (tính lại sau khi đo lại hình học 2026-07-10).
 - ✅ **Phase 3** — Vòng lặp twin tương tác (slider I, chọn đĩa).
 - ✅ **Phase 4** — Revolve 2D→3D, export GLB/OBJ (PyVista/meshio).
 - ✅ **Phase 5** — AR twin HTML độc lập + QR code generator.
@@ -279,13 +286,18 @@ data_io.py + arduino/thermal_sensor.ino   gen_qr.py
    Arduino + 2× MAX31855, ghi một lần chạy thực, hiệu chuẩn lại ROM từ dữ liệu đó.
 2. **Hosting + QR**: chọn URL (khả năng cao GitHub Pages) rồi phát hành QR.
 3. Các câu hỏi vật lý đang mở (không chặn tiến độ):
-   - Kiểm tra nam châm cho vòng sắt ngoài r=81–101 mm (hiện mô hình là không khí).
+   - ✅ Kiểm tra nam châm cho vòng sắt ngoài: **đã xong 2026-07-10** — vòng
+     là sắt từ (μᵣ=1000, giống lõi trung tâm), vị trí đo lại r=64.9–79.9mm
+     (trước đó 81–101mm). Còn mở: hợp kim/đường cong B-H thật chưa từng đo
+     (μᵣ=1000 chỉ là placeholder) — xem mục lực nâng ở trên.
    - Bảng hiệu chuẩn núm variac → dòng điện dày hơn (hiện chỉ 3 điểm neo).
    - Hỗ trợ đĩa vành khuyên (3 đĩa thực r_out=55/r_in=27.5 mm chưa mesh được).
-   - Benchmark TEAM 28 gốc: z_eq 7.1 mm vs 11.3 mm kỳ vọng — đang tạm dừng
-     theo thống nhất nhóm, không ảnh hưởng rig thật.
-   - `validate_domain_size()` đang FAIL nhẹ (2.71 % > 1 %) — cần điều tra lại
-     trước khi tin hoàn toàn miền ±500 mm.
+   - Benchmark TEAM 28 gốc: z_eq ≈ 14.5 mm vs 11.3 mm kỳ vọng (lệch 28%, số
+     liệu 2026-07-11 sau khi vá 1 bug RMS/peak — trước đó là 6.8mm/lệch 40%
+     theo hướng khác) — vẫn tạm dừng theo thống nhất nhóm, không ảnh hưởng rig thật.
+   - ✅ `validate_domain_size()`: **PASS trở lại** (mọi sai khác <1%, vd P_plate
+     0.767%) sau khi chạy lại trên hình học+sắt mới 2026-07-10 — từng FAIL
+     2.71% trước đó, nguyên nhân regression cũ vẫn chưa rõ nhưng không còn chặn.
 
 ---
 

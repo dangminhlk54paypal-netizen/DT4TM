@@ -2855,8 +2855,8 @@ if __name__ == "__main__":
                      help="unused (body geometry is 100% procedural) -- kept for CLI compatibility")
     ap.add_argument("--plate-radius", type=float, default=None,
                      help="Override plate_material.radius_mm (mm) for this build only "
-                          "(params.yaml default is unchanged). E.g. --plate-radius 101 for "
-                          "the Ø202mm disc. Output gets a _R<radius> filename suffix.")
+                          "(params.yaml default is unchanged). E.g. --plate-radius 75 for "
+                          "the Ø150mm disc. Output gets a _R<radius> filename suffix.")
     ap.add_argument("--bake-key", action="store_true",
                      help="Bake the REAL Google Weather API key (from local/.env.local or "
                           "GOOGLE_WEATHER_API_KEY) into the output HTML. DEFAULT (flag absent): "

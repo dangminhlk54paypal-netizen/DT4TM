@@ -40,7 +40,7 @@ chốt (Phần 4).
 | M2 | MED | `build_twin_html_fem.py:650` | `PLATE_VARIANT_RADII_MM = (50,65,80,101)` hardcode, không đọc từ `plate_library` → vi phạm SSOT, sửa params không lan sang HTML |
 | M3 | MED | `build_twin_html_fem.py:~2041` | Hiệu ứng hạt nhiệt so `sim.T` (init = T_AMB_JS, mặc định 29°C) với `ROM.T_amb` (=20°C vật lý) → **hạt nhiệt bốc lên từ cuộn dây lạnh ở I=0 ngay khi mở trang** (nghịch lý hiển thị) |
 | M4 | MED | `build_twin_html_fem.py` lev_params vs params.yaml | z_decay **hai phương pháp fit lệch ~1.5×**: R=80 dùng 21.4mm (params.yaml, phương pháp F1/F_grav-crossing), mọi bán kính khác dùng `_lev_anchor()` F1/F5 (~13.6mm) → compare mode so "táo với cam" về độ nhạy gap theo I. Quan sát thật ("gap 7.75A chỉ nhích nhẹ") nghiêng về 13.6mm — cần quyết định (OQ-4) |
-| M5 | MED | `em_solver.py:246-340` | Vòng lặp bão hòa (`solve_em_saturating`/`check_saturation`) chỉ xét `iron_core`, **bỏ qua `outer_iron_ring`** — hiện vô hại (μ_r=1) nhưng sẽ sai âm thầm nếu ring được xác nhận ferromagnetic và ai đó chỉ sửa μ_r |
+| M5 | MED | `em_solver.py:246-340` | Vòng lặp bão hòa (`solve_em_saturating`/`check_saturation`) chỉ xét `iron_core`, **bỏ qua `outer_iron_ring`** — hiện vô hại (μ_r=1) nhưng sẽ sai âm thầm nếu ring được xác nhận ferromagnetic và ai đó chỉ sửa μ_r. **[x] RESOLVED**: `solve_em_saturating` generalized 2026-07-10 (commit aa9537c, Phase C — ring được xác nhận ferromagnetic cùng ngày, xem OQ-6); `check_saturation` (hàm report riêng, bị Phase C bỏ sót) generalized 2026-07-11 bởi audit thứ hai, xem `docs/BUG_REGISTER_2026-07-11.md` B3. |
 | M6 | MED | `em_solver.py:54` | `z_fine_top` không cộng `payload_model.thickness_mm` — payload dày >~10mm sẽ rơi một phần vào vùng mesh thô mà không cảnh báo |
 | M7 | MED | README/ARCHITECTURE | Roadmap Phase 6a/6b vẫn `[ ]` dù đã xong; bảng size file stale |
 | M8 | MED | `build_twin_html_fem.py` JS | Hardcode lẽ ra từ params: nhãn "Inner coil (1000t)"/"Outer coil (500t)" (4 chỗ, không đọc `cfg.coils.*.turns`), ngưỡng fade jitter 0.5mm, `T_COLOR_HI=125`, `CHART_WIN=600` |
@@ -253,6 +253,12 @@ Gộp từ `docs/PLAN_SIM_FEEDBACK_2026-07-02.md` + phát hiện mới của aud
 
 1. **Gap thật ở 7.75A** (mm hoặc "×lần bề dày đĩa")? — điền `Z_OBS_7_75A_MM`
    để refit z_decay. Model hiện dự đoán ~22.9mm, quan sát nói "chỉ nhích nhẹ".
+   ⚠️ **Một phần bị supersede 2026-07-10**: geometry re-measurement + iron
+   confirmation đó ngày đã đổi hẳn bức tranh EM (đĩa giờ overlap iron ring),
+   z_eq(5A) dự đoán nhảy 4.1mm→11.7mm — số liệu z_decay cũ (fit trên geometry
+   trước đó) cần re-derive trên geometry mới trước khi dùng câu trả lời này.
+   Xem thêm CLAUDE.md "LIFT FORCE" bullet + `docs/BUG_REGISTER_2026-07-11.md`
+   WP-7 (bão hòa sắt đã bị loại trừ như nguyên nhân, KHÔNG giải thích được gap).
 2. **Xung đột ζ (damping)**: luật ζ∝I² (neo ζ(5A)=0.02, khớp settle ~9s) chỉ
    cho ζ(7.75A)≈0.048, trong khi target overshoot <40% của chính WP-A đòi ~0.3.
    Chọn: nới target / đổi luật damping / chờ data dao động thật 7.75-8A.
@@ -263,12 +269,18 @@ Gộp từ `docs/PLAN_SIM_FEEDBACK_2026-07-02.md` + phát hiện mới của aud
    R=80) vs 13.6mm (F1/F5, đang dùng cho MỌI bán kính khác) — lệch 1.5× cho
    CÙNG một đĩa. Khuyến nghị của audit: quan sát ở câu 1 nghiêng về giá trị
    nhỏ (13.6mm) → nếu xác nhận, chạy WP-Z0. Data đo gap ở ≥3 mức dòng sẽ chốt
-   dứt điểm.
+   dứt điểm. **[x] User đã chốt 2026-07-10 (WP-Z0)**: chọn 13.6mm, đã áp dụng
+   trong params.yaml. Xem note "supersede" ở câu 1 — geometry đổi sau đó cùng
+   ngày, decision vẫn giữ nhưng z_eq tuyệt đối đã dịch chuyển.
 5. **Đĩa Ø202mm**: mô phỏng nói KHÔNG bay ở 5A (cần ≥6.45A) — có đúc đĩa thử
    thật không, hay giữ Ø160mm?
 6. **Magnet test cho separator ring (r=81-101mm)** — vẫn PENDING; nếu
    ferromagnetic thì P_plate/F_z đổi mạnh (μ_r sensitivity test đã có sẵn) và
-   mọi kết quả R=101 phải tính lại.
+   mọi kết quả R=101 phải tính lại. **[x] RESOLVED 2026-07-10**: user re-test
+   xác nhận CẢ center core LẪN outer_iron_ring đều ferromagnetic (nam châm hút);
+   ring cũng được đo lại vị trí (nay r=64.9-79.9mm, không còn 81-101mm). P_plate
+   và F_z đã tính lại theo geometry mới — xem CLAUDE.md "Device numbers" +
+   "First quantitative result".
 7. **Thứ tự nhiệt đĩa vs coil**: model hiện hòa/tie, IR thật nói coil nóng hơn
    rõ — cần thermocouple tiếp xúc đáy đĩa (h_top/h_bottom đĩa chưa calibrate).
    (Băng keo đen ε≈0.95 dán đáy đĩa là cách rẻ nhất cho IR.)
@@ -292,5 +304,7 @@ Gộp từ `docs/PLAN_SIM_FEEDBACK_2026-07-02.md` + phát hiện mới của aud
 | WP-PEAK | Sonnet (solo, sau Phase 1) | DONE | `config.I_peak` mới; `material/solve_em/solve_em_saturating/compute_lift_force` thêm `I_amplitude` (default None = hành vi cũ y hệt); `run_rig_validation()` giờ bracket được F_grav, in z_eq=4.1mm (plate bottom) + visible gap=7.1mm MATCH; `run_benchmark_validation()` KHÔNG đổi (z_eq=7.1mm y hệt, đã verify). `check_saturation` thêm `B_scale` (mặc định 1.0 không đổi hành vi nội bộ Picard loop); 3 call site báo cáo (`em_solver.py __main__`, 2 chỗ trong `build_twin_html_fem.py`) dùng `B_scale=cfg.I_peak/cfg.I` → "MAX B in iron" 0.033T→0.047T (đúng ×√2). `_lev_anchor()` bỏ hack mutate `current_A`, dùng `I_amplitude=cfg.I_peak` sạch — verify lại từng field khớp 100% với `LEV_ANCHORS` cache cũ. M5: thêm WARNING guard nếu `outer_iron_ring.mu_r>5` mà Picard loop không xét (hiện vô hại vì mu_r=1). M6: `z_fine_top` cộng `payload.thickness_mm`. L2: xoá `on_boundary()` chết. Verify: `P_plate(5A)=9.6727W`/`P_coil=128.169W` bit-identical; I²=4.000000; energy balance 0.000%; cả 2 HTML rebuild + Playwright: `levGapEqMm(5)=4.1`, `I_LEV_MIN` đúng cả 2 build, 0 JS error. **Side-finding ngoài scope**: `validate_domain_size()` hiện FAIL (2.71% > 1% tolerance) — reproduce lại trên bản HEAD chưa sửa, xác nhận đây là vấn đề CÓ TRƯỚC WP-PEAK (không phải do thay đổi hôm nay), nhưng khiến CLAUDE.md's "PASS <0.06%" claim bị stale — cần re-verify domain size ở phiên sau. | 2026-07-10 |
 | WP-TRIM | Sonnet (solo, sau user duyệt) | DONE | CLAUDE.md 780→224 dòng (dưới ngưỡng 250). Toàn bộ narrative lịch sử (mọi session render-fix, 2 vòng calibration, WP-A/B/C/D/PEAK) chuyển nguyên vẹn sang `docs/CHANGELOG.md` (651 dòng, không mất thông tin). "Code status" trong CLAUDE.md giờ chỉ còn current-state compact (1 đoạn/component + pointer sang CHANGELOG). Tiện thể sửa luôn: CURRENT CONVENTION bullet cập nhật theo API `cfg.I_peak` mới (WP-PEAK), bỏ hướng dẫn "×2.0 thủ công" đã lỗi thời; Real-rig validation section rút gọn (giữ số liệu cuối, bỏ narrative 2 vòng); sửa 1 chỗ tham chiếu `build_twin_html.py` sót lại trong CLAUDE.md (WP-DOCS trước đó chỉ sửa README/docs/, không đụng CLAUDE.md). | 2026-07-10 |
 | WP-Z0 | Sonnet (solo, sau user chốt OQ-4) | DONE | User chọn phương pháp F1/F5 (13.6mm) qua AskUserQuestion — xác nhận quan sát thực tế rig "gap chỉ nhích nhẹ" ở 7.75A khớp giá trị nhỏ hơn. Đổi `levitation.z_decay_mm` 21.4→13.6 trong params.yaml (kèm comment giải thích quyết định), cập nhật fallback default trong `lev_params()` Python + comment JS liên quan. Verify: z_eq(7.75A) dự đoán giảm đúng như tính tay: 22.86mm→16.02mm; `levGapEqMm(5)`=4.1 KHÔNG đổi (đúng, vì z_gap_5A_mm không đổi); `I_LEV_MIN`(R80) đổi 4.543→4.300A (ĐÚNG NHƯ MONG ĐỢI — hệ quả tất yếu của đổi z_decay, không phải regression); `I_LEV_MIN`(R101)=6.450A KHÔNG đổi (đúng, dùng anchor riêng qua `_lev_anchor()`, không phụ thuộc z_decay của R=80). Cả 2 HTML rebuild, 0 JS error. | 2026-07-10 |
+
+| AUDIT-0711 | Sonnet (solo, second-pass audit) | DONE | User nghi ngờ 2026-07-10/11 updates (geometry re-measure, iron confirm, Phase A-D) gây lỗi. 3 Explore agent song song (EM chain/thermal-ROM chain/HTML+docs) trước khi sửa. Kết quả đầy đủ: `docs/BUG_REGISTER_2026-07-11.md`. Tóm tắt: 1 bug số liệu thật (Phase B's hA refit dùng sai công thức AIR_DT_SS, đã fix hA_inner 3.0605→2.9493/hA_outer 3.5986→3.4509, verify tay khớp 79.00/74.00°C); 2 lỗi latent trong em_solver.py (`compute_losses` iron-ring loss có thể bị rơi nếu core disabled; `check_saturation` không generalize theo ring như Phase C đã làm cho solver) — cả hai fix, verify P_plate/P_iron/P_coil bit-identical trước/sau; sweep comment stale (M5 dòng trên, radii cũ, quy ước ×2.0 cũ). WP-6 (test coil_C_scale, giữ nguyên, RMS=2.56°C) + WP-7 (thêm `saturating=` kwarg cho `compute_lift_force`, thí nghiệm cho thấy bão hòa KHÔNG giải thích được lift-force mismatch — F_z đổi <0.1%, z_eq bất biến 11.75mm) đều report-only, không đổi default. Rebuild `outputs/digital_twin_fem.html` sau fix hA. Đánh dấu OQ-6 resolved, note OQ-1/OQ-4 partial-supersede ở trên. CLAUDE.md/CHANGELOG.md đồng bộ. Verify: I²=3.998, energy balance 0.000%, ROM I²=4.000000, domain validation PASS. | 2026-07-11 |
 
 **Ghi chú vận hành**: cả 4 WP chạy song song TRỰC TIẾP trên cùng working tree (không dùng `git worktree` isolation) vì file ownership của Phase 1 hoàn toàn rời nhau (đã verify trước khi chạy: WP-HTML không đụng params.yaml, WP-PARAMS không đụng build_twin_html_fem.py, v.v.) — không có merge conflict nào xảy ra, `git diff --stat` sau khi cả 4 xong khớp chính xác với union các file mỗi WP tự báo cáo. Điểm phụ thuộc duy nhất (WP-HTML's SSOT-radii đọc params.yaml lúc build) được thiết kế để không phụ thuộc thứ tự (derive theo `radius_mm` giá trị, không theo `name` string) — verify lại: orchestrator rebuild HTML một lần cuối sau khi tất cả 4 WP báo DONE để loại trừ hoàn toàn race-condition nghi ngờ, kết quả không đổi.

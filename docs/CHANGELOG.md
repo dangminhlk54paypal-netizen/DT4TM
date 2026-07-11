@@ -860,3 +860,75 @@ current calibration — meant to generate a plausible-looking mock CSV for
 least-squares refit of `coil_C_scale`; porting the English report's "section
 2.5" (commit 19e4161) into the still-untracked German
 `docs/REPORT_WHY_CUSTOM_CODE_DE.md`.
+
+---
+
+## 2026-07-11 — Second audit: found and fixed one real bug left by the Phase A-D pass above
+
+User asked for a full re-audit of the 2026-07-10/11 changes (geometry
+re-measurement, iron confirmation, Phase A-D above), specifically suspicious
+that "the model updated today might have affected results and caused
+unwanted outcomes." Ran 3 Explore agents in parallel (EM chain, thermal/ROM
+chain, HTML+docs staleness) before touching any code. Full findings, the
+verified-clean list, and the two experiment write-ups (WP-6, WP-7) live in
+**docs/BUG_REGISTER_2026-07-11.md** — this entry is the short version.
+
+**The one real numeric bug: Phase B's hA refit used the wrong formula.**
+Phase B (above) solved `hA_inner`/`hA_outer` from `AIR_DT_SS = P_total(7.8A) /
+hA_far`, but used `P_total` = coils+iron+**plate** (336W/40=8.40K). The code
+that actually runs (`build_twin_html_fem.py`'s `AIR_P_SUM_REF`) only sums the
+coil+iron lumped nodes — the plate is a separate ROM node that sheds directly
+to far ambient, never through the shared coil/iron air pocket. The 1.57K gap
+(=P_plate/hA_far) meant the deployed twin would show coil steady temps ~1.6°C
+below the 79/74°C validation anchor Phase B was trying to match. Re-solved
+using the code's own formula: `hA_inner` 3.0605→**2.9493**, `hA_outer`
+3.5986→**3.4509** — verified by hand: T_inner=29+127.32/2.9493+6.83=79.00°C,
+T_outer=29+131.71/3.4509+6.83=74.00°C, exact.
+
+**Two smaller latent bugs found in `em_solver.py`, both from Phase C's own
+generalization being incomplete:** `compute_losses()`'s iron-loss classifier
+still gated on `iron_core.enabled` only (an `elif` catch-all) rather than
+testing `outer_iron_ring`'s own r/z box — harmless today (both regions
+enabled) but would silently drop the ring's loss from every `P_*_W` total if
+`iron_core` were ever disabled while the ring stayed on. `check_saturation()`
+(the *reporting* function, separate from the Picard *solver* Phase C already
+fixed) still only scanned `iron_core`'s box for `B_max_iron` — a ring-only
+saturation event would never have tripped the "SATURATED" warning. Both
+fixed with explicit region membership tests; verified byte-identical losses
+before/after (P_plate=25.81W, P_iron=5.86W, P_coil=106.44W unchanged).
+
+**Comment sweep:** several comments in `em_solver.py` and `params.yaml` were
+still describing the pre-2026-07-10 state (iron core "non-ferromagnetic",
+outer ring "81-101mm, magnet test PENDING", outer coil "r=124mm", and a
+`current_A` comment telling readers to manually "multiply F_z by 2.0" — a
+pattern WP-PEAK replaced back on 2026-07-10). All corrected.
+
+**Two experiments, both report-only (no defaults changed):**
+- **WP-6** re-tested `coil_C_scale`/`coil_G_wind` against the corrected hA +
+  new loss distribution by replicating `romStep()`'s two-node model in
+  Python and fitting against `thermal_ramp_test`. The existing values
+  (unchanged since 2026-07-01) still score RMS=2.56°C — a least-squares
+  search only reached 2.50°C at a degenerate, physically-unmotivated
+  optimum. Held unchanged; documented in `params.yaml`.
+- **WP-7** added `compute_lift_force(cfg, saturating=True)` (default False,
+  opt-in) to test whether the fixed-μ_r linear force model — vs the
+  Lorentzian saturation model Phase C already wired up for loss reporting —
+  explains any of the open "LIFT FORCE MISMATCH" gap (predicted 14.7mm
+  visible vs observed 7-8mm). It doesn't: at I_peak (B~0.68T RMS), F_z
+  changes by <0.1% everywhere in the rig sweep and z_eq is identical to 2
+  decimals (11.75mm) either way. Recorded as a new data point on the open
+  question in CLAUDE.md — per user instruction, μ_r was NOT reverse-fit to
+  close the gap.
+
+**`outputs/digital_twin_fem.html` rebuilt** after the hA fix (it had been
+baking the new 2026-07-10 losses/geometry correctly but still had the old,
+buggy hA baked in — internally inconsistent). Verified: no old hA values
+present, new values present, no real API key baked (grep-only check, file
+never read in full).
+
+**Not done this session (deferred to a future pass, see
+docs/BUG_REGISTER_2026-07-11.md "Not investigated"):** porting corrected
+geometry into `docs/REPORT_WHY_CUSTOM_CODE_DE.md`/EN counterpart; CLAUDE.md
+has drifted back over its own ~200-line budget (304 lines) since the last
+WP-TRIM — flagged for the user, not trimmed unilaterally (WP-TRIM requires
+explicit user approval per `docs/AUDIT_FIX_PLAN_2026-07-04.md`).
