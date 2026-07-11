@@ -487,10 +487,19 @@ validation_data:
 #   hA_outer  = 131.7122 / (74 - 29 - 6.8320) = 3.4509 W/K
 # Verified: T_inner = 29 + 127.3171/2.9493 + 6.8320 = 79.00°C ✓
 #           T_outer = 29 + 131.7122/3.4509 + 6.8320 = 74.00°C ✓
-# coil_C_scale=0.2241 HELD UNCHANGED pending full transient least-squares refit
-# against validation_data.thermal_ramp_test to optimize for the new P distribution.
-# Steady-state predictions (T_ss @ I) are now reliable; transient shape (tau, cooldown)
-# may drift until full coil_C_scale fit is done.
+# coil_C_scale/coil_G_wind TESTED 2026-07-11 (audit WP-6) against the new P/hA
+# distribution: replicated build_twin_html_fem.py's two-node romStep() model in
+# Python, drove it through validation_data.thermal_ramp_test (stage1 5A 0-300s,
+# stage2 7.75A 300-450s, T_amb=29C), scored RMS residual vs the 5 outer_coil_C_vs_t
+# points + inner/outer @450s. Baseline (coil_C_scale=0.2241, G_wind=1.0, UNCHANGED)
+# scores RMS=2.56C -- consistent with the ~2.5C previously claimed for the old P
+# distribution, so the new losses/hA did not meaningfully break the transient shape.
+# A Nelder-Mead least-squares search over (coil_C_scale, G_wind) only reached
+# RMS=2.50C (2% better) at a degenerate optimum (coil_C_scale=0.145 -- a smaller
+# effective coil mass than the physically-derived 0.2241, with no independent
+# justification, likely overfitting 7 residuals with 2 free params). HELD UNCHANGED:
+# not worth destabilizing the mass-based value for a 0.06C gain. Revisit with real
+# cooldown IR data (see CLAUDE.md NEXT list) rather than re-fitting this same ramp.
 lumped_thermal:
   hA_inner_W_per_K: 2.9493    # REFIT 2026-07-11 (corrected): matches code's air-node formula
                                # (coil+iron only, no plate). Was 3.0605 (wrong formula, see above),
