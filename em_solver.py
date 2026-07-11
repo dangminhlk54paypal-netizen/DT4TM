@@ -41,7 +41,7 @@ def make_mesh_em(cfg):
     fs, cs = em["fine_step_mm"], em["coarse_step_mm"]
     rmax, zmin, zmax = em["r_max_mm"], em["z_min_mm"], em["z_max_mm"]
     p = cfg.plate
-    # Fine mesh must cover the full device (outer coil now at r=124mm).
+    # Fine mesh must cover the full device (outer coil now at r=102.9mm).
     co = cfg.coils
     r_device_mm = max(
         co["outer"]["r_outer_mm"],
@@ -96,13 +96,14 @@ def material(cfg, rc, zc, I_amplitude: float | None = None):
         pz_top = pz_bot + pl["thickness_mm"] * mm
         if rc <= pl["radius_mm"] * mm and pz_bot <= zc <= pz_top:
             return 1.0 / (pl["mu_r"] * MU0), pl.get("sigma_S_per_m", 0.0), 0.0
-    # --- iron core (center, r=0..25mm, CONFIRMED non-ferromagnetic) ---
+    # --- iron core (center, r=0..25.9mm, CONFIRMED ferromagnetic 2026-07-10, mu_r=1000) ---
     fe = cfg.iron
     if fe.get("enabled", False):
         if (fe["r_inner_mm"] * mm <= rc <= fe["r_outer_mm"] * mm and
                 fe["z_bottom_mm"] * mm <= zc <= fe["z_top_mm"] * mm):
             return 1.0 / (fe["mu_r"] * MU0), fe.get("sigma_S_per_m", 0.0), 0.0
-    # --- outer iron ring (r=81..101mm, between inner and outer coil; magnet test PENDING) ---
+    # --- outer iron ring (r=64.9..79.9mm, between inner coil and outer coil;
+    #     CONFIRMED ferromagnetic 2026-07-10, mu_r=1000) ---
     oir = cfg.raw.get("outer_iron_ring", {})
     if oir.get("enabled", False):
         if (oir["r_inner_mm"] * mm <= rc <= oir["r_outer_mm"] * mm and
@@ -249,7 +250,11 @@ def _compute_B_per_element(res):
 
 
 def check_saturation(res, cfg=None, B_scale: float = 1.0):
-    """Compute max RMS |B| in the iron core region.
+    """Compute max RMS |B| across BOTH ferromagnetic regions (iron_core AND
+    outer_iron_ring -- generalized 2026-07-11 to match solve_em_saturating(),
+    which already Picard-corrects both; this reporting function previously
+    only scanned iron_core, so a ring-only saturation event would never have
+    tripped the "!!! SATURATED" warning downstream).
 
     B_scale: multiply the computed B by this factor. `res` was solved at
     whatever current amplitude its own solve_em()/solve_em_saturating() call
@@ -264,7 +269,10 @@ def check_saturation(res, cfg=None, B_scale: float = 1.0):
     docs/AUDIT_FIX_PLAN_2026-07-04.md).
 
     Returns (B_max_iron, B_e) where:
-        B_max_iron  [T]  — peak RMS B inside iron region (0 if iron disabled)
+        B_max_iron  [T]  — peak RMS B over iron_core UNION outer_iron_ring
+                           (0 if both disabled) -- kept as the 2-value return
+                           all 3 current call sites unpack; per-region detail
+                           isn't tracked separately since no caller needs it yet.
         B_e         [T]  — per-element RMS B array over all elements
     """
     if cfg is None:
@@ -274,19 +282,28 @@ def check_saturation(res, cfg=None, B_scale: float = 1.0):
     B_e = _compute_B_per_element(res) * B_scale
 
     fe = cfg.iron
-    B_max_iron = 0.0
+    oir = cfg.raw.get("outer_iron_ring", {})
+    coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
+    z_all = coords[:, 1]
+    mm = 1e-3
+    regions = []
     if fe.get("enabled", False):
-        coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
-        z_all = coords[:, 1]
-        mm = 1e-3
-        r0, r1 = fe["r_inner_mm"] * mm, fe["r_outer_mm"] * mm
-        z0, z1 = fe["z_bottom_mm"] * mm, fe["z_top_mm"] * mm
+        regions.append((fe["r_inner_mm"] * mm, fe["r_outer_mm"] * mm,
+                         fe["z_bottom_mm"] * mm, fe["z_top_mm"] * mm))
+    if oir.get("enabled", False):
+        regions.append((oir["r_inner_mm"] * mm, oir["r_outer_mm"] * mm,
+                         oir["z_bottom_mm"] * mm, oir["z_top_mm"] * mm))
+
+    B_max_iron = 0.0
+    if regions:
         for e in range(len(tris)):
             rc = ridge[e, 0]
             zc = (z_all[tris[e, 0]] + z_all[tris[e, 1]] + z_all[tris[e, 2]]) / 3.0
-            if r0 <= rc <= r1 and z0 <= zc <= z1:
-                if B_e[e] > B_max_iron:
-                    B_max_iron = B_e[e]
+            for r0, r1, z0, z1 in regions:
+                if r0 <= rc <= r1 and z0 <= zc <= z1:
+                    if B_e[e] > B_max_iron:
+                        B_max_iron = B_e[e]
+                    break
     return B_max_iron, B_e
 
 
@@ -312,8 +329,15 @@ def solve_em_saturating(cfg, max_iter: int = 20, tol: float = 0.02,
     (default) = cfg.I -- this loop's own nonlinear μ_r update (below) must
     stay on whatever convention the CALLER needs (compute_losses() relies on
     the default to keep P_plate/P_coil unchanged; force-oriented callers may
-    pass cfg.I_peak). Currently a no-op while μ_r=1.0 (Lorentzian reduces to
-    μ_r_eff≡1 regardless of B) -- see docstring in check_saturation().
+    pass cfg.I_peak). ACTIVE since 2026-07-10 (both iron_core and
+    outer_iron_ring now have mu_r=1000, so the Lorentzian correction is no
+    longer a no-op) -- at the current operating point B_max≈0.66T is well
+    below B_sat=1.5T so μ_r_eff stays close to μ_r_lin and the effect is
+    small, but it is NOT identically zero. Note the loop's own B_e (used to
+    drive μ_r_eff) is computed on whatever I_amplitude convention the caller
+    passed -- for the default loss-chain callers that's cfg.I (RMS-as-
+    amplitude), i.e. √2 below the true peak B; see docstring in
+    check_saturation() for the reporting-side equivalent of this same gap.
 
     Falls back to linear solve() if all iron regions are disabled.
     Returns the same dict as solve_em().
@@ -430,16 +454,26 @@ def compute_losses(cfg, res=None, outer_bc: str = "dirichlet"):
     mm = 1e-3
     p = cfg.plate
     fe = cfg.iron
+    oir = cfg.raw.get("outer_iron_ring", {})
     pz0, pz1 = p["z_bottom_mm"] * mm, (p["z_bottom_mm"] + p["thickness_mm"]) * mm
-    
+
     pl = cfg.raw.get("payload_model", {})
     pl_enabled = pl.get("enabled", False)
     pl_z0, pl_z1 = pz1, pz1 + pl.get("thickness_mm", 0.0) * mm
+
+    core_enabled = fe.get("enabled", False)
+    core_r0, core_r1 = fe.get("r_inner_mm", 0.0) * mm, fe.get("r_outer_mm", 0.0) * mm
+    core_z0, core_z1 = fe.get("z_bottom_mm", 0.0) * mm, fe.get("z_top_mm", 0.0) * mm
+
+    ring_enabled = oir.get("enabled", False)
+    ring_r0, ring_r1 = oir.get("r_inner_mm", 0.0) * mm, oir.get("r_outer_mm", 0.0) * mm
+    ring_z0, ring_z1 = oir.get("z_bottom_mm", 0.0) * mm, oir.get("z_top_mm", 0.0) * mm
 
     zc_e = coords[tris][:, :, 1].mean(axis=1)            # z of each element centroid
     Ac = A[tris].mean(axis=1)                            # A at centroid (complex)
     q_e = np.zeros(len(tris))
     P_plate = P_payload = P_iron = 0.0
+    unclassified_dV = 0.0
     for e in range(len(tris)):
         rc, area, sigma, Js = ridge[e]
         if sigma <= 0 or Js != 0.0:
@@ -450,8 +484,22 @@ def compute_losses(cfg, res=None, outer_bc: str = "dirichlet"):
             q_e[e] = q; P_plate += q * dV
         elif pl_enabled and pl_z0 <= zc_e[e] <= pl_z1 and rc <= pl.get("radius_mm", 0.0) * mm:
             q_e[e] = q; P_payload += q * dV
-        elif fe.get("enabled", False):                            # iron CORE
-            P_iron += q * dV
+        elif core_enabled and core_r0 <= rc <= core_r1 and core_z0 <= zc_e[e] <= core_z1:
+            P_iron += q * dV                                      # iron CORE (q_e stays 0 --
+        elif ring_enabled and ring_r0 <= rc <= ring_r1 and ring_z0 <= zc_e[e] <= ring_z1:
+            P_iron += q * dV                                      # outer iron RING (q_e stays 0 --
+            # thermal_solver._interp_em_losses() only interpolates the plate's own
+            # local (r,z) mesh from wherever q_e>0; iron heat is delivered through the
+            # lumped-network P_iron scalar (build_twin_html_fem.py), not this spatial map)
+        else:
+            # Any other conductor (sigma>0, Js==0) that matched no known region --
+            # would previously be silently dropped from every P_* total.
+            unclassified_dV += dV
+    if unclassified_dV > 0:
+        print(f"    WARNING: compute_losses() found conductor elements outside "
+              f"plate/payload/iron_core/outer_iron_ring (total dV={unclassified_dV:.3e} m^3) "
+              f"-- their eddy loss is excluded from every P_*_W total. Check region "
+              f"r/z boxes in params.yaml against material() in em_solver.py.")
     # coil ohmic losses: ½ î² R
     co = cfg.coils
     A_wire = math.pi * (co["wire_diameter_mm"] * mm / 2) ** 2

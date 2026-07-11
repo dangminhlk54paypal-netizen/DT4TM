@@ -13,12 +13,14 @@ units: {length: mm, current: A, frequency: Hz, temperature: degC, power: W}
 # thermal network (see validation_data below). Real-time current sensor: pending.
 excitation:
   current_A: 5.0        # MEASURED RMS current (multimeter, rig: 190V -> 5A_rms). NOT a guess.
-                        # CONVENTION WARNING: the phasor EM solver expects AMPLITUDE (peak)
-                        # = current_A * sqrt(2) = 7.07A for force calculations.
-                        # Thermal calibration (hA_inner/outer) was calibrated using current_A
-                        # as the amplitude — both P_coil and hA are off by factor 2, so thermal
-                        # temperature predictions remain correct. But F_z predictions from the
-                        # EM solver are 2x too low: multiply by 2.0 when comparing vs physics.
+                        # CONVENTION: the LOSS chain (compute_losses -> hA calibration)
+                        # intentionally treats this RMS value AS the amplitude -- thermal
+                        # predictions are correct as-is (the error is absorbed into
+                        # hA_inner/hA_outer). The FORCE chain needs the TRUE amplitude
+                        # = current_A * sqrt(2) = 7.07A: use cfg.I_peak (config.py) / pass
+                        # I_amplitude=cfg.I_peak to compute_lift_force()/solve_em() -- do NOT
+                        # manually multiply F_z by 2.0 (that pattern was replaced 2026-07-10,
+                        # WP-PEAK; see CLAUDE.md "CURRENT CONVENTION").
                         # Set higher (e.g. 20A RMS) only for an exaggerated heating demo.
   voltage_V: 190.0       # MEASURED operating voltage (rig, main op point: 190V -> 5A_rms)
   current_ref_A: 5.0    # reference point (5A_rms = operating condition)
