@@ -471,18 +471,33 @@ validation_data:
 # order-of-magnitude fit; refit with contact thermocouples later.
 # REFITTED 2026-07-11 (hA_inner/hA_outer only; coil_C_scale pending full transient fit):
 # The 2026-07-10 coil-radii + iron-material update changed P_inner/P_outer(7.8A) from
-# 150.3/161.6W (2026-07-01) to 127.3/131.7W (~15-18% lower) and added P_iron ~14W,
-# P_plate ~63W. hA values re-solved via steady-state energy balance from
-# validation_data.thermal_at_7p8A (T_inner=79°C, T_outer=74°C, T_amb=29°C), yielding
-# new hA_inner=3.0605, hA_outer=3.5986 (down ~14-17% from old values -- expected,
-# since coil losses fell but total P_system rose via plate/iron heating).
+# 150.3/161.6W (2026-07-01) to 127.3/131.7W (~15-18% lower) and added P_iron(7.8A)~14.25W,
+# P_plate(7.8A)~62.8W.
+# BUG FOUND + FIXED 2026-07-11 (audit): the FIRST 2026-07-11 refit pass (hA_inner=3.0605,
+# hA_outer=3.5986) solved the steady-state balance with AIR_DT_SS including P_plate
+# (336W/40=8.40K), but the code the twin actually runs
+# (build_twin_html_fem.py: AIR_P_SUM_REF = sum of LUMPED.nodes{inner,outer,iron}.P_ref,
+# i.e. COIL+IRON ONLY -- the plate is a separate ROM node that sheds straight to far
+# ambient through its own UA, never through this shared air node) computes
+# AIR_DT_SS = (P_inner+P_outer+P_iron)/hA_far = 6.83K. That 1.57K gap (=P_plate/hA_far)
+# made the deployed twin under-predict both coil steady temps by ~1.6°C vs the 79/74°C
+# validation anchor. Corrected below using the CODE's own formula (coil+iron only):
+#   AIR_DT_SS = (127.3171 + 131.7122 + 14.2500) / 40 = 6.8320 K
+#   hA_inner  = 127.3171 / (79 - 29 - 6.8320) = 2.9493 W/K
+#   hA_outer  = 131.7122 / (74 - 29 - 6.8320) = 3.4509 W/K
+# Verified: T_inner = 29 + 127.3171/2.9493 + 6.8320 = 79.00°C ✓
+#           T_outer = 29 + 131.7122/3.4509 + 6.8320 = 74.00°C ✓
 # coil_C_scale=0.2241 HELD UNCHANGED pending full transient least-squares refit
 # against validation_data.thermal_ramp_test to optimize for the new P distribution.
 # Steady-state predictions (T_ss @ I) are now reliable; transient shape (tau, cooldown)
 # may drift until full coil_C_scale fit is done.
 lumped_thermal:
-  hA_inner_W_per_K: 3.0605    # REFIT 2026-07-11: re-measured coil geometry + iron (was 3.5611 after 2026-07-01)
-  hA_outer_W_per_K: 3.5986    # REFIT 2026-07-11: re-measured coil geometry + iron (was 4.3446 after 2026-07-01)
+  hA_inner_W_per_K: 2.9493    # REFIT 2026-07-11 (corrected): matches code's air-node formula
+                               # (coil+iron only, no plate). Was 3.0605 (wrong formula, see above),
+                               # 3.5611 after 2026-07-01 (pre-geometry-update).
+  hA_outer_W_per_K: 3.4509    # REFIT 2026-07-11 (corrected): matches code's air-node formula
+                               # (coil+iron only, no plate). Was 3.5986 (wrong formula, see above),
+                               # 4.3446 after 2026-07-01 (pre-geometry-update).
   coil_C_scale: 0.2241        # HELD PENDING full transient refit 2026-07-11 (see note below)
                                # Effective mass 22.4% of solid-Cu; requires least-squares fit vs thermal_ramp_test
   hA_iron_W_per_K: 0.244      # iron/core -> local air (fit 2026-07-02, see note above)
