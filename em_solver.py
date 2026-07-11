@@ -518,21 +518,36 @@ def compute_losses(cfg, res=None, outer_bc: str = "dirichlet"):
 #    F_z = -½ Re[ ∫ J_φ · B_r* · 2π r dA ]
 #    J_φ = -jωσ A_φ  (eddy current),  B_r = -∂A_φ/∂z  (radial magnetic field)
 # --------------------------------------------------------------------------
-def compute_lift_force(cfg, res=None, I_amplitude: float | None = None):
+def compute_lift_force(cfg, res=None, I_amplitude: float | None = None,
+                       saturating: bool = False):
     """Cycle-averaged lift force [N] on all conductors (plate + core).
     Positive = upwards (+z). Uses Lorentz integral on current EM mesh.
 
-    I_amplitude: forwarded to solve_em() when res is None (ignored if a
-    pre-solved res is passed in -- its amplitude is already baked in). None
-    (default) = cfg.I, UNCHANGED from before this parameter existed, so
-    existing callers that don't pass anything are unaffected. Force
-    computations that want the true physical amplitude should pass
-    cfg.I_peak explicitly (see config.Config.I_peak docstring / CLAUDE.md
-    "CURRENT CONVENTION") -- this replaces the old pattern of manually
-    multiplying the returned F_z by 2.0.
+    I_amplitude: forwarded to solve_em()/solve_em_saturating() when res is
+    None (ignored if a pre-solved res is passed in -- its amplitude is
+    already baked in). None (default) = cfg.I, UNCHANGED from before this
+    parameter existed, so existing callers that don't pass anything are
+    unaffected. Force computations that want the true physical amplitude
+    should pass cfg.I_peak explicitly (see config.Config.I_peak docstring /
+    CLAUDE.md "CURRENT CONVENTION") -- this replaces the old pattern of
+    manually multiplying the returned F_z by 2.0.
+
+    saturating: if True (default False, backward-compatible), solve with
+    solve_em_saturating() instead of the linear solve() -- both iron_core and
+    outer_iron_ring have mu_r=1000 as of 2026-07-10, so their true B-dependent
+    permeability differs from the fixed linear value once B is non-negligible
+    vs B_sat=1.5T. This is a REPORTING option only: it does not change the
+    default force/z_eq calculations used anywhere else in the codebase (see
+    docs/BUG_REGISTER_2026-07-11.md WP-7 for the experiment this was added
+    for -- report numbers only, do not reverse-fit mu_r to match the observed
+    levitation gap). EXPERIMENT RESULT (2026-07-11, at I_peak, B~0.68T RMS):
+    saturation changes F_z by <0.1% everywhere in the rig sweep and z_eq is
+    unchanged to 2 decimals (11.75mm both ways) -- saturation does NOT explain
+    the observed 7-8mm vs predicted ~14.7mm visible-gap mismatch.
     """
     if res is None:
-        res = solve_em(cfg, I_amplitude=I_amplitude)
+        solver = solve_em_saturating if saturating else solve_em
+        res = solver(cfg, I_amplitude=I_amplitude)
     A = res["A"]
     coords, tris, ridge = res["coords"], res["tris"], res["ridge"]
     r_all, z_all = coords[:, 0], coords[:, 1]
