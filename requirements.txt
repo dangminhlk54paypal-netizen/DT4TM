@@ -1,13 +1,22 @@
-# Lõi (Phase 1-2) - đủ để chạy solver nhiệt + ROM
+# Core (Phase 1-2) - enough to run the thermal solver + ROM
 numpy>=1.24
 scipy>=1.10
 pyyaml>=6.0
 matplotlib>=3.7
 
-# Trực quan 3D + xuất AR (Phase 4-5)
+# 3D visualisation + AR export (Phase 4-5)
 trimesh>=4.0          # GLB export (phase 4) — pip install trimesh
-# pyvista>=0.43       # optional interactive 3D window
 qrcode>=7.4           # phase 5 QR code — gen_qr.py
+
+# PyVista desktop 3D twin (digital_twin_pyvista.py) — OPTIONAL, ~400MB (VTK).
+# NOT required for the solvers, digital_twin.py (matplotlib), or
+# build_twin_html_fem.py (three.js/HTML) — those all work without this block.
+# Version floor: 0.45 needs PolyData.from_regular_faces (0.44+) and
+# interaction_event (0.38+ rename of event_type). VTK capped <9.7 to match
+# the pyvista range tested in docs/PYVISTA_TWIN_PLAN_2026-07-28.md.
+# pip install "pyvista>=0.45" "vtk>=9.3,<9.7"
+# pyvista>=0.45
+# vtk>=9.3,<9.7
 
 # Sensor data I/O (Phase 7-8) — data_io.py
 pyserial>=3.5         # Arduino serial bridge; not needed for --port mock

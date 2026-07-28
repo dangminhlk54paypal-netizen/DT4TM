@@ -11,9 +11,17 @@ Features:
     is selected
   • I(t) scenarios: step / ramp / sine / pulse / manual
   • Space = pause/resume
+
+The time integrator (β/coil/lev) lives in twin_core.TwinState — this module
+used to carry its own single-β `DigitalTwin` class (a second, drifting copy
+of the same physics also baked into outputs/digital_twin_fem.html's JS; see
+docs/PYVISTA_TWIN_PLAN_2026-07-28.md). Removed in WP-CORE2: twin_core.TwinState
+with f_eddy=1/f_air=0 is an exact superset of the old single-β model (proven
+by twin_core.py's own self-check #1, pinned bit-for-bit against the JS engine
+by xval_twin.py) — there is no remaining reason to keep a second copy.
 """
 from __future__ import annotations
-import sys, os, copy, math, time
+import sys, os, math
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -24,103 +32,8 @@ from matplotlib.animation import FuncAnimation
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-
-# ---------------------------------------------------------------------------
-# I(t) scenarios
-# ---------------------------------------------------------------------------
-def scenario_step(I: float = 5.0):
-    return (lambda t: I), f"Step I={I}A"
-
-def scenario_ramp(I: float = 5.0, t_r: float = 60.0):
-    return (lambda t: min(t / t_r, 1.0) * I), f"Ramp 0→{I}A/{t_r:.0f}s"
-
-def scenario_sine(I: float = 5.0):
-    Im, Ia = I * 0.6, I * 0.4
-    return (lambda t: max(0.0, Im + Ia * math.sin(2*math.pi*t/120))), f"Sin {Im:.1f}±{Ia:.1f}A"
-
-def scenario_pulse(I: float = 5.0):
-    return (lambda t: I if (t % 120) < 60 else 0.0), f"Pulse {I}A ON60/OFF60s"
-
-SCENARIOS = {"step": scenario_step, "ramp": scenario_ramp,
-             "sine": scenario_sine,  "pulse": scenario_pulse}
-
-
-# ---------------------------------------------------------------------------
-# DigitalTwin — Euler integration state machine
-# ---------------------------------------------------------------------------
-class DigitalTwin:
-    """Holds β(t); T(r,z,t) = T_amb + β(t)·ΔT_ref(r,z)."""
-
-    def __init__(self, rom, sigma_correction: bool = True):
-        self.rom = rom
-        self.sigma_correction = sigma_correction
-        self._beta = 0.0
-        self.t = 0.0
-        self.hist_t    = [0.0]
-        self.hist_I    = [0.0]
-        self.hist_Tmax = [rom.T_amb]
-        self.hist_Tmean= [rom.T_amb]
-
-    def step(self, I: float, dt: float) -> None:
-        r = self.rom
-        ratio2 = (I / r.I_ref) ** 2
-        s = r._sigma_scale(self._beta * r.dT_mean_ref) if self.sigma_correction else 1.0
-        self._beta = max(0.0, self._beta + (ratio2 * s - self._beta) / r.tau * dt)
-        self.t += dt
-        T = self.T_field
-        self.hist_t.append(self.t)
-        self.hist_I.append(I)
-        self.hist_Tmax.append(float(T.max()))
-        self.hist_Tmean.append(float(T.mean()))
-
-    @property
-    def T_field(self) -> np.ndarray:
-        return self.rom.T_amb + self._beta * self.rom.dT_ref
-
-    def reset(self) -> None:
-        self._beta = 0.0
-        self.t = 0.0
-        self.hist_t     = [0.0]
-        self.hist_I     = [0.0]
-        self.hist_Tmax  = [self.rom.T_amb]
-        self.hist_Tmean = [self.rom.T_amb]
-
-
-# ---------------------------------------------------------------------------
-# Build ROM for a plate spec from plate_library
-# ---------------------------------------------------------------------------
-def _build_rom_for_plate(cfg_base, spec: dict, em_base=None, verbose=True):
-    """Clone config, override plate, run EM+thermal → ThermalROM."""
-    from config import Geometry
-    from thermal_solver import solve_steady
-    from rom import ThermalROM
-
-    cfg = copy.deepcopy(cfg_base)
-    mat_name = spec["material"]
-    mat = cfg_base.raw["material_props"][mat_name]
-    pm = cfg.raw["plate_material"]
-    pm["name"]         = mat_name
-    pm["radius_mm"]    = float(spec["radius_mm"])
-    pm["thickness_mm"] = float(spec.get("thickness_mm", pm["thickness_mm"]))
-    for k, v in mat.items():
-        pm[k] = float(v)
-    cfg.geometry = Geometry(
-        plate_radius_m    = pm["radius_mm"]    * 1e-3,
-        plate_thickness_m = pm["thickness_mm"] * 1e-3,
-        plate_z_bottom_m  = cfg_base.geometry.plate_z_bottom_m,
-    )
-
-    em = None
-    if em_base is not None:
-        from em_solver import compute_losses
-        if verbose:
-            print(f"  [EM] Solving for {spec['name']}... ", end="", flush=True)
-        em = compute_losses(cfg)
-        if verbose:
-            print(f"P={em['P_plate_W']*1e3:.1f} mW")
-
-    rom = ThermalROM().build(cfg, em_losses=em, verbose=verbose)
-    return rom
+from twin_core import SCENARIOS, TwinState
+from twin_model import PlateCache, coeffs_from_live, i_max_for, resolve_active_plate
 
 
 # ---------------------------------------------------------------------------
@@ -138,47 +51,29 @@ def run_live(
     interval_ms: int = 100,
 ) -> FuncAnimation:
 
-    plate_lib  = cfg.raw.get("plate_library", [])
-    plate_names = [s["name"] for s in plate_lib]
+    plate_lib = cfg.raw.get("plate_library", [])
 
     # Find the plate_library entry that matches the ACTIVE (default) plate by
     # value — radius_mm + material — not by reconstructing a name string and
     # string-matching it (that broke silently when plate_library's naming
     # convention didn't match: see CLAUDE.md H4 / docs/AUDIT_FIX_PLAN_2026-07-04.md).
-    default_radius_mm = cfg.geometry.plate_radius_m * 1e3
-    default_material  = cfg.plate.get("name", "aluminium")
-    default_spec = next(
-        (s for s in plate_lib
-         if abs(s["radius_mm"] - default_radius_mm) < 1e-6
-         and s.get("material", "aluminium") == default_material),
-        None,
-    )
-    if default_spec is not None:
-        default_name = default_spec["name"]
-    else:
-        # No plate_library entry matches the active plate_material config
-        # (radius+material) -- do NOT silently borrow an unrelated entry's
-        # name for it. That was the original H4 bug: the RadioButtons would
-        # show e.g. "Al Ø100mm" as pre-selected/active while the ROM actually
-        # running was for a different radius, and because state["plate_name"]
-        # already equalled that borrowed name, clicking it was a permanent
-        # no-op (see CLAUDE.md H4 / docs/AUDIT_FIX_PLAN_2026-07-04.md).
-        # Synthesize an honest, distinct label instead and add it as its own
-        # selectable entry so the UI can never lie about which plate is active.
-        default_name = (f"Active (Ø{2*default_radius_mm:.0f}mm "
-                         f"{default_material}, not in plate_library)")
-        plate_names = [default_name] + plate_names
-        print(f"[digital_twin] WARNING: active plate (radius_mm={default_radius_mm:.1f}, "
-              f"material={default_material}) has no matching plate_library entry -- "
-              f"showing it as '{default_name}' instead of mislabeling an unrelated entry.")
+    active = resolve_active_plate(cfg)
+    plate_names, default_name = active.plate_names, active.name
 
     # Cache ROM by plate name; pre-populate with default plate
-    _rom_cache: dict[str, object] = {default_name: rom_default}
+    plate_cache = PlateCache(cfg, default_name, rom_default, em_base=em_base)
 
-    # Shared mutable state
+    def _make_twin(rom_obj) -> TwinState:
+        rom_c, lumped_c, lev_c = coeffs_from_live(cfg, em_base, rom_obj)
+        return TwinState(rom=rom_c, lumped=lumped_c, lev=lev_c, T_amb=rom_c.T_amb)
+
+    # Shared mutable state. hist_* mirrors the old DigitalTwin's own history
+    # lists (twin_core.TwinState is a pure integrator -- it deliberately
+    # carries no UI/plotting bookkeeping, see twin_core.py's module docstring)
+    # so they live here instead, alongside every other UI-only concern.
     state = {
         "rom":       rom_default,
-        "twin":      DigitalTwin(rom_default),
+        "twin":      _make_twin(rom_default),
         "I_func":    SCENARIOS[scenario_name](I_init)[0],
         "sc_label":  SCENARIOS[scenario_name](I_init)[1],
         "I_manual":  I_init,
@@ -186,8 +81,18 @@ def run_live(
         "speed":     speed_init,
         "paused":    False,
         "building":  False,
-        "plate_name": list(_rom_cache.keys())[0],
+        "plate_name": default_name,
+        "hist_t":    [0.0],
+        "hist_I":    [0.0],
+        "hist_Tmax": [rom_default.T_amb],
+        "hist_Tmean":[rom_default.T_amb],
     }
+
+    def _reset_history() -> None:
+        state["hist_t"]     = [0.0]
+        state["hist_I"]     = [0.0]
+        state["hist_Tmax"]  = [state["rom"].T_amb]
+        state["hist_Tmean"] = [state["rom"].T_amb]
 
     # -----------------------------------------------------------------------
     # Layout figure
@@ -233,7 +138,7 @@ def run_live(
     # I_MAX covers the rig's real max current (variac dial 270 -> 7.78A measured
     # 2026-07-02, docs/rig_photo.jpg), with a little headroom over the old 5.0A cap.
     ps = cfg.power_supply
-    I_MAX = max(5.0, cfg.dial_to_current_A(ps["dial_max"])) if ps else 5.0
+    I_MAX = i_max_for(cfg)
     sl_I = Slider(ax_slI, "I (A)", 0.0, round(I_MAX + 0.5, 1), valinit=I_init,
                   color="#335588", track_color="#223355")
     sl_I.label.set_color(TEXT_CLR); sl_I.valtext.set_color("#ffcc44")
@@ -302,16 +207,15 @@ def run_live(
         fig.canvas.draw()
         fig.canvas.flush_events()
 
-        if name not in _rom_cache:
-            spec = next((s for s in plate_lib if s["name"] == name), None)
-            if spec is None:
-                state["building"] = False; state["paused"] = False; return
-            new_rom = _build_rom_for_plate(cfg, spec, em_base=em_base, verbose=True)
-            _rom_cache[name] = new_rom
+        try:
+            new_rom = plate_cache.get_or_build(name, plate_lib, verbose=True)
+        except KeyError:
+            state["building"] = False; state["paused"] = False; return
 
-        state["rom"]  = _rom_cache[name]
+        state["rom"]  = new_rom
         state["plate_name"] = name
-        state["twin"] = DigitalTwin(state["rom"])
+        state["twin"] = _make_twin(new_rom)
+        _reset_history()
 
         # Reset mesh and colormap for new plate
         _reinit_heatmap()
@@ -344,6 +248,7 @@ def run_live(
             state["I_func"]   = lambda t: state["I_manual"]
             state["sc_label"] = f"Manual I={I_now:.1f}A"
         state["twin"].reset()
+        _reset_history()
         _update_title()
 
     radio_sc.on_clicked(_on_sc)
@@ -436,18 +341,23 @@ def run_live(
         I_fn = state["I_func"]
         spd  = state["speed"]
 
-        # Integrate several steps
-        n_steps = max(1, int(round(spd)))
-        dt_eff  = dt_sim * spd / n_steps
-        for _ in range(n_steps):
-            I_now = max(0.0, min(float(I_fn(twin.t)), I_MAX))
-            twin.step(I_now, dt_eff)
+        # TwinState.step() applies twin_core's own τ-aware substep rule
+        # internally (nSub=ceil(dt/(τ·0.05)), matching the JS render loop,
+        # build_twin_html_fem.py's loop():~2718) — no manual n_steps/dt_eff
+        # chopping needed here anymore (WP-CORE2, was digital_twin.py's own
+        # speed-aware rule).
+        I_now = max(0.0, min(float(I_fn(twin.t)), I_MAX))
+        twin.step(I_now, dt_sim * spd)
 
-        T_cur   = twin.T_field
-        t_min   = np.array(twin.hist_t)  / 60.0
-        I_hist  = np.array(twin.hist_I)
-        Tmax_h  = np.array(twin.hist_Tmax)
-        Tmean_h = np.array(twin.hist_Tmean)
+        T_cur = twin.T_field
+        state["hist_t"].append(twin.t)
+        state["hist_I"].append(I_now)
+        state["hist_Tmax"].append(float(T_cur.max()))
+        state["hist_Tmean"].append(float(T_cur.mean()))
+        t_min   = np.array(state["hist_t"])  / 60.0
+        I_hist  = np.array(state["hist_I"])
+        Tmax_h  = np.array(state["hist_Tmax"])
+        Tmean_h = np.array(state["hist_Tmean"])
 
         # --- Heatmap ---
         ax_T.cla()
@@ -462,7 +372,7 @@ def run_live(
         ax_T.text(0.04, 0.94, f"T_max = {T_cur.max():.2f} °C",
                   transform=ax_T.transAxes, fontsize=11,
                   color="#ffcc44", fontweight="bold", va="top")
-        ax_T.text(0.04, 0.82, f"t = {twin.t/60:.2f} min\nI = {twin.hist_I[-1]:.2f} A",
+        ax_T.text(0.04, 0.82, f"t = {twin.t/60:.2f} min\nI = {state['hist_I'][-1]:.2f} A",
                   transform=ax_T.transAxes, fontsize=9, color="#88aaff", va="top")
 
         # --- Time axis (sliding window) ---
@@ -473,7 +383,7 @@ def run_live(
         line_Tmax.set_data(t_min, Tmax_h)
         line_Tmean.set_data(t_min, Tmean_h)
 
-        I_cur = twin.hist_I[-1]
+        I_cur = state["hist_I"][-1]
         T_ss_now = rom.T_steady(I_cur).max()
         line_Tss.set_data([x_lo, x_hi], [T_ss_now, T_ss_now])
         hline_Tamb.set_ydata([rom.T_amb, rom.T_amb])
@@ -548,7 +458,7 @@ if __name__ == "__main__":
     print(f"  Scenario : {args.scenario}  (I={args.I}A)")
     print(f"  Speed    : {args.speed}×  (use slider to change)")
     print(f"  [Space]  : pause / resume")
-    print(f"  Plate    : click radio → auto-rebuild ROM (~5-10s with EM)")
+    print(f"  Plate    : click radio → auto-rebuild ROM (~1.3s with EM, measured)")
 
     run_live(
         rom,

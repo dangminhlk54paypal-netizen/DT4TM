@@ -235,8 +235,8 @@ def calibrate_from_file(csv_path: str, cfg=None, rom=None, target: str = "disc",
 # ---------------------------------------------------------------------------
 # Live comparison — measured T vs. ROM-simulated T
 # ---------------------------------------------------------------------------
-def live_compare(sensor_reader: SensorReader, rom, cfg=None, I_const: float | None = None,
-                  t_window_s: float = 600.0):
+def live_compare(sensor_reader: SensorReader, rom, cfg=None, em=None,
+                  I_const: float | None = None, t_window_s: float = 600.0):
     """Live plot: measured T_core/T_disc vs. ROM-simulated T_disc, sample by sample.
 
     Drives the ROM forward by I_const [A] (constant — no current sensor yet) at the
@@ -246,14 +246,19 @@ def live_compare(sensor_reader: SensorReader, rom, cfg=None, I_const: float | No
     """
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
-    from digital_twin import DigitalTwin
+    from twin_core import TwinState
+    from twin_model import coeffs_from_live
 
     if cfg is None:
         from config import load_config
         cfg = load_config()
+    if em is None:
+        from em_solver import compute_losses
+        em = compute_losses(cfg)
     I_const = float(I_const if I_const is not None else cfg.I)
 
-    twin = DigitalTwin(rom)
+    rom_c, lumped_c, lev_c = coeffs_from_live(cfg, em, rom)
+    twin = TwinState(rom=rom_c, lumped=lumped_c, lev=lev_c, T_amb=rom_c.T_amb)
     stream = sensor_reader.read_stream()
     hist = {"t": [], "T_core": [], "T_disc": [], "T_sim": []}
     t_prev = [0.0]
@@ -339,4 +344,4 @@ if __name__ == "__main__":
         print(f"P_plate={em['P_plate_W']*1e3:.1f} mW  P_coil={em['P_coil_W']:.1f}W")
         rom = ThermalROM().build(cfg, em_losses=em, verbose=True)
         with SensorReader(args.port, args.baud) as sr:
-            live_compare(sr, rom, cfg=cfg)
+            live_compare(sr, rom, cfg=cfg, em=em)
