@@ -46,17 +46,24 @@ def _load_google_weather_key() -> str:
 from config import load_config, Geometry
 from em_solver import compute_losses, compute_lift_force
 from rom import ThermalROM
+from scipy.optimize import brentq
 
 
 # ─── WP-C (2026-07-02) lift-force anchors, wired live by WP-D ─────────────────
 # WP-D (2026-07-02) folded this into params.yaml (`levitation:` block) + the
 # PARAMS JSON export via lev_params() below -- the JS levitation-gap block
 # (search "Levitation gap physics") now reads PARAMS.lev instead of hardcoding
-# Z_GAP_5A_MM/Z_DECAY_MM. For the default R=80mm disc, lev_params() uses the
-# params.yaml `levitation.z_gap_5A_mm`/`z_decay_mm` defaults (4.1/13.6mm as of
-# WP-Z0, 2026-07-10 -- was 4.1/21.4mm before, see below); for any OTHER
-# --plate-radius build, it recomputes fresh per-radius anchors from THIS dict
-# (fixing the R=101 "wrong nonzero gap at 5A" bug flagged below).
+# Z_GAP_5A_MM/Z_DECAY_MM.
+# WP-LEV (2026-07-28, docs/BUG_REGISTER_2026-07-28.md L1/L2): EVERY plate
+# radius -- including the default R=80mm -- now goes through `_lev_anchor()`'s
+# root-find below; R=80mm no longer special-cases straight to params.yaml's
+# `levitation.z_gap_5A_mm`/`z_decay_mm` scalars (those are kept only as a
+# reference/reproducibility anchor, see the comment on that params.yaml block).
+# This also fixes the R=101mm "wrong nonzero gap at 5A" bug flagged below, AND
+# the R=65/70/75mm "clamped to exactly 5.000mm" bug that motivated this rewrite
+# in the first place (the OLD `_lev_anchor()` used a 3-point np.interp that
+# silently clamped z_eq whenever the true crossing lay past its z=5mm table
+# ceiling -- true for every radius except R=80).
 #
 # All F_z values computed with em_solver.compute_lift_force() at the physical
 # PEAK current I_peak = 5A_rms*sqrt(2) = 7.0711A (CLAUDE.md "CURRENT CONVENTION"),
@@ -89,6 +96,44 @@ from rom import ThermalROM
 # see the WP-C report for a fine_step_mm convergence check that moved
 # z_eq(R=80) by ~0.7mm and I_min_lev(R=101) by ~0.5A between fine_step=2.0mm
 # and 1.0mm; no real multi-current gap measurement exists yet either).
+def _find_z_eq(F_at, F_grav: float, z_max_mm: float = 40.0,
+                z_step_mm: float = 2.0) -> float:
+    """Bracket + converge the crossing F(z)=F_grav (WP-LEV, bug register L1):
+    coarse-scan z=1..z_max_mm mm in z_step_mm steps looking for the sign change
+    of F(z)-F_grav, then refine with scipy.optimize.brentq. Unlike the old
+    3-point np.interp, this never silently clamps to the table's endpoint when
+    the true crossing lies further out (R=65/70/75's crossings are all past the
+    old table's 5mm ceiling, at 13.6-15.7mm).
+
+    compute_lift_force() has a real (small) mesh-quantization artifact: at
+    R=70mm, F(z) briefly dips a few hundredths of a Newton below F_grav in a
+    ~0.2mm-wide notch near z=14.0mm before recovering and continuing its smooth
+    decline to the true crossing further out -- a naive "stop at the first
+    sign change" bracket locks onto that transient notch instead of the real
+    equilibrium. Guard against it: once a candidate bracket is found, require
+    the sign to STICK for one more coarse step before accepting it as the
+    crossing to refine with brentq."""
+    z = 1.0
+    while z < z_max_mm:
+        z_next = min(z + z_step_mm, z_max_mm)
+        F_next = F_at(z_next)
+        if F_next <= F_grav:
+            z_confirm = min(z_next + z_step_mm, z_max_mm)
+            F_confirm = F_at(z_confirm) if z_confirm > z_next else F_next
+            if F_confirm <= F_grav or z_confirm <= z_next:
+                return float(brentq(lambda zz: F_at(zz) - F_grav, z, z_next, xtol=1e-3))
+            # Transient notch (F dipped below F_grav then recovered) -- keep
+            # scanning forward from the recovered point instead of the notch.
+            z = z_confirm
+            continue
+        z = z_next
+    # No sign change found up to z_max_mm -- shouldn't happen for any radius in
+    # plate_library (true crossings are 11.9-15.7mm), but fall back to the edge
+    # rather than raising, matching the old code's "clamp" failure mode at least
+    # in shape (though this should never actually be hit).
+    return z_max_mm
+
+
 def _lev_anchor(radius_mm: float, plate_thickness_mm: float = 3.0) -> dict:
     """Recompute the lift-force anchors for one plate radius. Re-solves EM from
     scratch at the given radius (NOT scaled from another radius's result) --
@@ -120,9 +165,7 @@ def _lev_anchor(radius_mm: float, plate_thickness_mm: float = 3.0) -> dict:
            "F_at_1mm_N": round(F1, 4), "F_at_3p8mm_N": round(F38, 4),
            "z0_decay_mm": round(z0_mm, 2)}
     if F38 >= F_grav:
-        zs = np.array([1.0, 3.8, 5.0]); Fs = np.array([F1, F38, F5])
-        order = np.argsort(Fs)
-        out["z_eq_5A_mm"] = round(float(np.interp(F_grav, Fs[order], zs[order])), 2)
+        out["z_eq_5A_mm"] = round(_find_z_eq(F_at, F_grav), 2)
         out["levitates_at_5A_rms"] = True
     else:
         out["I_min_lev_A_rms"] = round(5.0 * math.sqrt(F_grav / F38), 2)
@@ -130,51 +173,33 @@ def _lev_anchor(radius_mm: float, plate_thickness_mm: float = 3.0) -> dict:
     return out
 
 
-# LEV_ANCHORS: computed once (see WP-C report / commit message for the printed
-# derivation); NOT auto-recomputed at every build() call (EM solves are ~seconds
-# each and this isn't on the hot path) -- call _lev_anchor(radius_mm) directly
-# if a new plate_library radius needs staging.
-LEV_ANCHORS = {
-    80.0:  {"radius_mm": 80.0,  "mass_kg": 0.16286, "F_grav_N": 1.5977,
-            "F_at_1mm_N": 1.8462, "F_at_3p8mm_N": 1.6877, "z0_decay_mm": 13.63,
-            "z_eq_5A_mm": 4.15, "levitates_at_5A_rms": True},
-    101.0: {"radius_mm": 101.0, "mass_kg": 0.25958, "F_grav_N": 2.5465,
-            "F_at_1mm_N": 1.6591, "F_at_3p8mm_N": 1.5318, "z0_decay_mm": 14.02,
-            "I_min_lev_A_rms": 6.45, "levitates_at_5A_rms": False},
-}
-
-
 def lev_params(cfg) -> dict:
     """WP-D (2026-07-02): bake the levitation spring-mass-damper constants into
     PARAMS.lev instead of JS hardcoding them (params.yaml.levitation).
 
-    For the DEFAULT plate radius (80mm — the only physically-validated disc),
-    uses the params.yaml levitation.z_gap_5A_mm/z_decay_mm values UNCHANGED, so
-    the already-shipped/validated 4.1mm@5A behaviour is bit-for-bit preserved.
-
-    For any OTHER radius (e.g. --plate-radius 101), recomputes fresh anchors via
-    LEV_ANCHORS/_lev_anchor() instead of silently reusing the R=80 numbers — this
-    is the WP-C-flagged bug fix (the R=101 disc doesn't levitate at all at 5A; the
-    old code still showed a nonzero baked gap because it never looked at the
-    radius). When the disc doesn't lift at 5A, z_gap_5A_mm is solved backwards so
-    the SAME exponential formula (z_eq(I) = z_gap_5A_mm + 2*z_decay_mm*ln(I/5))
-    reproduces the correct I_min_lev exactly (see derivation in the WP-D report).
+    WP-LEV (2026-07-28, bug register L1/L2): EVERY plate radius, including the
+    default R=80mm, now goes through the SAME `_lev_anchor()` root-find. R=80
+    used to special-case straight to params.yaml's z_gap_5A_mm/z_decay_mm (a
+    real 10-point F(z) sweep from run_rig_validation()) while every other
+    radius used the OLD 3-point-np.interp `_lev_anchor()`, which silently
+    CLAMPED z_eq to 5.000mm for any disc whose true crossing lay past 5mm (i.e.
+    every radius except R=80) -- the exact opposite of the physics (R=65/70/75
+    all "floated" at the same clamped 5.000mm, hiding that the smallest disc
+    should float highest). Now that `_lev_anchor()` does a real bracketing
+    root-find (z=1..40mm), it reproduces R=80's own params.yaml anchor to
+    within ~0.15mm (11.86 vs 11.7mm -- different sweep resolution, not a
+    method difference), so a single code path is correct for all radii.
     """
     lv = cfg.raw.get("levitation", {})
     radius_mm = float(cfg.plate["radius_mm"])
-    default_radius = 80.0
 
-    if abs(radius_mm - default_radius) < 0.5:
-        z_gap_5A = float(lv.get("z_gap_5A_mm", 4.1))
-        z_decay  = float(lv.get("z_decay_mm", 13.6))
+    anchor = _lev_anchor(radius_mm, cfg.plate["thickness_mm"])
+    z_decay = float(anchor["z0_decay_mm"])
+    if anchor.get("levitates_at_5A_rms"):
+        z_gap_5A = float(anchor["z_eq_5A_mm"])
     else:
-        anchor = LEV_ANCHORS.get(radius_mm) or _lev_anchor(radius_mm, cfg.plate["thickness_mm"])
-        z_decay = float(anchor["z0_decay_mm"])
-        if anchor.get("levitates_at_5A_rms"):
-            z_gap_5A = float(anchor["z_eq_5A_mm"])
-        else:
-            I_min = float(anchor["I_min_lev_A_rms"])
-            z_gap_5A = 2.0 * z_decay * math.log(5.0 / I_min)
+        I_min = float(anchor["I_min_lev_A_rms"])
+        z_gap_5A = 2.0 * z_decay * math.log(5.0 / I_min)
 
     return {
         "z_gap_5A_mm":        round(z_gap_5A, 4),
@@ -190,6 +215,13 @@ def lev_params(cfg) -> dict:
         # to params.yaml's `levitation:` block concurrently -- default matches
         # the old hardcoded behaviour exactly if the key isn't there yet.
         "jit_fade_mm":        float(lv.get("jit_fade_mm", 0.5)),
+        # WP-SHIMMER V2 (2026-07-28): sustained levitating shimmer, DISPLAY ONLY
+        # (see params.yaml's comment on lev_ripple_display_gain). mains_omega_rad_s
+        # is DERIVED from excitation.frequency_Hz (not a separate hand-entered
+        # constant) so LevCoeffs.x_ripple_mm/JS xRippleMm stay correct if the
+        # mains frequency ever changes.
+        "lev_ripple_display_gain": float(lv.get("lev_ripple_display_gain", 0.0)),
+        "mains_omega_rad_s": 2.0 * math.pi * float(cfg.freq),
     }
 
 
@@ -362,9 +394,29 @@ def lumped_physics(cfg, em: dict) -> dict:
         Vc = c["turns"] * (2 * math.pi * r_mean) * A_wire
         return 8960.0 * 385.0 * Vc  # rho_Cu * cp_Cu * V_Cu, full solid-copper mass
 
-    p = cfg.plate
-    V_plate = math.pi * (p["radius_mm"] * mm) ** 2 * (p["thickness_mm"] * mm)
-    C_plate = p["rho_kg_per_m3"] * p["cp_J_per_kgK"] * V_plate
+    # WP-COOL T2 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T2): the iron
+    # lumped-network node's REAL heat capacity, from the iron_core:/
+    # outer_iron_ring: geometry and material_props.iron (params.yaml) -- was
+    # `0.5*C_plate` (half the ALUMINIUM DISC's capacity, unrelated to iron and
+    # 23x too small: 73.3 J/K vs the physical 1676 J/K). Both regions honour
+    # their own `enabled` flag, same as the EM solver.
+    mat_fe = cfg.raw.get("material_props", {}).get("iron", {})
+    rho_Fe = float(mat_fe.get("rho_kg_per_m3", 7870.0))
+    cp_Fe = float(mat_fe.get("cp_J_per_kgK", 450.0))
+
+    def iron_region_volume(region: dict) -> float:
+        if not region.get("enabled", False):
+            return 0.0
+        r_i = float(region.get("r_inner_mm", 0.0)) * mm
+        r_o = float(region["r_outer_mm"]) * mm
+        h = abs(float(region["z_top_mm"]) - float(region["z_bottom_mm"])) * mm
+        return math.pi * (r_o ** 2 - r_i ** 2) * h
+
+    V_iron = (iron_region_volume(cfg.raw.get("iron_core", {})) +
+              iron_region_volume(cfg.raw.get("outer_iron_ring", {})))
+    C_iron = rho_Fe * cp_Fe * V_iron
+    print(f"[LUMPED] C_iron={C_iron:.1f} J/K (V_iron={V_iron*1e6:.1f} cm^3, "
+          f"rho={rho_Fe:.0f} cp={cp_Fe:.0f})")
 
     P_inner = 0.5 * cfg.I ** 2 * coil_R(co["inner"])
     P_outer = 0.5 * cfg.I ** 2 * coil_R(co["outer"])
@@ -399,6 +451,15 @@ def lumped_physics(cfg, em: dict) -> dict:
         "nodes": {
             "inner": {
                 "P_ref":  P_inner,
+                # WP-COOL T1 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T1):
+                # split P_ref across the surface/deep nodes in the SAME ratio
+                # as their heat capacity (coil_C_scale), instead of dumping
+                # 100% of P_ref onto the surface node while the deep node (77.6%
+                # of the copper mass) got none -- that made both heat-up AND
+                # cooldown ~4.5x too fast. Steady state is unchanged (proof in
+                # the bug register): P_surf+P_deep == P_ref still.
+                "P_ref_surf": P_inner * coil_C_scale,
+                "P_ref_deep": P_inner * (1 - coil_C_scale),
                 "C":      coil_C_solid(co["inner"]) * coil_C_scale,       # surface (IR-visible) mass
                 "C_deep": coil_C_solid(co["inner"]) * (1 - coil_C_scale),  # winding-core mass
                 "G_wind": G_wind,   # surface<->winding-core conductance (fit 2026-07-02)
@@ -407,6 +468,8 @@ def lumped_physics(cfg, em: dict) -> dict:
             },
             "outer": {
                 "P_ref":  P_outer,
+                "P_ref_surf": P_outer * coil_C_scale,   # WP-COOL T1, see "inner" above
+                "P_ref_deep": P_outer * (1 - coil_C_scale),
                 "C":      coil_C_solid(co["outer"]) * coil_C_scale,
                 "C_deep": coil_C_solid(co["outer"]) * (1 - coil_C_scale),
                 "G_wind": G_wind,
@@ -415,7 +478,7 @@ def lumped_physics(cfg, em: dict) -> dict:
             },
             "iron": {
                 "P_ref":  P_iron,
-                "C":      0.5 * C_plate,
+                "C":      C_iron,
                 "hA":     hA_iron,
                 "dT_cal": dT_cal["iron"],
                 # contact conduction from the inner coil (fit 2026-07-02, params.yaml)
@@ -628,6 +691,30 @@ def build_disc_mesh(cfg, rom, z_bottom_mm: float, je_field=None):
             Je_disc)
 
 
+# ─── Disc cooldown-vs-heatup τ ratio (WP-COOL T3) ─────────────────────────────
+
+def disc_tau_cool_natural_frac(cfg) -> float:
+    """WP-COOL T3 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T3): the disc's
+    ROM τ was derived from a FEM whose bottom BC is h_bottom_W_per_m2K=25
+    ("enhanced convection facing coils" -- the coil plume). That enhancement
+    fades with the coils' own current, so cooldown is physically slower than
+    heat-up. Returns f_nat = UA_natural-everywhere / UA_as-built(plume-on) =
+    tau_heat/tau_cool -- i.e. the ratio TwinState._rom_step's tau_eff uses to
+    stretch τ as coilAirDrive() (the plume proxy) falls to 0. Computed from
+    the ACTUAL params.yaml BCs + disc geometry (not pasted as a constant) so
+    it stays correct if either changes."""
+    bc = cfg.bc
+    h_top = float(bc["h_convection_W_per_m2K"])
+    h_bot = float(bc["h_bottom_W_per_m2K"])
+    R = cfg.geometry.plate_radius_m
+    t = cfg.geometry.plate_thickness_m
+    A_face = math.pi * R ** 2       # top == bottom face area
+    A_edge = 2.0 * math.pi * R * t
+    UA_heat = h_top * A_face + h_bot * A_face + h_top * A_edge   # as-built (plume on)
+    UA_cool = h_top * A_face + h_top * A_face + h_top * A_edge   # natural everywhere
+    return UA_cool / UA_heat
+
+
 # ─── Disc heat-source decomposition (eddy vs hot-air fraction) ────────────────
 
 def compute_eddy_fraction(cfg, em: dict, rom) -> float:
@@ -730,6 +817,7 @@ def solve_plate_variant(base_cfg, radius_mm: float, z_disc_bot_mm: float) -> dic
         "Tinf_bot_ref": float(cfg_v.bc["T_ambient_degC"]) + k_coil_v * em_v["P_coil_W"],
         "f_eddy":      round(f_eddy_v, 4),
         "f_air":       round(1.0 - f_eddy_v, 4),
+        "tau_cool_natural_frac": round(disc_tau_cool_natural_frac(cfg_v), 4),  # WP-COOL T3
         "B_max_iron":  round(B_max_iron_v, 3),
         "B_sat":       B_sat_v,
         "saturated":   bool(B_max_iron_v > B_sat_v),
@@ -921,6 +1009,7 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
         "Tinf_bot_ref": Tinf_bot,
         "f_eddy":      round(f_eddy, 4),   # disc heat from its own eddy currents
         "f_air":       round(f_air, 4),    # disc heat from the hot coil air (lagged)
+        "tau_cool_natural_frac": round(disc_tau_cool_natural_frac(cfg), 4),  # WP-COOL T3
         "B_max_iron":  round(B_max_iron, 3),
         "B_sat":       B_sat,
         "saturated":   bool(B_max_iron > B_sat),
@@ -937,7 +1026,10 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
               # from params.yaml instead of hardcoding them as JS/HTML literals.
               "coils_inner_turns": int(cfg.coils["inner"]["turns"]),
               "coils_outer_turns": int(cfg.coils["outer"]["turns"]),
-              "plate_hot_display_C": float(cfg.raw["levitating_disc"].get("plate_hot_display_C", 125.0))}
+              "plate_hot_display_C": float(cfg.raw["levitating_disc"].get("plate_hot_display_C", 125.0)),
+              # WP-SHIMMER V1 (2026-07-28): ramp time [s] for the `quickstart`
+              # I(t) scenario, params.yaml transient.quickstart_ramp_s.
+              "quickstart_ramp_s": float(cfg.raw.get("transient", {}).get("quickstart_ramp_s", 8.0))}
 
     # 4c. Disc-radius compare mode (2026-07-03, user request; SSOT-derived count
     # since WP-HTML 2026-07-10 -- see plate_variant_radii_mm()): bake EVERY
@@ -1168,7 +1260,8 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
     <div class="panel-head"><span>Physics Controls</span><span class="chev">▾</span></div>
     <div class="panel-body">
     <div class="sc-group" id="scGroup">
-      <button class="sc-btn active" data-sc="step">Step</button>
+      <button class="sc-btn active" data-sc="quickstart">Quickstart</button>
+      <button class="sc-btn" data-sc="step">Step</button>
       <button class="sc-btn" data-sc="ramp">Ramp</button>
       <button class="sc-btn" data-sc="sine">Sine</button>
       <button class="sc-btn" data-sc="pulse">Pulse</button>
@@ -1220,7 +1313,7 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
       <label><span>Field line opacity</span><span id="vFLO" class="val">70%</span></label>
       <input type="range" id="sFLO" min="0" max="100" step="1" value="70">
     </div>
-    <p class="note">⌨ Space=pause · R=reset · 1-4=scenario · +/−=speed</p>
+    <p class="note">⌨ Space=pause · R=reset · 1-5=scenario · +/−=speed</p>
     </div>
   </div>
 
@@ -1456,14 +1549,21 @@ function coilAirDrive() {
   return Math.max(0.0, num / COIL_DT_SS_REF);
 }
 
-// ── I(t) scenarios (same as digital_twin.py) ─────────────────────────────────
+// ── I(t) scenarios (same as digital_twin.py / twin_core.py SCENARIOS) ────────
+// WP-SHIMMER V1 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V1): `quickstart`
+// is a fast 0->I ramp (PARAMS.quickstart_ramp_s, default 8s) -- same form as
+// `ramp` (60s) but short enough to watch the disc bob on page load instead of
+// snapping straight to its gap the way `step` does. It is the DEFAULT scenario
+// below (was `step`).
+const QUICKSTART_RAMP_S = PARAMS.quickstart_ramp_s || 8.0;
 const SCENARIOS = {
+  quickstart: (I, t) => Math.min(t / QUICKSTART_RAMP_S, 1.0) * I,
   step:  (I, t) => I,
   ramp:  (I, t) => Math.min(t / 60.0, 1.0) * I,
   sine:  (I, t) => Math.max(0, I * 0.6 + I * 0.4 * Math.sin(2 * Math.PI * t / 120)),
   pulse: (I, t) => (t % 120) < 60 ? I : 0.0,
 };
-let curScenario = 'step';
+let curScenario = 'quickstart';
 let targetI = 5.0;   // from slider
 function getI() { return SCENARIOS[curScenario](targetI, sim.t); }
 
@@ -1499,39 +1599,59 @@ function romStep(I, dt) {
   let Qconv = 0.0;
   for (const k in LUMPED.nodes) {
     const nd = LUMPED.nodes[k];
-    let q = nd.P_ref * s2;
-    if (k === 'iron')  q += q_cond;      // gains from the coil contact
-    if (k === 'inner') q -= q_cond;      // energy conservation (≪ P_inner, ~0.6W)
+    // WP-COOL T1 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T1): split
+    // P_ref across surface/deep in the coil's own C-ratio instead of dumping
+    // 100% onto the surface node while the deep node (most of the copper
+    // mass) got none -- that made heat-up AND cooldown ~4.5x too fast.
+    // Undefined P_ref_surf/P_ref_deep (iron, or an older bake) means "no
+    // split" -- all power on the surface, matching the old behaviour exactly.
+    let q_surf = (nd.P_ref_surf !== undefined ? nd.P_ref_surf : nd.P_ref) * s2;
+    let q_deep = (nd.P_ref_deep !== undefined ? nd.P_ref_deep : 0.0) * s2;
+    if (k === 'iron')  q_surf += q_cond;      // gains from the coil contact
+    if (k === 'inner') q_surf -= q_cond;      // energy conservation (≪ P_inner, ~0.6W)
     const dTsurf = sim.T[k] - sim.T.air;
     const hA_use = hAEff(nd.hA, dTsurf, nd.dT_cal);
     const out = hA_use * dTsurf;         // convect into local air
     if (nd.G_wind) {
-      // Two-node coil (WP-B): ALL generation lands on the surface node (same as
-      // before — matches the IR-calibrated ramp-test transient); the deep
-      // winding-core mass only exchanges heat via conduction G_wind, so it is
-      // nearly invisible while heating but keeps feeding the surface long after
-      // the current is cut, giving a realistic slow cooldown tail.
+      // Two-node coil (WP-B): generation now split surf/deep by mass (WP-COOL
+      // T1, was ALL-on-surface); the deep winding-core mass exchanges heat
+      // with the surface via conduction G_wind, so it is nearly invisible
+      // while heating but keeps feeding the surface long after the current is
+      // cut, giving a realistic slow cooldown tail.
       const deepKey = k + '_deep';
       const g = nd.G_wind * (sim.T[deepKey] - sim.T[k]);  // >0 when deep hotter
-      sim.T[k]       += (q + g - out) / nd.C * dt;
-      sim.T[deepKey] += (-g) / nd.C_deep * dt;
+      sim.T[k]       += (q_surf + g - out) / nd.C * dt;
+      sim.T[deepKey] += (q_deep - g) / nd.C_deep * dt;
     } else {
-      sim.T[k] += (q - out) / nd.C * dt;
+      sim.T[k] += (q_surf - out) / nd.C * dt;
     }
     Qconv += out;
   }
   // Local air node: gains all body convection, loses to the far ambient ROM.T_amb.
   sim.T.air += (Qconv - AIR.hA_far * (sim.T.air - T_AMB_JS)) / AIR.C_air * dt;
 
+  // trap 1: coil temperatures are already updated above, so coilAirDrive()
+  // below reads the FRESH sim.T.inner/sim.T.outer from this same step.
+  const airDrive = coilAirDrive();
+  // WP-COOL T3 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T3): the disc's τ
+  // was fit from a FEM with an "enhanced convection facing coils" bottom BC
+  // (the coil plume) -- that enhancement fades with the coils' own drive, so
+  // cooldown is physically slower than heat-up. ROM.tau_cool_natural_frac
+  // undefined (older bake) or 1.0 reproduces the OLD single-tau behaviour
+  // exactly. τ only sets the RATE here, never the β targets below, so steady
+  // state is unaffected -- see the bug register's proof.
+  const fNat = ROM.tau_cool_natural_frac !== undefined ? ROM.tau_cool_natural_frac : 1.0;
+  const tauEff = ROM.tau / (fNat + (1.0 - fNat) * Math.min(1.0, airDrive));
+
   // (2a) eddy part — instantaneous source, fast disc time constant τ
   const tgt_eddy = s2 * s;
   sim.beta_eddy = Math.max(0.0,
-    sim.beta_eddy + (tgt_eddy - sim.beta_eddy) / ROM.tau * dt);
+    sim.beta_eddy + (tgt_eddy - sim.beta_eddy) / tauEff * dt);
   // (2b) hot-air part — target tracks the (inertia-laden) coil temperature.
-  //      coilAirDrive() → s2 at steady state, so β_air_ss = s2·s as before.
-  const tgt_air = coilAirDrive() * s;
+  //      airDrive → s2 at steady state, so β_air_ss = s2·s as before.
+  const tgt_air = airDrive * s;
   sim.beta_air = Math.max(0.0,
-    sim.beta_air + (tgt_air - sim.beta_air) / ROM.tau * dt);
+    sim.beta_air + (tgt_air - sim.beta_air) / tauEff * dt);
 
   sim.beta = ROM.f_eddy * sim.beta_eddy + ROM.f_air * sim.beta_air;
   sim.t += dt;
@@ -1660,7 +1780,8 @@ const Z_OBS_7_75A_MM = null;   // [mm] fill in a real measured gap at 7.75A here
 // matches the CURRENTLY SELECTED plate's own EM/mass anchors instead of freezing
 // at whichever radius happened to be active when the page loaded.
 let LEV, Z_GAP_5A_MM, Z_DECAY_MM, I_LEV_MIN, Z_GAP_EXAG,
-    LEV_OMEGA, LEV_ZETA0, LEV_ZETA1, JIT_MM, JIT_FREQ1, JIT_FREQ2, JIT_FADE_MM;
+    LEV_OMEGA, LEV_ZETA0, LEV_ZETA1, JIT_MM, JIT_FREQ1, JIT_FREQ2, JIT_FADE_MM,
+    LEV_RIPPLE_GAIN, MAINS_OMEGA, X_RIPPLE_MM;
 function applyLevParams(levObj, radiusMm) {
   LEV = levObj;
   Z_GAP_5A_MM = LEV.z_gap_5A_mm;   // [mm] equilibrium gap at I=5A
@@ -1692,6 +1813,18 @@ function applyLevParams(levObj, radiusMm) {
   // `0.5` inlined in levStep()'s fadeIn calc) -- read from PARAMS.lev, falls
   // back to that same 0.5 if the key isn't present yet.
   JIT_FADE_MM = LEV.jit_fade_mm !== undefined ? LEV.jit_fade_mm : 0.5;
+  // WP-SHIMMER V2 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V2): sustained
+  // shimmer while levitating, DISPLAY ONLY -- see the params.yaml comment on
+  // lev_ripple_display_gain and docs/physics.md §11. X_RIPPLE_MM is the real
+  // (but invisible, ~25um) 1-DOF forced-response amplitude to the 100Hz force
+  // ripple, COMPUTED from Z_DECAY_MM + the mains frequency (never pasted) so
+  // it stays correct across plate-radius swaps and if the mains freq changes.
+  LEV_RIPPLE_GAIN = LEV.lev_ripple_display_gain !== undefined ? LEV.lev_ripple_display_gain : 0.0;
+  MAINS_OMEGA = LEV.mains_omega_rad_s !== undefined ? LEV.mains_omega_rad_s : 2 * Math.PI * 50.0;
+  {
+    const Omega = 2 * MAINS_OMEGA;
+    X_RIPPLE_MM = Z_DECAY_MM / Math.abs(1 - (Omega / LEV_OMEGA) ** 2);
+  }
 }
 applyLevParams(PARAMS.lev, PARAMS.plate_variants[PARAMS.active_plate_idx].radius_mm);
 
@@ -1701,7 +1834,8 @@ function levGapEqMm(I) {
 }
 function levZeta(I) { return LEV_ZETA0 + LEV_ZETA1 * (I / 5.0) ** 2; }
 
-const lev = {z: 0.0, v: 0.0, jit: 0.0, jitPhase1: 0.0, jitPhase2: 0.0};   // gap [mm], velocity [mm/s]
+const lev = {z: 0.0, v: 0.0, jit: 0.0, jitPhase1: 0.0, jitPhase2: 0.0,
+             jitLevPhase1: 0.0, jitLevPhase2: 0.0};   // gap [mm], velocity [mm/s]
 function levStep(I, dt) {
   const zt   = levGapEqMm(I);
   const zeta = levZeta(I);
@@ -1724,14 +1858,33 @@ function levStep(I, dt) {
   }
 
   const fadeIn = Math.max(0, 1 - lev.z / JIT_FADE_MM);
+  let jitContact;
   if (I > 0.05 && fadeIn > 0) {
     lev.jitPhase1 += JIT_FREQ1 * dt;
     lev.jitPhase2 += JIT_FREQ2 * dt;
     const amp = Math.min(1.0, JIT_MM * (I / 5.0) ** 2);
-    lev.jit = fadeIn * amp * (Math.sin(lev.jitPhase1) + 0.5 * Math.sin(lev.jitPhase2));
+    jitContact = fadeIn * amp * (Math.sin(lev.jitPhase1) + 0.5 * Math.sin(lev.jitPhase2));
   } else {
-    lev.jit = 0.0;
+    jitContact = 0.0;
   }
+
+  // WP-SHIMMER V2 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V2): sustained
+  // shimmer while actually levitating (z>0) -- jitContact above is gated OFF
+  // above JIT_FADE_MM=0.5mm, so every disc above ~3.2A was previously
+  // perfectly rigid. Honest DISPLAY-ONLY rendering of the real (but
+  // invisible, ~25um/100Hz) vertical ripple force -- see X_RIPPLE_MM above.
+  // Own phase accumulators so it doesn't sync with jitContact's.
+  let jitLev;
+  if (I > 0.05 && lev.z > 0.0) {
+    lev.jitLevPhase1 += JIT_FREQ1 * dt;
+    lev.jitLevPhase2 += JIT_FREQ2 * dt;
+    const ampLev = X_RIPPLE_MM * LEV_RIPPLE_GAIN * (I / 5.0) ** 2;
+    jitLev = ampLev * (Math.sin(lev.jitLevPhase1) + 0.5 * Math.sin(lev.jitLevPhase2));
+  } else {
+    jitLev = 0.0;
+  }
+
+  lev.jit = jitContact + jitLev;
 }
 
 // ── Three.js scene ────────────────────────────────────────────────────────────
@@ -1976,7 +2129,49 @@ window.twinDebug = {camera, controls, size, plateM, coilInnerM, coilOuterM,
   get ROM() { return ROM; }, get activePlateIdx() { return activePlateIdx; },
   selectPlateVariant,   // disc-radius compare mode (2026-07-03): headless hooks
   fieldLineGroup, get fieldLineMats() { return fieldLineMats; },   // per-variant B-field verification
-  get PARAMS() { return PARAMS; }, T_AMB_JS};   // WP-HTML: module-scoped consts aren't on
+  get PARAMS() { return PARAMS; }, T_AMB_JS,
+  // Headless Python<->JS numeric cross-check (WP-DEBUG/WP-XVAL): drives
+  // romStep/levStep directly, bypassing the render loop (so this never
+  // substeps -- loop()'s nSub chopping, :2718, is a separate concern from the
+  // raw integrators pinned here). Reaches romStep/resetSim/paused by closure
+  // only -- they stay module-scoped, not separately exposed on window.
+  traceRom({I, dt, n, every}) {
+    paused = true;
+    resetSim();
+    // resetSim() is thermal-only BY DESIGN (matches the "Reset temperatures"
+    // button, :2476, and the scenario-selector, :2471 -- neither should yank
+    // a currently-levitating disc back down) -- selectPlateVariant() already
+    // has to reset `lev` manually alongside it for the SAME reason (:2158-
+    // 2159). traceRom needs the same explicit reset for reproducible/
+    // deterministic pinning: without it, a trace's z/v/jit silently inherit
+    // whatever the live render loop (or an earlier traceRom call) left
+    // lev.z/lev.v/... sitting at (found by WP-XVAL: two traceRom calls in the
+    // same page gave two different "reset" trajectories).
+    lev.z = 0; lev.v = 0; lev.jit = 0; lev.jitPhase1 = 0; lev.jitPhase2 = 0; lev.jitLevPhase1 = 0; lev.jitLevPhase2 = 0;
+    // I: a single number (constant current for all n steps, the original
+    // WP-DEBUG shape) OR an array of n numbers (one per step, added for
+    // WP-XVAL so ramp/sine/pulse/step-transition schedules can be pinned
+    // too) -- Python drives the identical per-step schedule on its side.
+    const Iat = Array.isArray(I) ? (i => I[i - 1]) : (() => I);
+    const out = {t:[], beta:[], beta_eddy:[], beta_air:[], T_inner:[], T_outer:[],
+      T_iron:[], T_air:[], T_inner_deep:[], T_outer_deep:[], z:[], v:[], jit:[]};
+    const sample = () => {
+      out.t.push(sim.t); out.beta.push(sim.beta);
+      out.beta_eddy.push(sim.beta_eddy); out.beta_air.push(sim.beta_air);
+      out.T_inner.push(sim.T.inner); out.T_outer.push(sim.T.outer);
+      out.T_iron.push(sim.T.iron); out.T_air.push(sim.T.air);
+      out.T_inner_deep.push(sim.T.inner_deep); out.T_outer_deep.push(sim.T.outer_deep);
+      out.z.push(lev.z); out.v.push(lev.v); out.jit.push(lev.jit);
+    };
+    sample();
+    for (let i = 1; i <= n; i++) {
+      const Ii = Iat(i);
+      romStep(Math.max(0, Math.min(Ii, 20.0)), dt);   // matches loop()'s I_now clamp
+      levStep(Ii, dt);                                // matches loop()'s unclamped I_display
+      if (i % every === 0) sample();
+    }
+    return out;
+  }};   // WP-HTML: module-scoped consts aren't on
                                        // window in a module script -- expose for tests
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 const dl = new THREE.DirectionalLight(0xffffff, 0.7);
@@ -2124,7 +2319,7 @@ function selectPlateVariant(idx) {
   buildFieldLines(v.field_lines);
 
   resetSim();
-  lev.z = 0; lev.v = 0; lev.jit = 0; lev.jitPhase1 = 0; lev.jitPhase2 = 0;
+  lev.z = 0; lev.v = 0; lev.jit = 0; lev.jitPhase1 = 0; lev.jitPhase2 = 0; lev.jitLevPhase1 = 0; lev.jitLevPhase2 = 0;
 
   // Reposition the plate label onto the new disc's own centroid (radius changed).
   let sx = 0, sy = 0, sz = 0, n = 0;
@@ -2599,10 +2794,11 @@ addEventListener('keydown', (e) => {
   switch (e.key) {
     case ' ':  e.preventDefault(); setPaused(!paused); break;
     case 'r': case 'R': resetSim(); break;
-    case '1': selectScenario('step');  break;
-    case '2': selectScenario('ramp');  break;
-    case '3': selectScenario('sine');  break;
-    case '4': selectScenario('pulse'); break;
+    case '1': selectScenario('quickstart'); break;
+    case '2': selectScenario('step');  break;
+    case '3': selectScenario('ramp');  break;
+    case '4': selectScenario('sine');  break;
+    case '5': selectScenario('pulse'); break;
     case '+': case '=': adjustSpeed(1);  break;
     case '-': case '_': adjustSpeed(-1); break;
   }

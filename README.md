@@ -31,14 +31,24 @@ python config.py            # print normalized parameters
 python em_solver.py         # AC eddy losses + I² check + benchmark (z_eq≈14.5mm vs 11.3 expected — PAUSED, see CLAUDE.md)
 python thermal_solver.py    # solve heat + energy balance (expect "error=0.000%")
 python rom.py               # real-time ROM demo (I² scaling + transient)
+python twin_core.py         # SSOT time-integrator self-check (6/6 PASS, no config/matplotlib needed)
 python digital_twin.py      # interactive live twin (slider I, plate selector)
 python visualize.py --no-show   # revolve 2D→3D, export outputs/plate.glb
 python sim_plates.py            # compare plates from plate_library
 # build_twin_html.py deleted 2026-07-02 (commit ec64ec1) — superseded by build_twin_html_fem.py below
 python build_twin_html_fem.py            # FEM-accurate bake → outputs/digital_twin_fem.html (R=80mm, default disc)
 python build_twin_html_fem.py --plate-radius 75   # same, but Ø150mm disc → outputs/digital_twin_fem_R75.html
+python xval_twin.py                      # pin twin_core.py against the baked JS engine (Playwright)
+python refit_hA.py                       # WP-COOL T4: refit lumped_thermal.hA_inner/outer through the
+                                          # actual nonlinear TwinState integrator (params.yaml stays SSOT)
 python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
+
+# Optional: PyVista desktop 3D twin (~400MB VTK dependency, see requirements.txt)
+pip install "pyvista>=0.45" "vtk>=9.3,<9.7"
+python digital_twin_pyvista.py --self-check                     # sanity check, no VTK needed
+python digital_twin_pyvista.py --screenshot outputs/twin_pv.png --no-show
+python digital_twin_pyvista.py --speed 50                       # live interactive window
 ```
 
 ## Layout
@@ -50,11 +60,19 @@ config.py           # loads params, converts mm->m, derives P ~ I^2
 thermal_solver.py   # axisymmetric heat FEM (pure numpy/scipy)
 em_solver.py        # AC eddy currents -> real loss map + lift force + benchmark
 rom.py              # real-time ROM: I^2 + first-order transient + σ(T)
-digital_twin.py     # interactive live loop I(t) -> T(r,z,t)
+twin_core.py        # SSOT time integrator (dual-β disc + lumped coil/iron/air + levitation);
+                     # numpy+stdlib ONLY. TwinState — shared by every twin below.
+twin_model.py        # heavy bridge: resolve_active_plate/PlateCache/coeffs_from_live/
+                     # build_plate_variant (config/em_solver/rom/build_twin_html_fem-dependent)
+digital_twin.py     # interactive live loop I(t) -> T(r,z,t) (matplotlib)
+digital_twin_pyvista.py  # interactive live 3D twin (PyVista/VTK, OPTIONAL dependency)
+xval_twin.py        # pins twin_core.py against outputs/digital_twin_fem.html's baked JS (Playwright)
 visualize.py        # revolve 2D->3D, export GLB/OBJ (+ optional PyVista)
 sim_plates.py       # compare thermal response across plate_library
 # (build_twin_html.py deleted 2026-07-02, commit ec64ec1 — superseded by build_twin_html_fem.py below)
 build_twin_html_fem.py  # FEM-based bake  -> outputs/digital_twin_fem.html
+refit_hA.py          # WP-COOL T4: solve lumped_thermal.hA_inner/outer through the actual
+                     # TwinState integrator instead of a hand-derived linear formula
 data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA()
 gen_qr.py           # QR code for the hosted digital_twin_fem.html (URL via CLI arg)
 arduino/thermal_sensor/thermal_sensor.ino  # MAX31855x2 firmware, 1Hz CSV over serial
@@ -75,7 +93,9 @@ outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin
 - [x] **Phase 4** — Revolve 2D→3D, export GLB/OBJ.
 - [x] **Phase 5** — Standalone interactive AR twin (`digital_twin.html`). QR: optional.
 - [x] **Phase 6a** — Domain validation: Dirichlet vs Neumann BC comparison (1×1m box).
-      See `validate_domain_size()` in `em_solver.py` — PASS, diffs <0.06% at ±500mm domain.
+      See `validate_domain_size()` in `em_solver.py` — PASS, all diffs <1% at the ±500mm
+      domain (largest: P_plate 0.767%), re-checked after the 2026-07-10 geometry
+      re-measurement. The "<0.06%" once quoted here was the pre-remeasurement figure.
 - [x] **Phase 6b** — Re-run pipeline with T_amb=20°C, regenerate `digital_twin_fem.html`.
       Done 2026-06-22: full pipeline (config → em_solver → thermal_solver → rom →
       visualize → build_twin_html_fem) re-ran with T_amb=20°C, ±500mm domain; all

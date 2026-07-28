@@ -249,7 +249,7 @@ detail for every entry, unabridged, in roughly chronological order.
       stale "→50°"; now live per-frame coilTss(I). Verified headless: 0 JS errors, no
       label overlap at default+rotated cam, glow 0.43@59°C / 0.87@79°C / ≈0@29°C.
 - [x] PARTIAL FIX — plate/coil temperature ordering bug (2026-07-02, user report:
-      "cảm giác dây phải nóng hơn mặt dưới đĩa"). Root-caused: at I_ref=5A/T_amb=20°C
+      "feeling that the wire should be hotter than the disc bottom"). Root-caused: at I_ref=5A/T_amb=20°C
       (the one point where the coil model IS IR-validated: T_inner_ss=40.3°C), the
       disc FEM predicted T_mean=46.9°C — ABOVE the coil, backwards vs every IR
       session (coils are always the hottest part of the rig by a wide margin).
@@ -411,8 +411,8 @@ detail for every entry, unabridged, in roughly chronological order.
       `digital_twin_fem_R101.html`: 0 JS console errors, coil glow still runs
       correctly through the relocated `T_COIL_HOT`.
       **Consolidated ALL open questions from every WP into one place**: see
-      docs/PLAN_SIM_FEEDBACK_2026-07-02.md, final section "Câu hỏi cần user trả
-      lời" (8 items — gap@7.75A calibration, a genuine numeric conflict inside
+      docs/PLAN_SIM_FEEDBACK_2026-07-02.md, final section "Questions for the user to answer"
+      (8 items — gap@7.75A calibration, a genuine numeric conflict inside
       WP-A's own spec between the ζ∝I² law and its 40% overshoot acceptance
       target, coil cooldown data, TWO disagreeing z0 decay-length derivations
       for the SAME R=80 disc (21.4mm vs 13.6mm — an open methodology question,
@@ -484,9 +484,9 @@ detail for every entry, unabridged, in roughly chronological order.
       → digital_twin.py live; HTML twin via Web Serial API. Add to
       docs/SENSOR_PLAN.md shopping list. (Knob-position encoder rejected:
       indirect, mapping drifts with load.)
-- [x] DISC-RADIUS COMPARE MODE (2026-07-03, user request: "chuyển các đĩa với bán
-      kính khác nhau lên mô hình trong quá trình mô phỏng để nhìn rõ trạng thái
-      biến đổi nhiệt"). Both `digital_twin_fem.html` and `digital_twin_fem_R101.html`
+- [x] DISC-RADIUS COMPARE MODE (2026-07-03, user request: "swap discs with different radii
+      onto the model during simulation to see the thermal response evolution clearly").
+      Both `digital_twin_fem.html` and `digital_twin_fem_R101.html`
       now let the user swap the LIVE disc between 4 aluminium radii (Ø100/130/
       160/202mm = r 50/65/80/101mm, the plate_library entries the user picked)
       without rebuilding — a new "Disc radius (compare mode)" button row above
@@ -736,8 +736,8 @@ not a quick substitution). Updated CLAUDE.md ("Device numbers", "First quantitat
 result", "Real-rig validation", "Code status", NEXT list) and
 `docs/QUICK_START_FOR_AGENTS.md` (added a "GROUND TRUTH v2" geometry table,
 superseding but not deleting the old "session 3" v1 table, and closed out its
-"Note conflict (chưa giải quyết)" callout — it had predicted almost exactly this
-outcome: "Nếu xác nhận ferromagnetic → set mu_r=100-1000 và RE-RUN EM"). Rebuilt
+"Note conflict (not yet resolved)" callout — it had predicted almost exactly this
+outcome: "If confirmed ferromagnetic → set mu_r=100-1000 and RE-RUN EM"). Rebuilt
 `outputs/digital_twin_fem.html` (1002 KB, placeholder API key verified, no
 `AIzaSy...` pattern present) — not yet Playwright-verified in this session (the
 underlying physics is mid-open-question, so a full visual QA pass was deferred
@@ -748,7 +748,7 @@ rather than rubber-stamping a demo that currently shows an unvalidated ~15mm gap
 ## 2026-07-11 — WP-PEAK follow-up: `run_benchmark_validation()` missed the RMS/peak fix
 
 Codebase audit (Explore-agent scan for undocumented bugs, prompted by user
-asking "còn lỗi tiềm ẩn nào cần giải quyết không") found that `em_solver.py`'s
+asking "are there any hidden bugs that need fixing") found that `em_solver.py`'s
 `run_benchmark_validation()` (line 549) still called `compute_lift_force(cfg)`
 with no `I_amplitude` argument — falling back to `cfg.I` (RMS-measured value)
 as the phasor amplitude, instead of the true amplitude `cfg.I_peak = cfg.I *
@@ -932,3 +932,337 @@ geometry into `docs/REPORT_WHY_CUSTOM_CODE_DE.md`/EN counterpart; CLAUDE.md
 has drifted back over its own ~200-line budget (304 lines) since the last
 WP-TRIM — flagged for the user, not trimmed unilaterally (WP-TRIM requires
 explicit user approval per `docs/AUDIT_FIX_PLAN_2026-07-04.md`).
+
+## 2026-07-28 — SSOT integrator port + PyVista desktop 3D twin (WP-HOOK → WP-DOC)
+
+Full plan: `docs/PYVISTA_TWIN_PLAN_2026-07-28.md`. Root problem this session
+set out to fix: the physics was split in two. `build_twin_html_fem.py`
+computed per-plate *coefficients* in Python (`lumped_physics`/`lev_params`)
+but its 3 time *integrators* (dual-β disc, lumped coil/iron/air RC,
+levitation spring-mass-damper) existed ONLY inside the baked JS — writing a
+third (PyVista) twin the naive way would have meant a third, independently-
+drifting copy of the same physics, the exact bug shape as the WP-PEAK missed
+call site (CLAUDE.md). User chose the disciplined route: pin Python↔JS
+FIRST, then build 3D on top of a single shared integrator.
+
+**WP-HOOK** — added exactly one debug hook, `window.twinDebug.traceRom()`,
+to the JS template (`build_twin_html_fem.py`). Drives `romStep`/`levStep`
+directly per-step, bypassing the render loop entirely (no physics/DOM/
+render change). `resetSim()` doesn't reset `lev`/`paused` — a deliberate,
+pre-existing design (matches every other call site) — so `traceRom` calls
+both explicitly for a reproducible trace. Verified via Playwright: 0 console
+errors, screenshot pixel-identical before/after (one visible digit diff
+traced to pre-existing wall-clock jitter, confirmed by re-loading the same
+build 3 times and seeing it vary run-to-run regardless of the HOOK change).
+
+**WP-CORE** — new `twin_core.py` (the integrator SSOT: `RomCoeffs`/
+`LumpedCoeffs`/`LevCoeffs`/`TwinState`, **numpy+stdlib only**, checked by its
+own self-test) ports `romStep`/`levStep` line-for-line, preserving all 9
+JS-port traps identified in the plan doc (coil-before-β ordering, σ-scale
+using the previous step's TOTAL β not β_eddy, `q_cond` from stale T, air
+node updated after the node loop, `hAEff`'s 0.1K floor, β clamped inside
+each substep, `levStep` never substepped, the asymmetric current clamp
+between `romStep`/`levStep`, `levStep` seeing I at t_{n+1}). New
+`twin_model.py` holds the heavy bridge (`resolve_active_plate`/`PlateCache`/
+`i_max_for`/`coeffs_from_live`/`build_plate_variant`) — `lumped_physics`/
+`lev_params` stayed put in `build_twin_html_fem.py` as instructed (that file
+gets Playwright-reverified after every change; touching it is extra risk
+for zero benefit here). 6/6 self-checks passed, but two needed real
+debugging, not just writing code: (1) a synthetic coil/air network with
+`hA_far` too small relative to total thermal mass had a genuine ~2000s
+dominant time constant — looked like non-convergence, was actually just
+under-integrated (fixed by running a longer horizon, not by "loosening a
+tolerance"); (2) `coilTss_inner()`/`coilAirDrive()`'s JS steady-state
+formulas turned out to be intentional *approximations* (they normalize by
+the naive `P_ref/hA`, not the true iron-coupled `dT_cal`) — exact only when
+`G_cond=0` or `I=I_ref`, a real property of the JS UI code discovered by
+trying to pin against it exactly, not a porting bug.
+
+**WP-XVAL** — new `xval_twin.py` pins `twin_core.py` against the actual
+baked JS via Playwright, two INDEPENDENT assertions with different failure
+messages: (A) raw integrator match, 7 schedules (step/step-to-0-from-hot/
+ramp/pulse-crossing-I_LEV_MIN/sine/dt=25s/20A-clamp), abs tol 1e-9 — every
+quantity landed at 0 or ULP noise (≤2.2e-14); (B) bake freshness, rel tol
+1e-6, baked `PARAMS` vs a fresh `lumped_physics`/`ThermalROM().build()` —
+this is the exact d4f73d6/WP-5 bug class, and assertion A structurally
+cannot catch it (it only checks JS-vs-Python self-consistency, not either
+side against current `params.yaml`). Network blocked except a disk-cached
+`unpkg.com` (`outputs/.jscache/`, gitignored, fetched once). Along the way,
+building the test schedules surfaced two real `traceRom` bugs from WP-HOOK,
+fixed in place: `I` was scalar-only (couldn't express a time-varying
+schedule at all — extended additively to also accept a per-step array,
+scalar callers unaffected), and `lev.z/v` weren't reset (same root cause as
+the `coilTss`/`coilAirDrive` finding above — traced to a real, deliberate
+`resetSim()` design point, not a regression). Proved the pinning test isn't
+vacuous per this repo's WP-PEAK-burned policy: temporarily swapped the
+coil-integration block to run AFTER the β update (breaking trap 1), rebuilt,
+reran — assertion A correctly went red (β diffs up to 5e-2), then reverted.
+
+**WP-CORE2** — deleted the second β model. `digital_twin.py`'s own
+`DigitalTwin`/`SCENARIOS`/`_build_rom_for_plate` removed; now imports from
+`twin_core`/`twin_model`. Its speed-aware substep loop (`n_steps`/`dt_eff`)
+is gone — `TwinState.step()`'s own τ-aware rule (shared with the JS render
+loop) runs internally; UI-only history tracking (`hist_t`/`hist_Tmax`/...)
+moved into `run_live()`'s own `state` dict since `TwinState` is a pure
+integrator with no plotting bookkeeping by design. `data_io.py:249`
+(`live_compare()`) — the exact WP-PEAK-shaped call site this repo has
+learned to grep for — switched to `twin_core.TwinState` +
+`twin_model.coeffs_from_live()`; `em=None` fallback added for
+`digital_twin.py --no-em`'s fast-startup path (skips `compute_eddy_fraction`,
+falls back to the single-β model). `grep -rn "class DigitalTwin" *.py` → 0
+results (the plan doc's own verification line expected 1, in `twin_core.py`
+— but that class is named `TwinState` there, established and xval-pinned in
+WP-CORE, not renamed to match a stale plan-doc guess). GUI verification
+gap, disclosed rather than glossed over: `python digital_twin.py --no-em
+--speed 50` launches cleanly and stays alive consuming CPU, but this
+sandbox can't screen-capture (`screencapture` → "could not create image
+from display") to confirm T-rising/plate-rebuild visually — verified
+instead by headlessly driving the exact same building blocks `run_live()`
+wires together (T rose 20→52°C under load, plate switch rebuilt a
+genuinely different ROM, reselecting reused the cache).
+
+**WP-GEO → WP-PLATE** — new `digital_twin_pyvista.py`, a third live twin
+(PyVista/VTK desktop 3D), parallel to (not replacing) `digital_twin.py` and
+the HTML build. `pip install "pyvista>=0.45" "vtk>=9.3,<9.7"` took ~25 min
+in this sandbox — a genuinely slow connection (~30-75 KB/s, confirmed via
+`lsof`/`nettop` mid-download, not a stuck resolver as first suspected: an
+early "no cache growth in 10 minutes" reading led to killing the process,
+which turned out to be actively downloading a 107MB VTK wheel at ~35MB in;
+the retry had to redownload that wheel from scratch). Geometry reuses
+`build_twin_html_fem.py`'s procedural builders verbatim
+(`build_octagonal_base/frame`, `build_solid_core`, `revolve_ring`,
+`build_disc_mesh`, `compute_em_field_lines`, `compute_eddy_field` — no
+second geometry implementation); Z-up mm, no Y-up rotation (that's
+three.js-only); disc mesh built via `pv.PolyData.from_regular_faces` on the
+RAW triangle soup, never `.clean()`-ed (would
+silently desync the per-vertex `dT_eddy`/`Je` arrays from the point order).
+B-field lines are one hand-built `PolyData` with an explicit `lines` cell
+array (21 contours × 4 azimuths = 84 polylines) — `pv.MultipleLines`/
+`lines_from_points` would wrongly stitch contour k's last point to contour
+k+1's first. Disc-radius rebuild runs on a worker thread
+(`PlateRebuildWorker`) with `matplotlib.use("Agg")` forced once on the main
+thread at import time (`compute_em_field_lines` calls it as a side effect;
+`matplotlib.use()` isn't thread-safe) so the live sim keeps ticking on the
+old mesh during a rebuild instead of blocking, unlike `digital_twin.py`'s
+pause-and-block approach. `--self-check` runs with no VTK installed
+(import-guarded like `visualize.py`'s `plot_pyvista()`). Verified: self-check
+PASS (960/960/960/960/96 tris, 21 field lines, 84 polylines once VTK was
+in — all matching the HTML build's own numbers exactly);
+`--screenshot outputs/twin_pv.png --no-show` renders correctly (checked
+visually: octagonal wood frame + floating disc, correct blue→red colour
+range); a disc-hidden top-down render matches `docs/real_model.png`'s
+concentric ring structure ring-for-ring (wood → dark outer coil → grey iron
+ring → dark inner coil → grey core). Real interactive-window behaviour
+couldn't be watched directly (no capturable display in this sandbox), so
+every callback (`step`, space/reset key handlers, thermal/eddy/field mode
+toggle, the worker-thread plate rebuild) was instead driven headlessly and
+checked for the right physics: disc lifted by EXACTLY `z_gap_eq(5A) ×
+z_gap_exaggeration` = 11.7×2 = 23.4mm, T_max rose and saturated on the
+expected RC curve, mode toggle switched active scalars/field-line
+visibility correctly, plate rebuild swapped the actor and produced τ=229.8s/
+I_LEV_MIN=4.011A for the Ø130mm variant — identical to the standalone
+`PlateCache` test from the WP-CORE session. A found-and-fixed bug along the
+way: an early draft's `_repaint_disc()` had a tautological ternary
+(`"dTe" if mode != "eddy" else "dTe"`, always `"dTe"` regardless of mode) —
+caught by re-reading the diff before trusting it, not by a test (the eddy
+branch didn't use the value anyway, so nothing would have visibly broken;
+still wrong code, fixed).
+
+**WP-DOC** — this entry; CLAUDE.md/`docs/ARCHITECTURE.md`/`README.md`
+updated with `twin_core.py`/`twin_model.py`/`xval_twin.py`/
+`digital_twin_pyvista.py`, `requirements.txt` got an optional, clearly-
+commented pyvista/vtk block. Also fixed a drift CLAUDE.md's WP-Z0 bullet had
+accumulated: it still named `z_gap_5A_mm=4.1`/`z_decay_mm=13.6` as current,
+but `params.yaml` was superseded same-day (2026-07-10) by the coil-radii
+remeasurement to `11.7`/`11.79` — `params.yaml` is the SSOT, so the bullet
+got an appended correction rather than a silent rewrite (preserves why the
+13.6 number existed at all). CLAUDE.md is now well past its own ~200-line
+target (over 350 lines) — flagged again, not trimmed unilaterally, same
+policy as the 2026-07-11 entry above.
+
+---
+
+## WP-LEV / WP-COOL / WP-SHIMMER (2026-07-28) — three user-reported HTML-twin
+defects, root-caused and fixed same session in `docs/BUG_REGISTER_2026-07-28.md`,
+work order in `docs/PROMPT_WP_COOL_LEV_2026-07-28.md`. All three land in BOTH
+`twin_core.py` (SSOT integrator) and the baked JS in `build_twin_html_fem.py`,
+pinned by `python xval_twin.py` (assertion A: integrator match, all-zero diffs
+this session, i.e. bit-exact; assertion B: bake freshness, 0 relative diff) —
+**PASS**.
+
+**WP-LEV** (bug register L1/L2) — the Ø160mm (R=80) disc floated HIGHEST of
+the four plate-library discs; physics says it should float LOWEST (mass grows
+∝R² while lift saturates). Root cause: `_lev_anchor()`'s `z_eq` solve was a
+3-point `np.interp` over z=[1, 3.8, 5]mm, which `numpy` CLAMPS outside its
+range — every disc whose true crossing lay past 5mm (R=65/70/75, true
+crossings 13.6-15.7mm) silently got `z_eq=5.000` exactly; R=80 only looked
+different because `lev_params()` special-cased it straight to `params.yaml`'s
+own independently-swept anchor, splitting the SSOT in two. Fix: `_lev_anchor()`
+now does a real bracketing root-find (coarse scan z=1→40mm in 2mm steps to
+find the sign change of F(z)−F_grav, then `scipy.optimize.brentq` to
+converge), and `lev_params()`'s R=80 special case is deleted — every radius,
+default included, goes through the same code path now. One wrinkle found
+along the way: `compute_lift_force()` has a real (small) mesh-quantization
+artifact at R=70mm — F(z) dips a few hundredths of a Newton below F_grav in a
+~0.2mm-wide notch near z=14.0mm before recovering and continuing its smooth
+decline to the true crossing further out. A naive "stop at the first sign
+change" bracket locks onto that transient notch; `_find_z_eq()` now requires
+the sign to persist for one more coarse step before accepting a bracket to
+refine. `LEV_ANCHORS` (the stale hardcoded R=80/R=101 cache, both from the
+pre-2026-07-10 geometry) is deleted outright — every anchor is live-computed.
+
+Rebaked `PARAMS.plate_variants[*].lev.z_gap_5A_mm`: **65→15.99mm,
+70→14.03mm, 75→13.97mm, 80→11.94mm** — strictly decreasing, no value clamped
+to 5.000, R=80 reproduces `params.yaml`'s independently-derived 11.7mm to
+within 0.24mm (different sweep resolution, not a method difference). R=70's
+14.03mm sits further from the bug register's own reconnaissance estimate
+(14.95mm, from a coarser 10-point sweep) than the other three radii — a
+residual of the same mesh-quantization artifact the notch-persistence guard
+only partially compensates for (the true smooth crossing and the artifact's
+own zero-crossing are close together for this one radius). Not treated as a
+blocker: the qualitative fix (no clamping, correct monotone ordering) is what
+mattered, and z_eq/z0 were already documented "order-of-magnitude,
+mesh-sensitive" before this session.
+
+**WP-COOL** (bug register T1-T5) — coils AND disc cooled 4-9× too fast
+against the current dropping (shipped: inner coil lost half its rise in
+**102s**; real rig takes many minutes). Four structural defects, all fixed
+without touching `coil_C_scale`/`coil_G_wind` (their physically-derived
+values were correct all along — see the trade-off note below):
+
+- **T1** — the coil surface node received 100% of `P_ref` but only
+  `coil_C_scale`=22.4% of the copper mass (the deep winding-core node, 77.6%
+  of the mass, had no source term at all) → 4.46× too fast both directions.
+  Fix: `lumped_physics()` now emits `P_ref_surf`/`P_ref_deep` (split in the
+  same ratio as `C`/`C_deep`) on the inner/outer nodes; `_rom_step()`/
+  `romStep()` apply them separately. Steady state is provably unchanged
+  (surface+deep power sums back to the original `P_ref`) — verified.
+  `NodeCoeffs`/JS tolerate the keys being absent (old bake) by falling back
+  to 100%-on-surface, i.e. today's shipped behaviour exactly.
+- **T2** — the iron/core lumped node's heat capacity was coded as
+  `0.5*C_plate` = 73.3 J/K — half the *aluminium disc's* capacity, unrelated
+  to iron and 23× too small. Fix: real `C_iron = rho_Fe*cp_Fe*(V_core+V_ring)`
+  computed from `iron_core:`/`outer_iron_ring:` geometry + a new
+  `material_props.iron` block (`rho_kg_per_m3=7870`, `cp_J_per_kgK=450`,
+  mild-steel-like, matching the existing `mu_r=1000` placeholder) — **1676.3
+  J/K**, matching the bug register's hand-derivation exactly. Both regions
+  honour their own `enabled` flag. Sanity-printed in the build log
+  (`[LUMPED] C_iron=1676.3 J/K ...`).
+- **T3** — the disc ROM used ONE τ for both heat-up and cooldown, but
+  `rom.UA` came from a FEM with `h_bottom_W_per_m2K=25` ("enhanced convection
+  facing coils" — the coil plume), which dies when the current does. Fix:
+  new `disc_tau_cool_natural_frac(cfg)` derives
+  `f_nat = UA_natural-everywhere / UA_as-built(plume-on)` from the ACTUAL
+  `thermal_bc` h-values + disc geometry (never pasted) — **0.5804** at the
+  default R=80mm/3mm disc, matching the bug register's 0.58 hand-calc.
+  `TwinState._rom_step()`/`romStep()` now compute
+  `tau_eff = rom.tau / (f_nat + (1-f_nat)*min(1, coilAirDrive()))` and use it
+  for BOTH β-target updates (β only sets the RATE, never the steady target,
+  so steady state is unaffected). `tau_cool_natural_frac` defaults to 1.0
+  (old bake) → `tau_eff == rom.tau` always, i.e. today's shipped behaviour.
+- **T4** — `hA_inner`/`hA_outer` were solved from the LINEAR steady-state
+  balance (`T = T_amb + P/hA + AIR_DT_SS`), but the deployed integrator
+  applies the NONLINEAR `hAEff = hA_cal·(ΔT/ΔT_cal)^convection_exponent`
+  correction on top — since `dT_cal` anchors at `I_ref=5A`, the correction
+  pushes `hA_eff` above `hA_cal` at the 7.8A calibration point, so the
+  shipped model settled at inner=72.15/outer=67.78°C instead of the
+  validated 79.00/74.00°C (same bug CLASS as B1, 2026-07-11 — a fitting
+  formula drifting from the code that actually runs). Fixed via a new
+  **committed script**, `refit_hA.py` (not a one-off — the last two hA
+  refits both shipped wrong because the fitting formula and the running code
+  diverged): it drives the ACTUAL `twin_core.TwinState` integrator (with T1+T2
+  already applied) to steady state at 7.8A/29°C and root-finds
+  `(hA_inner, hA_outer)` on the residual `(T_inner−79, T_outer−74)` via
+  `scipy.optimize.fsolve`. Converged to **hA_inner=2.4744, hA_outer=2.8885**
+  (from 2.9493/3.4509) — reproduces `T_inner=79.000°C`/`T_outer=74.000°C`
+  EXACTLY through the nonlinear model. `python refit_hA.py` to re-run.
+- **T5** — `air_node_C_J_per_K`/`air_node_hA_far_W_per_K` left UNCHANGED
+  (both still self-labelled "illustrative"); comments rewritten to state
+  explicitly that they are unidentified fudge factors capping the whole
+  rig's thermal memory, blocked on a real cooldown log.
+
+Verification (heat to 5A steady state at T_amb=20°C using the FULLY fixed
+model — T1+T2+T3+T4 all applied together, real `f_eddy`/`f_air` split from
+`compute_eddy_fraction()`, not the single-β default — then I→0):
+
+| | BEFORE (shipped) | AFTER (this session) |
+|---|---|---|
+| coil t50 | 102 s | **945 s** (9.3×) |
+| coil t90 | 2032 s | **3987 s** |
+| disc t50 | 194 s | **215 s** |
+| disc t90 | 712 s | **1160 s** |
+| steady state @7.8A/29°C | inner=72.15/outer=67.78°C | **inner=79.00/outer=74.00°C** |
+
+Coil t50=945s sits ~5% above the 400-900s band estimated during triage
+(that estimate predates T4's hA refit, which raises the coils' steady-state
+ΔT and shifts the nonlinear-convection operating point during cooldown —
+expected drift, not a miss) but is squarely in the qualitative "many
+minutes, 4-9×" behaviour the user reported (9.3× measured). Disc t90=1160s
+clears the ≥1000s target.
+
+⚠️ **Trade-off, accepted (not hidden):** `thermal_ramp_test` RMS moved from
+**2.53°C → 12.43°C** (7 residuals: 5 outer-coil ramp points + inner/outer
+@450s). This is the expected, already-decided consequence of T1+T2 — the
+2026-07-02 fit bought its 2.53°C by shrinking the copper thermal mass 4.5×
+below physical. Per the bug register's trade-off analysis: the ramp data is
+internally inconsistent (its t=300s point already exceeds the model's own 5A
+asymptote) and cannot be reconciled with Session 1's 74°C steady-state
+reading under ANY constants for this network structure — Session 1 and the
+ramp are mutually incompatible, and Session 1 (a real steady-state IR
+reading) is the stronger constraint. **Do not re-shrink `coil_C_scale` to
+chase the 2.53°C** — logging a real cooldown curve + a properly timestamped
+heat-up ramp is now the single highest-value measurement for this project
+(promoted to the top of CLAUDE.md's NEXT list).
+
+**WP-SHIMMER** (bug register V1/V2) — no fast start-up ramp, and the disc
+never visibly moved at any operating current (only a ~1.7s ring-down after a
+slider move).
+
+- **V1** — new `quickstart` scenario (`min(t/t_rampup, 1)·I`,
+  `t_rampup` = new `transient.quickstart_ramp_s` = 8.0s, user asked 5-10s),
+  added to both `SCENARIOS` dicts (`twin_core.py`, imported by
+  `digital_twin.py`/pyvista twin for free; JS `SCENARIOS` in
+  `build_twin_html_fem.py`). Now the DEFAULT scenario on HTML load
+  (`curScenario = 'quickstart'`, was `'step'`) — its own button is first in
+  the scenario row, keyboard hint updated `1-4=scenario` → `1-5=scenario`
+  (1=quickstart, 2=step, 3=ramp, 4=sine, 5=pulse). `digital_twin.py`'s own
+  `--scenario` default is untouched (still `step` — only the HTML twin's
+  on-load behaviour was in scope).
+- **V2** — `jit_fade_mm=0.5mm` gated ALL disc jitter to the sub-liftoff
+  regime, so above ≈3.2A (gap≥3mm) the disc was perfectly rigid. The real
+  100Hz force ripple (`F ∝ i²` → 100% modulated at Ω=2ω) only moves the disc
+  ~0.025mm at the default constants (1-DOF transfer function
+  `|X/X_static|=1/|1-(Ω/ω_n)²|`, X_static=z_decay_mm) — invisible; the real
+  rig's visible wobble is the lateral/tilt mode, not this vertical one (see
+  `docs/physics.md` §11). New `jit_lev` term, kept explicitly SEPARATE from
+  the existing `jit_contact` (unchanged): active whenever `z>0` (levitating),
+  amplitude = `x_ripple_mm · lev_ripple_display_gain · (I/5)²` — the physical
+  ripple number is COMPUTED (`LevCoeffs.x_ripple_mm`/JS `X_RIPPLE_MM`, from
+  `z_decay_mm` + the mains frequency, never pasted; verified 0.0249mm at
+  R=80mm/50Hz, matching the physics doc's derivation exactly), then scaled by
+  a new, separately-named `levitation.lev_ripple_display_gain=40.0`
+  (`# DISPLAY ONLY`, same precedent as `z_gap_exaggeration`) to ~1mm on
+  screen. Own phase accumulators (`jitLevPhase1/2`) so it doesn't sync with
+  `jit_contact`'s. Verified via `twin_core.TwinState`: displayed position
+  (`z+jit`) range at I=3.5/5.0/7.5A is 1.46/2.97/6.69mm (scales ∝I² as
+  designed: ratios 1 / 2.03 / 4.58 vs the exact (5/3.5)²/(7.5/3.5)²=2.04/4.59)
+  while `mean(z+jit)` stays within 0.001mm of `z_gap_eq(I)` at every current
+  — the shimmer rides on top, never biases the mean gap.
+
+**Verification run (all commands, output confirmed):** `python twin_core.py`
+6/6 PASS; `python config.py` clean; `python em_solver.py` I²-check
+3.998≈4.000, domain-size validation PASS (<1% at all quantities);
+`python thermal_solver.py` energy balance error=0.000%; `python rom.py` I²
+scaling exact (4.000000); `python digital_twin_pyvista.py --self-check`
+PASS; `python build_twin_html_fem.py` rebuilt cleanly (placeholder API key);
+`python xval_twin.py` **PASS** (assertion A all-zero diffs across all 7
+integrator schedules + the dt=25s substep check; assertion B 0 relative diff
+on both `lumped` and `rom.tau`).
+
+New `params.yaml` keys: `material_props.iron.{rho_kg_per_m3,cp_J_per_kgK}`
+(T2), `transient.quickstart_ramp_s` (V1), `levitation.lev_ripple_display_gain`
+(V2, `# DISPLAY ONLY`). Changed: `lumped_thermal.hA_inner_W_per_K`
+2.9493→2.4744, `hA_outer_W_per_K` 3.4509→2.8885 (T4). New committed script:
+`refit_hA.py`. `levitation.z_gap_5A_mm`/`z_decay_mm` (params.yaml) are now
+documented as reference-only (every radius, R=80 included, computes its own
+live anchor via `_lev_anchor()`) — values themselves unchanged.

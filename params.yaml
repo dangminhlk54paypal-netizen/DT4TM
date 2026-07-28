@@ -146,7 +146,7 @@ iron_core:
 # Physical position RE-MEASURED 2026-07-10: r = 64.9..79.9mm (15mm wide, was
 # 81..101mm/20mm wide), same height as coils (53mm). Sits in the 21mm gap between
 # the (also re-measured) inner coil outer edge (61.9mm) and outer coil inner edge
-# (82.9mm). Called "một lớp sắt"/"lõi sắt thứ 2" (iron layer / 2nd iron core) by
+# (82.9mm). Called "an iron layer" / "2nd iron core" by
 # user -- material CONFIRMED IRON 2026-07-10 (magnet-attracted, same test as the
 # center core above), superseding the previous "PENDING colleague confirmation"
 # status. mu_r=1000/sigma=1e6 mild-steel-like placeholder (see iron_core comment;
@@ -268,12 +268,19 @@ plate_library_annulus_TODO:
 
 # --- Levitation gap spring-mass-damper (WP-A/WP-D, docs/PLAN_SIM_FEEDBACK_2026-07-02.md) ---
 # JS reads these via PARAMS.lev (build_twin_html_fem.py lev_params()/romStep)
-# instead of hardcoding them. z_gap_5A_mm/z_decay_mm below are the DEFAULT
-# R=80mm (the physically-validated disc) anchors ONLY -- any OTHER plate radius
-# (e.g. --plate-radius 101) gets its OWN anchors recomputed via _lev_anchor()
-# instead of silently reusing these (fixes the WP-C-flagged bug where the R=101
-# build showed a nonzero gap at 5A even though that disc doesn't lift until
-# ~6.45A). See lev_params() in build_twin_html_fem.py for the radius selection.
+# instead of hardcoding them.
+# WP-LEV (2026-07-28, docs/BUG_REGISTER_2026-07-28.md L1/L2): z_gap_5A_mm/
+# z_decay_mm below are NO LONGER read by lev_params() for R=80mm specifically --
+# EVERY plate radius, including the default 80mm, now goes through the SAME
+# `_lev_anchor()` root-find (a real bracketing solve of F(z)=F_grav over
+# z=1..40mm), so a single code path is correct for all radii instead of R=80
+# silently reusing these two scalars while every other radius used a separate
+# (and, until this fix, buggy-clamping) method. The values below are KEPT
+# UNCHANGED as a reference/reproducibility anchor -- `_lev_anchor(80mm)`
+# reproduces them to within ~0.15mm (11.86 vs 11.7mm; different sweep
+# resolution, not a method difference), which is itself the acceptance check
+# that the new unified method is right. See lev_params() in
+# build_twin_html_fem.py.
 levitation:
   # UPDATED 2026-07-10: both values below RECOMPUTED after the coil-radii remeasurement
   # + center-core/iron-ring material flip to confirmed iron (mu_r=1000, see coils:/
@@ -283,10 +290,12 @@ levitation:
   # visible gap is 7-8mm (2026-07-01) -- do NOT treat this as re-validated, it's the
   # direct output of the current (possibly-too-high) mu_r=1000 placeholder, kept as-is
   # per user request rather than reverse-fit back to the old observation.
-  z_gap_5A_mm: 11.7    # [mm] equilibrium gap at I=5A_rms, R=80mm, from run_rig_validation()'s
-                        # full F(z) vs F_grav sweep (crossing between z=10mm/12mm)
-  z_decay_mm: 11.79    # [mm] EM force decay length z0, R=80mm, same F(1mm)/F(5mm) method as
-                        # WP-Z0 below (z0=(5-1)/ln(F(1mm)/F(5mm)), F(1mm)=4.58N, F(5mm)=3.26N)
+  z_gap_5A_mm: 11.7    # [mm] REFERENCE ONLY (see note above) -- equilibrium gap at
+                        # I=5A_rms, R=80mm, from run_rig_validation()'s full F(z) vs
+                        # F_grav sweep (crossing between z=10mm/12mm)
+  z_decay_mm: 11.79    # [mm] REFERENCE ONLY (see note above) -- EM force decay length
+                        # z0, R=80mm, same F(1mm)/F(5mm) method as WP-Z0 below
+                        # (z0=(5-1)/ln(F(1mm)/F(5mm)), F(1mm)=4.58N, F(5mm)=3.26N)
   # --- Pre-2026-07-10 history (WP-Z0, docs/AUDIT_FIX_PLAN_2026-07-04.md OQ-4): two
   # fitting methods disagreed for the SAME disc under the OLD (non-iron) geometry --
   # 21.4mm (F(1mm)/F_grav crossing) vs 13.6mm (F(1mm)/F(5mm) refit, used for every OTHER
@@ -305,6 +314,17 @@ levitation:
   jit_freq2_rad_s: 71.0
   jit_fade_mm: 0.5      # display-only: jitter amplitude fades out once levitation gap exceeds this, in mm
   z_gap_exaggeration: 2.0  # display exaggeration, matches levitating_disc.display_z_exaggeration
+  # ADDED 2026-07-28 (WP-SHIMMER V2, docs/BUG_REGISTER_2026-07-28.md V2). DISPLAY
+  # ONLY -- see docs/physics.md §11 "Why a levitating disc oscillates" for the
+  # derivation this rides on: the real 100Hz vertical force ripple (F ∝ i², 100%
+  # modulated at Ω=2ω) only moves the disc ~0.025mm at the default R=80mm/50Hz
+  # constants (LevCoeffs.x_ripple_mm / JS xRippleMm, COMPUTED from z_decay_mm +
+  # mains frequency, never pasted) -- invisible on screen. This gain multiplies
+  # that traceable physical number up to something visible (~40x0.025=1mm),
+  # exactly like z_gap_exaggeration above is a named, separate exaggeration of
+  # z_gap_5A_mm/z_decay_mm themselves. 0.0 = no sustained shimmer (jit_contact,
+  # the existing sub-liftoff-only buzz, is unaffected either way).
+  lev_ripple_display_gain: 40.0   # DISPLAY ONLY
 
 # --- Material properties (lookup by name in plate_library) ---
 material_props:
@@ -322,6 +342,16 @@ material_props:
     sigma_S_per_m: 5.96e7
     mu_r: 1.0
     sigma_tempco_per_K: 3.9e-3
+  # ADDED 2026-07-28 (WP-COOL T2, docs/BUG_REGISTER_2026-07-28.md T2): mild-steel-
+  # like values (matches the mu_r=1000/sigma=1e6 placeholder already used for
+  # iron_core:/outer_iron_ring: -- see CLAUDE.md "CENTER CORE + IRON RING"). Used
+  # by lumped_physics() to compute the iron/core lumped-network node's REAL heat
+  # capacity C_iron = rho*cp*(V_core+V_ring) from the iron_core:/outer_iron_ring:
+  # geometry, replacing the old `0.5*C_plate` placeholder (which was half the
+  # ALUMINIUM DISC's capacity, unrelated to iron, and 23x too small).
+  iron:
+    rho_kg_per_m3: 7870.0
+    cp_J_per_kgK: 450.0
 
 # --- Thermal mesh (plate only) ---
 mesh: {nr: 40, nz: 16}
@@ -339,7 +369,12 @@ em_domain:
 # --- Transient (Phase 2) --- WIRED 2026-07-10: digital_twin.py's --dt/--window
 # argparse flags now default from dt_s/t_end_s here instead of duplicating them
 # as hardcoded literals (see _parse() in digital_twin.py).
-transient: {dt_s: 1.0, t_end_s: 600.0}
+# quickstart_ramp_s ADDED 2026-07-28 (WP-SHIMMER V1, docs/BUG_REGISTER_2026-07-28.md
+# V1): ramp time for the new `quickstart` I(t) scenario (0->I over this many
+# seconds), used as the HTML twin's default on-load/on-reset scenario so the
+# disc visibly ramps up and bobs instead of snapping straight to its I=5A gap.
+# User asked for 5-10s; 8.0 is the midpoint.
+transient: {dt_s: 1.0, t_end_s: 600.0, quickstart_ramp_s: 8.0}
 
 # --- Original benchmark (to validate EM solver; NO iron core, 20A) ---
 # Geometry from the actual TeamProblem28.pdf (Karl/Fetzer/Kurz/Lehner/Rucker, Fig.2 +
@@ -437,8 +472,8 @@ validation_data:
 # (similar quality to old fit). Treat tau as order-of-magnitude (fit from narrated
 # timeline +-~10s uncertainty; a logged repeat run would sharpen it).
 # air_node_hA_far_W_per_K kept at 40.0 (not enough independent data to refit).
-# --- WP-B (2026-07-02): realistic coil COOLING (rig feedback: "dây vừa nóng cần
-# rất lâu để nguội trong không khí"; the plain RC node above cools with the SAME
+# --- WP-B (2026-07-02): realistic coil COOLING (rig feedback: "once the wire is
+# hot it takes a very long time to cool down in air"; the plain RC node above cools with the SAME
 # tau it heats with, ~350s, unrealistic). Two additions, both scratch-fit against
 # thermal_ramp_test (script not committed, see build_twin_html_fem.py romStep):
 #   1. Nonlinear natural convection h(dT) = hA_cal * (dT/dT_cal)^convection_exponent
@@ -500,19 +535,53 @@ validation_data:
 # justification, likely overfitting 7 residuals with 2 free params). HELD UNCHANGED:
 # not worth destabilizing the mass-based value for a 0.06C gain. Revisit with real
 # cooldown IR data (see CLAUDE.md NEXT list) rather than re-fitting this same ramp.
+#
+# REFITTED 2026-07-28 (WP-COOL T4, docs/BUG_REGISTER_2026-07-28.md T4/`refit_hA.py`):
+# the 2026-07-11 refit above solved hA through the LINEAR steady-state formula
+# `T = T_amb + P/hA + AIR_DT_SS`, but the deployed code applies the NONLINEAR
+# `hAEff = hA_cal*(dT/dT_cal)^convection_exponent` correction on top -- since
+# dT_cal is anchored at I_ref=5A, the correction pushes hA_eff ABOVE hA_cal at
+# the 7.8A calibration point, so the OLD values (2.9493/3.4509) made the
+# deployed TwinState settle at inner=72.148/outer=67.780C instead of the
+# validated 79.00/74.00C (same bug CLASS as B1, 2026-07-11 -- a fitting
+# formula drifting from the code that actually runs). Also folds in WP-COOL
+# T1/T2 (P-split + real C_iron above): those don't move steady state, but
+# refitting through the FULL nonlinear+structural model (not the linear
+# formula plus a separate correctness argument) is the whole point of this
+# script. `refit_hA.py` drives the ACTUAL `twin_core.TwinState` integrator
+# (not a hand-derived formula) to steady state at 7.8A/29C and root-finds
+# (hA_inner, hA_outer) on the residual (T_inner-79, T_outer-74) --
+# `python refit_hA.py` converges to the values below and reproduces
+# T_inner=79.000C / T_outer=74.000C EXACTLY (verified through the nonlinear
+# hAEff correction, not just the linear formula).
 lumped_thermal:
-  hA_inner_W_per_K: 2.9493    # REFIT 2026-07-11 (corrected): matches code's air-node formula
-                               # (coil+iron only, no plate). Was 3.0605 (wrong formula, see above),
-                               # 3.5611 after 2026-07-01 (pre-geometry-update).
-  hA_outer_W_per_K: 3.4509    # REFIT 2026-07-11 (corrected): matches code's air-node formula
-                               # (coil+iron only, no plate). Was 3.5986 (wrong formula, see above),
-                               # 4.3446 after 2026-07-01 (pre-geometry-update).
-  coil_C_scale: 0.2241        # HELD PENDING full transient refit 2026-07-11 (see note below)
-                               # Effective mass 22.4% of solid-Cu; requires least-squares fit vs thermal_ramp_test
+  hA_inner_W_per_K: 2.4744    # REFIT 2026-07-28 (WP-COOL T4, refit_hA.py): solved through the
+                               # nonlinear hAEff-corrected TwinState integrator. Was 2.9493
+                               # (2026-07-11, linear-formula refit -- see note above), 3.5611
+                               # after 2026-07-01 (pre-geometry-update).
+  hA_outer_W_per_K: 2.8885    # REFIT 2026-07-28 (WP-COOL T4, refit_hA.py): solved through the
+                               # nonlinear hAEff-corrected TwinState integrator. Was 3.4509
+                               # (2026-07-11, linear-formula refit -- see note above), 4.3446
+                               # after 2026-07-01 (pre-geometry-update).
+  coil_C_scale: 0.2241        # HELD UNCHANGED through WP-COOL T1/T4 (2026-07-28) -- WP-COOL T1
+                               # fixed how this ratio is APPLIED (P_ref now split surf/deep in
+                               # this same ratio, was 100% surface, see docs/BUG_REGISTER_2026-07-28.md
+                               # T1), not the ratio itself. Physically-derived mass fraction, not
+                               # re-fit to the (internally inconsistent) thermal_ramp_test -- see
+                               # docs/CHANGELOG.md WP-COOL entry for the accepted ramp-RMS regression.
   hA_iron_W_per_K: 0.244      # iron/core -> local air (fit 2026-07-02, see note above)
   G_iron_cond_W_per_K: 0.06   # inner coil -> iron/core contact conduction (fit 2026-07-02)
-  air_node_C_J_per_K: 3000.0     # shared local-air thermal mass (illustrative)
-  air_node_hA_far_W_per_K: 40.0  # local air -> far ambient (illustrative, unchanged)
+  # air_node_C_J_per_K/air_node_hA_far_W_per_K: UNIDENTIFIED fudge factors (WP-COOL
+  # T5, docs/BUG_REGISTER_2026-07-28.md T5) -- both self-labelled "illustrative"
+  # since they were introduced and never independently fit. tau_air=C/hA_far=75s
+  # caps how long the WHOLE rig (every coil/iron node dumps into this one shared
+  # air pocket) can stay warm -- hA_far=40 W/K over a rig surface of ~0.2 m^2
+  # implies h~200 W/m2K, well above real natural convection, i.e. this node bleeds
+  # heat to the far ambient faster than physically justified. Left OPEN: cannot be
+  # pinned without a real cooldown log (see CLAUDE.md NEXT list / docs/SENSOR_PLAN.md)
+  # -- do NOT tune these to chase thermal_ramp_test, same reasoning as coil_C_scale.
+  air_node_C_J_per_K: 3000.0     # shared local-air thermal mass (illustrative, UNFIT -- see above)
+  air_node_hA_far_W_per_K: 40.0  # local air -> far ambient (illustrative, UNFIT -- see above)
   coil_G_wind_W_per_K: 1.0    # NEW WP-B 2026-07-02: coil surface<->winding-core
                                # conductance (both coils share this value); fit
                                # against thermal_ramp_test, see note above.
