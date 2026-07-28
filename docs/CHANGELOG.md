@@ -1346,3 +1346,52 @@ gated by the gain — a future tilt-mode effect would be a new, separate knob).
 placeholder API key confirmed). Verified: `python twin_core.py` 6/6 PASS,
 `python xval_twin.py` PASS (A: all-zero diffs, B: 0 relative diff).
 docs/physics.md §11 carries the superseding note.
+
+---
+
+## WP-EXT (2026-07-28) — `extensions/`: the PyVista twin moved out of the flat root
+
+User asked for the PyVista code gathered into its own folder, treated as an
+optional add-on to extend later. `digital_twin_pyvista.py` →
+`extensions/digital_twin_pyvista.py`.
+
+This is a deliberate, documented carve-out from CLAUDE.md's "source scripts stay
+FLAT in the repo root" rule — the first and so far only one. It was admitted on
+two conditions, both stated in `extensions/README.md` so the next such request
+gets judged the same way: the script needs a heavy dependency the core
+deliberately avoids (~400 MB pyvista/vtk), and **nothing in the root imports
+it**. The dependency arrow is one-way (`extensions/ → root`, never back), so the
+core pipeline still runs end-to-end with the whole folder deleted.
+
+The move needed exactly one code change, because the script never builds its own
+paths: `sys.path.insert(0, Path(__file__).resolve().parent)` → `.parent.parent`,
+i.e. put the REPO ROOT on `sys.path` rather than the script's own folder. The
+root modules it imports (`twin_core`, `twin_model`, `build_twin_html_fem`,
+`config`) then self-locate `params.yaml`/`outputs/` via their own `__file__`
+exactly as before — which is the whole reason the flat rule exists, and why
+honouring it from a subfolder costs one line instead of a refactor.
+
+`extensions/README.md` (new) records the admission criteria plus the copy-paste
+contract for future extensions: root on `sys.path`, import-guard the heavy dep,
+ship a `--self-check` that runs without it, keep the dep commented out in
+`requirements.txt`. `visualize.py --pyvista` deliberately stays in the root — it
+is one optional, already-import-guarded flag on an otherwise core script, and
+moving it would break `visualize.py`'s own CLI.
+
+Docs updated to match: CLAUDE.md's layout rule now describes four subfolders
+instead of three (with the admission criteria inline) and its module table
+points at the new path; README.md, `docs/ARCHITECTURE.md` (file tree + both data
+flow diagrams + header note), `docs/HANDOFF.md`, `docs/QUICK_START_FOR_AGENTS.md`
+likewise.
+
+Also fixed here: `requirements.txt` still carried the pre-archive path of what is
+now `docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md` — the WP-TIDY rename pass
+covered `*.py`/`*.md`/`*.yaml` but not `*.txt`. The link checker was widened to
+`*.txt` (and to `extensions/`) so this class of miss can't slip through again.
+
+Verified: `python extensions/digital_twin_pyvista.py --self-check` PASS
+(960/960/960/960/96 tris + 21 field lines + 84 field-line polylines — identical
+to the pre-move baseline), `--screenshot outputs/twin_pv.png --no-show` renders
+the device correctly from the new location, `python twin_core.py` 6/6 PASS,
+`python xval_twin.py` PASS, 192 doc/extension path references all resolve,
+`compileall` clean.

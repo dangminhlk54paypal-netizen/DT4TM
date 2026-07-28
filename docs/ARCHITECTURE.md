@@ -1,9 +1,11 @@
 # DT4TM — File Architecture & Data Flow
 
-> Last updated: 2026-07-28 (repo tidy-up: docs/archive/, WP-TIDY).
+> Last updated: 2026-07-28 (repo tidy-up: docs/archive/ + extensions/, WP-TIDY).
 > Single-source-of-truth for file relationships.
 > Source scripts + input data live **flat in repo root** (no src/ subfolder);
-> docs live in `docs/`, generated files in `outputs/`.
+> docs live in `docs/`, generated files in `outputs/`. The one exception is
+> `extensions/` — optional add-ons with heavy deps that nothing in the root
+> imports (see `extensions/README.md` and CLAUDE.md's layout rule).
 
 ---
 
@@ -28,10 +30,6 @@ DT4TM/
 │                                  outputs/digital_twin_fem.html (Playwright + traceRom()).
 ├── digital_twin.py              ← Interactive live twin (matplotlib, sliders) — uses
 │                                  twin_core.TwinState + twin_model, no physics of its own.
-├── digital_twin_pyvista.py      ← Interactive live twin (PyVista/VTK 3D) — same
-│                                  twin_core.TwinState, reuses build_twin_html_fem.py's
-│                                  procedural geometry builders. Optional dependency
-│                                  (~400MB VTK); --self-check runs without it.
 ├── visualize.py                 ← Revolve 2D→3D, export outputs/plate.glb + thermal_3d.png
 ├── sim_plates.py                ← Batch compare plate materials from plate_library
 ├── build_twin_html_fem.py       ← Bake FEM+STL+ROM → outputs/digital_twin_fem.html
@@ -46,6 +44,15 @@ DT4TM/
 │
 ├── CLAUDE.md                    ← Claude Code project instructions (auto-loaded)
 ├── README.md                    ← Setup, run commands, FEM math reference
+│
+├── extensions/                  ← OPTIONAL add-ons. Heavy deps the core avoids; NOTHING
+│   │                              in the root imports them, so the pipeline runs with
+│   │                              this folder deleted. Contract: extensions/README.md.
+│   ├── README.md                ← Why the folder exists + how to write a new extension
+│   └── digital_twin_pyvista.py  ← Interactive live twin (PyVista/VTK 3D) — same
+│                                  twin_core.TwinState, reuses build_twin_html_fem.py's
+│                                  procedural geometry builders. Optional dependency
+│                                  (~400MB VTK); --self-check runs without it.
 │
 ├── arduino/thermal_sensor/
 │   └── thermal_sensor.ino       ← MAX31855×2 firmware, 1Hz CSV (see docs/SENSOR_PLAN.md)
@@ -121,7 +128,7 @@ twin_core.py :: TwinState(rom, lumped, lev, T_amb)       │
     │                                                    │
     ├──────────────────────┐                             │
     ▼                      ▼                             │
-digital_twin.py    digital_twin_pyvista.py                │
+digital_twin.py    extensions/digital_twin_pyvista.py     │
     │  matplotlib       │  PyVista/VTK 3D (optional dep)  │
     │  run_live()       │  TwinPyVista.run_live()          │
     │                                                    │
@@ -161,7 +168,7 @@ build_twin_html_fem.py ◄──────────────────
                   (integrator — SSOT, numpy+stdlib only)
                  /                        \
                 /                          \
-       digital_twin.py           digital_twin_pyvista.py
+       digital_twin.py     extensions/digital_twin_pyvista.py
         (matplotlib)                (PyVista/VTK, optional)
 
     build_twin_html_fem.py also bakes digital_twin_fem.html
@@ -202,7 +209,7 @@ All generated files land in `outputs/` (gitignored, except `digital_twin_fem.htm
 | `outputs/plate.glb` | `python visualize.py` | ~247 KB |
 | `outputs/thermal_3d.png` | `python visualize.py --no-show` | — |
 | `outputs/thermal_2d_section.png` | `python visualize.py --no-show` | — |
-| `outputs/twin_pv.png` | `python digital_twin_pyvista.py --screenshot outputs/twin_pv.png --no-show` (optional pyvista/vtk dep) | — |
+| `outputs/twin_pv.png` | `python extensions/digital_twin_pyvista.py --screenshot outputs/twin_pv.png --no-show` (optional pyvista/vtk dep) | — |
 
 ---
 

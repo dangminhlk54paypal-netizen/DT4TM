@@ -8,9 +8,10 @@ matplotlib>=3.7
 trimesh>=4.0          # GLB export (phase 4) — pip install trimesh
 qrcode>=7.4           # phase 5 QR code — gen_qr.py
 
-# PyVista desktop 3D twin (digital_twin_pyvista.py) — OPTIONAL, ~400MB (VTK).
+# PyVista desktop 3D twin (extensions/digital_twin_pyvista.py) — OPTIONAL, ~400MB (VTK).
 # NOT required for the solvers, digital_twin.py (matplotlib), or
 # build_twin_html_fem.py (three.js/HTML) — those all work without this block.
+# Deliberately left commented out: see extensions/README.md.
 # Version floor: 0.45 needs PolyData.from_regular_faces (0.44+) and
 # interaction_event (0.38+ rename of event_type). VTK capped <9.7 to match
 # the pyvista range tested in docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md.

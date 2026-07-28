@@ -1,4 +1,8 @@
-"""digital_twin_pyvista.py — Real-time PyVista 3D digital twin (level C).
+"""extensions/digital_twin_pyvista.py — Real-time PyVista 3D digital twin (level C).
+
+OPTIONAL EXTENSION. Lives in extensions/ (not the flat repo root) because its
+pyvista/vtk dependency is ~400MB and nothing else in the project imports it —
+the core pipeline runs fine with it absent. See extensions/README.md.
 
 Exists ALONGSIDE (not instead of) the two other twins:
   digital_twin.py            matplotlib, 2D heatmap, disc only
@@ -18,12 +22,12 @@ does NOT rotate to Y-up (that rotation, build_twin_html_fem.py:1406-1410,
 exists only because three.js is Y-up by convention; VTK has no such
 convention) — instead sets `pl.camera.up = (0, 0, 1)`.
 
-Run:
-  python digital_twin_pyvista.py --self-check
+Run (from the repo root — relative paths like outputs/ resolve against CWD):
+  python extensions/digital_twin_pyvista.py --self-check
       Import/build sanity check. Works WITHOUT pyvista/vtk installed.
-  python digital_twin_pyvista.py --screenshot outputs/twin_pv.png --no-show
+  python extensions/digital_twin_pyvista.py --screenshot outputs/twin_pv.png --no-show
       Static off-screen render (needs pyvista/vtk).
-  python digital_twin_pyvista.py --speed 50
+  python extensions/digital_twin_pyvista.py --speed 50
       Live interactive window. Space=pause, r=reset, 1-4=viz mode, [ / ] = disc radius.
 """
 from __future__ import annotations
@@ -37,7 +41,14 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# This script lives in extensions/, but every module it imports (twin_core,
+# twin_model, build_twin_html_fem, config) stays FLAT in the repo root per
+# CLAUDE.md's layout rule — so put the ROOT on sys.path, not this folder.
+# Those modules then self-locate params.yaml/outputs/ via their own __file__,
+# which is why nothing else here needs a path fix. Every future extensions/
+# script must repeat this line verbatim (see extensions/README.md).
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 try:
     import pyvista as pv

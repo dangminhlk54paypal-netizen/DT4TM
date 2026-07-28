@@ -7,10 +7,17 @@ See @README.md for setup/run and @docs/physics.md for the full formulation.
 
 **Layout rule:** source scripts (*.py), params.yaml and input data (STL/CSV) stay FLAT
 in the repo root — scripts self-locate via `__file__`, so do NOT move them into src/ or
-data/. Only three subfolders: `docs/` (all *.md except CLAUDE.md/README.md, plus
-`docs/archive/` for completed plans), `outputs/` (generated PNG/GLB/OBJ/HTML —
-gitignored except digital_twin_fem.html), `local/` (entirely gitignored; local-only
-secrets, e.g. `local/.env.local` holding `GOOGLE_WEATHER_API_KEY` — see "Conventions").
+data/. Four subfolders, and only these:
+- `docs/` — all *.md except CLAUDE.md/README.md, plus `docs/archive/` for completed plans.
+- `outputs/` — generated PNG/GLB/OBJ/HTML, gitignored except digital_twin_fem.html.
+- `local/` — entirely gitignored; local-only secrets, e.g. `local/.env.local` holding
+  `GOOGLE_WEATHER_API_KEY` (see "Conventions").
+- `extensions/` — the ONE exception to the flat rule (added 2026-07-28). A script may
+  live here only if it needs a heavy/awkward dependency the core avoids AND nothing in
+  the root imports it. Dependency arrow is one-way (`extensions/ → root`, never back), so
+  the core pipeline still runs with the folder deleted. Such scripts must put the REPO
+  ROOT on `sys.path` (not their own folder), import-guard the heavy dep, and ship a
+  `--self-check` that runs without it. Contract + rationale: `extensions/README.md`.
 
 ## What we are building
 A real-time **thermal digital twin** for the aluminium plate + coils of a TEAM 28-like
@@ -133,7 +140,7 @@ All of these are done, verified, and have no open issues. Details → docs/CHANG
 | `twin_model.py` | Heavy bridge: `resolve_active_plate`/`PlateCache`/`i_max_for`/`coeffs_from_live`/`build_plate_variant`. |
 | `xval_twin.py` | Pins `twin_core.py` against the baked JS in `outputs/digital_twin_fem.html` (Playwright). **A** integrator match (abs 1e-9, 7 schedules); **B** bake freshness (rel 1e-6) — catches the "coefficient fixed but never rebaked" bug class that A structurally cannot. `python xval_twin.py` → PASS. |
 | `digital_twin.py` | Interactive matplotlib twin. Imports `TwinState`/`SCENARIOS` from twin_core, the rest from twin_model — no second copy of the physics. |
-| `digital_twin_pyvista.py` | Desktop 3D twin (PyVista/VTK, OPTIONAL ~400MB dep). Same `TwinState`; geometry reuses `build_twin_html_fem.py`'s mesh builders verbatim. `--self-check` runs with no VTK installed. |
+| `extensions/digital_twin_pyvista.py` | Desktop 3D twin (PyVista/VTK, OPTIONAL ~400MB dep — hence `extensions/`, see layout rule). Same `TwinState`; geometry reuses `build_twin_html_fem.py`'s mesh builders verbatim. `--self-check` runs with no VTK installed. Run from repo root. |
 | `build_twin_html_fem.py` | The FEM-accurate standalone AR twin (only active HTML builder). 100% procedural geometry, two-node coil thermal model, closed-form levitation, 4 live-swappable disc radii, Amps/dial dual input, live T_amb from Google Weather API. `--bake-key` gates the real key (default: placeholder). |
 | `refit_hA.py` | Refits `lumped_thermal.hA_inner/outer` through the real `TwinState` integrator. params.yaml stays SSOT. |
 | `visualize.py`, `sim_plates.py` | 2D→3D revolve/GLB export, cross-plate comparison. |

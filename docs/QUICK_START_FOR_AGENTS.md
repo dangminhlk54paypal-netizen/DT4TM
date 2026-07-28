@@ -120,7 +120,7 @@ architecture quickly enough to debug it.
 ### Twins — there are three, sharing ONE integrator
 - `twin_core.py` is the **SSOT time integrator** (numpy + stdlib only). Run
   `python twin_core.py` → 6/6 self-checks must PASS.
-- `digital_twin.py` (matplotlib) and `digital_twin_pyvista.py` (VTK, optional
+- `digital_twin.py` (matplotlib) and `extensions/digital_twin_pyvista.py` (VTK, optional
   dependency) both drive `twin_core.TwinState`. Neither has its own physics.
 - `build_twin_html_fem.py` bakes a **separate JS copy** of the same integrators into
   `outputs/digital_twin_fem.html`.
@@ -158,7 +158,7 @@ thermal_solver.py (interpolate q_e, solve FEM, check energy balance)
     │   │      ↓
     │   │   twin_core.py (TwinState — the ONE integrator)
     │   │      ├→ digital_twin.py           (matplotlib live twin)
-    │   │      ├→ digital_twin_pyvista.py   (PyVista/VTK 3D live twin)
+    │   │      ├→ extensions/digital_twin_pyvista.py  (PyVista/VTK 3D live twin)
     │   │      └→ data_io.py                (sensor comparison)
     │   │
     │   └→ build_twin_html_fem.py (bakes its own JS copy → HTML)
@@ -240,7 +240,7 @@ TOTAL body      : 3936 tris
 levitating disc :  720 tris   (build_disc_mesh, FEM field mapped)
 GRAND TOTAL     : 4656 tris across 5 meshes, 13968 vertices
 ```
-`digital_twin_pyvista.py --self-check` reproduces these exact counts — the two
+`extensions/digital_twin_pyvista.py --self-check` reproduces these exact counts — the two
 renderers share the same geometry builders, so a mismatch means a real regression.
 
 ### Why the STL is not used for the body
@@ -257,7 +257,7 @@ positions[i+1] = z;   // Three.js Y = physical Z (height)
 positions[i+2] = -y;  // Three.js Z = -physical Y
 ```
 → `bb.max.y - bb.min.y` is the model **height**, not a radius.
-`digital_twin_pyvista.py` deliberately does NOT do this — it stays Z-up in mm,
+`extensions/digital_twin_pyvista.py` deliberately does NOT do this — it stays Z-up in mm,
 because the Y-up swap is a three.js convention, not a physical one.
 
 ### Thermal ramp functions (JS)

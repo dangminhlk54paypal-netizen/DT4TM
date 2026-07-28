@@ -23,7 +23,7 @@ against the real rig → 3D visualisation → AR app → QR code.
 - All parameters live in [params.yaml](../params.yaml). Source scripts + input data
   stay **flat in the repo root**; docs in `docs/`, generated files in `outputs/`.
 - **One integrator, not three.** `twin_core.py` is the SSOT time integrator shared
-  by `digital_twin.py` (matplotlib), `digital_twin_pyvista.py` (VTK) and
+  by `digital_twin.py` (matplotlib), `extensions/digital_twin_pyvista.py` (VTK) and
   `data_io.py`. `build_twin_html_fem.py` bakes its own JS copy for the standalone
   HTML — `xval_twin.py` pins the two against each other so they cannot drift.
 
@@ -64,7 +64,7 @@ against the real rig → 3D visualisation → AR app → QR code.
 - [x] `xval_twin.py` — pins `twin_core.py` against the baked JS (Playwright);
       two independent assertions (integrator match 1e-9 abs, bake freshness 1e-6 rel)
 - [x] `digital_twin.py` — interactive matplotlib twin
-- [x] `digital_twin_pyvista.py` — interactive PyVista/VTK desktop 3D twin (optional dep)
+- [x] `extensions/digital_twin_pyvista.py` — interactive PyVista/VTK desktop 3D twin (optional dep)
 - [x] `build_twin_html_fem.py` — standalone HTML/three.js twin (the shippable deliverable)
 - [x] `visualize.py`, `sim_plates.py` — 3D revolve/GLB export, cross-plate comparison
 - [x] `data_io.py` + `arduino/thermal_sensor.ino` — sensor bridge, mock-tested end to end

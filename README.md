@@ -44,11 +44,11 @@ python refit_hA.py                       # WP-COOL T4: refit lumped_thermal.hA_i
 python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
 
-# Optional: PyVista desktop 3D twin (~400MB VTK dependency, see requirements.txt)
-pip install "pyvista>=0.45" "vtk>=9.3,<9.7"
-python digital_twin_pyvista.py --self-check                     # sanity check, no VTK needed
-python digital_twin_pyvista.py --screenshot outputs/twin_pv.png --no-show
-python digital_twin_pyvista.py --speed 50                       # live interactive window
+# Optional extension: PyVista desktop 3D twin (~400MB VTK dep, see extensions/README.md)
+python extensions/digital_twin_pyvista.py --self-check          # sanity check, no VTK needed
+pip install "pyvista>=0.45" "vtk>=9.3,<9.7"                     # needed for the two below
+python extensions/digital_twin_pyvista.py --screenshot outputs/twin_pv.png --no-show
+python extensions/digital_twin_pyvista.py --speed 50            # live interactive window
 ```
 
 ## Layout
@@ -65,7 +65,6 @@ twin_core.py        # SSOT time integrator (dual-β disc + lumped coil/iron/air 
 twin_model.py        # heavy bridge: resolve_active_plate/PlateCache/coeffs_from_live/
                      # build_plate_variant (config/em_solver/rom/build_twin_html_fem-dependent)
 digital_twin.py     # interactive live loop I(t) -> T(r,z,t) (matplotlib)
-digital_twin_pyvista.py  # interactive live 3D twin (PyVista/VTK, OPTIONAL dependency)
 xval_twin.py        # pins twin_core.py against outputs/digital_twin_fem.html's baked JS (Playwright)
 visualize.py        # revolve 2D->3D, export GLB/OBJ (+ optional PyVista)
 sim_plates.py       # compare thermal response across plate_library
@@ -75,6 +74,9 @@ refit_hA.py          # WP-COOL T4: solve lumped_thermal.hA_inner/outer through t
                      # TwinState integrator instead of a hand-derived linear formula
 data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA()
 gen_qr.py           # QR code for the hosted digital_twin_fem.html (URL via CLI arg)
+extensions/         # OPTIONAL add-ons — heavy deps the core avoids; nothing in the root
+                    #   imports them, so the pipeline runs with this folder deleted.
+                    #   digital_twin_pyvista.py (PyVista/VTK 3D twin). See its README.md.
 arduino/thermal_sensor/thermal_sensor.ino  # MAX31855x2 firmware, 1Hz CSV over serial
 3D_model.stl                    # colleague's CAD (source, meters, axisymmetric)
 levitation_height_team28.csv    # Table I from the PDF (levitation height, validation)
