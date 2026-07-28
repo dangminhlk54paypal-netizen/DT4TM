@@ -1,366 +1,387 @@
-# Báo cáo: Vì sao tự code Digital Twin bằng Python thay vì dùng SimScale / phần mềm mô phỏng có sẵn
+# Report: Why we custom-code the Digital Twin in Python instead of using SimScale / existing simulation software
 
-> Chuẩn bị 2026-07-10, trả lời câu hỏi của giáo sư. Tham chiếu chi tiết:
-> `docs/physics.md` (công thức), `docs/ARCHITECTURE.md`, `docs/SENSOR_PLAN.md`,
-> `README.md` (roadmap), `docs/CHANGELOG.md` (lịch sử từng phiên làm việc).
+> Prepared 2026-07-10, answering professor's question. Detailed references:
+> `docs/physics.md` (formulas), `docs/ARCHITECTURE.md`, `docs/SENSOR_PLAN.md`,
+> `README.md` (roadmap), `docs/CHANGELOG.md` (session-by-session history).
 
 ---
 
-## 1. Động lực và hướng đi — vì sao chọn tự code
+## 1. Motivation and approach — why choose to custom-code
 
-**Mấu chốt: sản phẩm cuối không phải là "một kết quả mô phỏng", mà là một
-DIGITAL TWIN chạy real-time.** Hai bài toán này khác nhau về bản chất:
+**Core point: the final product is not "a simulation result," but a
+DIGITAL TWIN running in real-time.** These two are fundamentally different:
 
-| | Mô phỏng một lần (SimScale, COMSOL…) | Digital twin (yêu cầu đề bài) |
+| | One-off simulation (SimScale, COMSOL…) | Digital twin (project requirement) |
 |---|---|---|
-| Đầu ra | 1 trường nhiệt độ cho 1 kịch bản | T(r,z,t) cập nhật **liên tục theo mili-giây** khi người dùng đổi dòng điện |
-| Thời gian giải | phút → giờ mỗi lần chạy | phải < 16 ms/khung hình (chạy được trên điện thoại, AR) |
-| Kết nối cảm biến | không có API real-time | bắt buộc (hiệu chuẩn từ dữ liệu Arduino) |
+| Output | 1 temperature field per scenario | T(r,z,t) updates **continuously per millisecond** as user changes current |
+| Solution time | minutes → hours per run | must be < 16 ms/frame (runs on phone, AR) |
+| Sensor connection | no real-time API | mandatory (calibrate from Arduino data) |
 
-Cái cho phép real-time là một **quan sát vật lý** (không phải một tính năng phần mềm):
-hệ tuyến tính ở tần số cố định 50 Hz ⇒ tổn hao Joule tỉ lệ **I²** với *phân bố
-không gian cố định*, chỉ biên độ thay đổi (kèm hiệu chỉnh σ(T)). Vậy nên:
+What enables real-time is a **physics observation** (not a software feature):
+linear system at fixed frequency 50 Hz ⇒ Joule loss scales as **I²** with *fixed
+spatial distribution*, only amplitude changes (plus σ(T) correction). Therefore:
 
-1. Giải FEM điện từ (phasor) **một lần duy nhất** offline tại I_ref = 5 A →
-   bản đồ tổn hao q̂(r,z).
-2. Runtime chỉ là phép nhân vô hướng `(I/I_ref)² × [σ(T)/σ(T_ref)]` + ROM nhiệt
-   bậc nhất → mili-giây, chạy được trong trình duyệt điện thoại.
+1. Solve EM FEM (phasor) **once only** offline at I_ref = 5 A →
+   loss map q̂(r,z).
+2. Runtime is only scalar multiply `(I/I_ref)² × [σ(T)/σ(T_ref)]` + first-order thermal ROM
+   → milliseconds, runs in mobile browser.
 
-**Không phần mềm thương mại nào cho mình "mổ" pipeline ra như vậy** — họ đóng gói
-solver thành hộp đen: mỗi lần đổi dòng điện là một lần chạy lại toàn bộ FEM.
-Muốn khai thác cấu trúc I² của bài toán thì phải kiểm soát solver ở mức mã nguồn.
+**No commercial software lets us "dissect" the pipeline like this** — they wrap
+solver as a black box: every current change means re-running full FEM.
+To exploit the I² structure we must control the solver at source-code level.
 
-Các động lực phụ (nhưng có thật):
-- **FEMM bị loại ngay từ đầu**: chỉ chạy Windows, máy dev là macOS (quyết định đã chốt).
-- Bài toán **đối xứng trục** → chỉ cần giải 2D (r,z), hệ ~10⁴ ẩn số —
-  `scipy.sparse.linalg.spsolve` giải trong < 1 giây. Dùng phần mềm CAE 3D cho
-  bài toán cỡ này là "dùng dao mổ trâu giết gà", còn chậm hơn vì phải mesh 3D.
-- **TEAM Problem 28 sinh ra chính là để kiểm chứng code tự viết** — đây là
-  benchmark chuẩn của cộng đồng computational electromagnetics (COMPUMAG).
-  Đi theo tinh thần của đề bài tức là tự viết solver rồi validate.
-- **Minh bạch & kiểm chứng được**: energy balance đạt sai số 0.000 %,
-  I²-check ra đúng 4.000000, mọi hằng số nằm trong `params.yaml` (single source
-  of truth), toàn bộ lịch sử thay đổi nằm trong git. Với hộp đen thương mại,
-  ta chỉ có thể *tin* kết quả; với code tự viết, ta *chứng minh* được nó.
-- **Chi phí = 0**: numpy/scipy mã nguồn mở, không license, không cloud credit,
-  không phụ thuộc internet.
-- **Giá trị học thuật**: cả nhóm hiểu từng phương trình từ weak form đến ma trận
-  — đúng mục tiêu môn học, thay vì học cách bấm nút một GUI.
+Secondary motivations (but real):
+- **FEMM ruled out immediately**: Windows-only, dev machine is macOS (decision locked).
+- Problem is **axisymmetric** → solve only 2D (r,z), system ~10⁴ unknowns —
+  `scipy.sparse.linalg.spsolve` solves in < 1 second. Using 3D CAE software for
+  this size is "using a cleaver to kill a chicken," and still slower (must mesh 3D).
+- **TEAM Problem 28 exists precisely to validate custom code** — this is
+  the standard benchmark of the computational electromagnetics community (COMPUMAG).
+  Following the problem's spirit means write solver then validate.
+- **Transparent & verifiable**: energy balance achieves 0.000% error,
+  I²-check gives exactly 4.000000, every constant lives in `params.yaml` (single source
+  of truth), full change history in git. With commercial black box,
+  we can only *trust* results; with custom code, we *prove* it.
+- **Cost = 0**: numpy/scipy open-source, no license, no cloud credits,
+  no internet dependence.
+- **Academic value**: the team understands every equation from weak form to matrix
+  — matches course learning objective, versus learning GUI button-pushing.
 
 ---
 
-## 2. So sánh với các công cụ mô phỏng khác
+## 2. Comparison with other simulation tools
 
-| Tiêu chí | **SimScale** (cloud CAE) | **COMSOL / ANSYS Maxwell** | **FEMM** | **Elmer / FEniCS** (open-source FEM) | **Python tự viết (chọn)** |
+| Criterion | **SimScale** (cloud CAE) | **COMSOL / ANSYS Maxwell** | **FEMM** | **Elmer / FEniCS** (open-source FEM) | **Python custom (chosen)** |
 |---|---|---|---|---|---|
-| EM tần số thấp (eddy current, phasor A_φ) | hạn chế — thế mạnh là CFD/kết cấu/nhiệt, không phải magnetics 50 Hz | ✔ rất tốt | ✔ tốt (2D) | ✔ có (Elmer) | ✔ tự viết, validate bằng TEAM 28 |
-| Coupling EM → nhiệt | khó ghép trong một pipeline | ✔ | ✘ nhiệt yếu | ✔ nhưng cấu hình phức tạp | ✔ trực tiếp: q = ½σω²\|A_φ\|² đổ thẳng vào solver nhiệt |
-| Đối xứng trục 2D (tận dụng được) | ✘ mesh 3D đầy đủ | ✔ | ✔ | ✔ | ✔ hệ nhỏ ~10⁴ ẩn |
-| **ROM / real-time** | ✘ | một phần (module ROM riêng, đắt) | ✘ | ✘ | ✔ **thiết kế cốt lõi** |
-| Xuất ra web/AR chạy trên điện thoại | ✘ | ✘ | ✘ | ✘ | ✔ bake vào 1 file HTML |
-| Nối cảm biến Arduino để hiệu chuẩn | ✘ | khó, cần scripting bản quyền | ✘ | tự viết thêm | ✔ `data_io.py` → `rom.calibrate_UA()` |
-| Chạy trên macOS | ✔ (browser) | ✔ (đắt) | ✘ **Windows-only** | ✔ | ✔ |
-| Chi phí | free tier giới hạn, tính theo core-hour | license hàng nghìn € | free | free | free |
-| Hộp đen? | có | có | nửa | không | **không — kiểm soát 100 %** |
+| Low-frequency EM (eddy current, phasor A_φ) | limited — strong in CFD/structures/thermal, not 50 Hz magnetics | ✔ excellent | ✔ good (2D) | ✔ has it (Elmer) | ✔ custom, validate vs TEAM 28 |
+| EM → thermal coupling | hard to integrate in pipeline | ✔ | ✘ weak thermal | ✔ but complex config | ✔ direct: q = ½σω²\|A_φ\|² feeds straight to thermal solver |
+| Axisymmetric 2D (exploitable) | ✘ full 3D mesh | ✔ | ✔ | ✔ | ✔ small system ~10⁴ unknowns |
+| **ROM / real-time** | ✘ | partial (separate ROM module, expensive) | ✘ | ✘ | ✔ **core architecture** |
+| Export to web/AR on phone | ✘ | ✘ | ✘ | ✘ | ✔ bake into 1 HTML file |
+| Wire Arduino sensor for calibration | ✘ | hard, needs proprietary scripting | ✘ | self-add | ✔ `data_io.py` → `rom.calibrate_UA()` |
+| Runs on macOS | ✔ (browser) | ✔ (expensive) | ✘ **Windows-only** | ✔ | ✔ |
+| Cost | free tier limited, core-hours | thousands of € license | free | free | free |
+| Black box? | yes | yes | half | no | **no — 100% control** |
 
-Ghi chú từng công cụ:
+Notes per tool:
 
-- **SimScale**: mạnh về CFD, kết cấu, nhiệt truyền dẫn tổng quát — nhưng bài toán
-  của ta cần *low-frequency electromagnetics* (dòng xoáy 50 Hz trong đĩa nhôm),
-  không thuộc thế mạnh của nó. Kể cả nếu giải được, mỗi kịch bản là một job
-  cloud tính bằng phút → không thể làm twin real-time; phụ thuộc internet;
-  dữ liệu nằm trên server của họ; free tier giới hạn core-hour.
-- **COMSOL/ANSYS**: về mặt kỹ thuật giải được hết, nhưng license vượt xa ngân
-  sách sinh viên, vẫn không xuất được ra AR trên điện thoại, và biến đồ án
-  thành bài học "dùng phần mềm" thay vì "hiểu vật lý".
-- **FEMM**: thực ra rất hợp cho phần EM 2D — nhưng Windows-native, máy dev macOS
-  → loại từ đầu (quyết định đã chốt trong CLAUDE.md).
-- **PyVista — lưu ý quan trọng: PyVista KHÔNG phải solver.** Nó là thư viện
-  *hiển thị* 3D (wrapper của VTK). Trong dự án ta **có dùng** PyVista đúng vai
-  trò của nó: `visualize.py` revolve kết quả 2D thành 3D và export GLB/OBJ.
-  Nên câu so sánh đúng không phải "code vs PyVista" mà là "solver tự viết +
-  PyVista để hiển thị".
-- **Python tự viết** trả giá bằng việc phải tự kiểm chứng — và ta đã làm:
-  energy balance 0.000 %, I²-scaling đúng 4.000000, nhiệt độ cuộn dây hiệu
-  chuẩn theo dữ liệu IR thật (HIKMICRO, sai số RMS ≈ 2.5 °C trên transient).
-  ⚠️ **Cập nhật 2026-07-11**: số liệu lực nâng bên dưới đã cũ (tính trên hình
-  học trước khi đo lại 2026-07-10). Số hiện tại: F_z(5A, z=3.8mm) ≈ 4.10N ≫
-  trọng lực 1.60N, nhưng khe hở cân bằng dự đoán z_eq ≈ 11.7mm (đáy đĩa, mặt
-  trên nhìn thấy ≈14.7mm) so với quan sát thực tế chỉ 7-8mm nhìn thấy — một
-  sai lệch còn để mở (xem CLAUDE.md "LIFT FORCE" / `docs/BUG_REGISTER_2026-07-11.md`).
-  Thí nghiệm với mô hình bão hòa μᵣ phi tuyến đã loại trừ bão hòa sắt như
-  nguyên nhân (lực đổi <0.1%) — nguyên nhân thật vẫn chưa rõ.
+- **SimScale**: strong in CFD, structures, general heat transfer — but our problem needs
+  *low-frequency electromagnetics* (50 Hz eddy in aluminum disc),
+  not its strength. Even if it could, each scenario is a cloud job taking minutes → can't do real-time twin;
+  internet dependent; data on their servers; free tier has core-hour limits.
+- **COMSOL/ANSYS**: technically can solve everything, but license far exceeds student budget,
+  still can't export to AR on phone, and turns the project into "learn software" vs "understand physics."
+- **FEMM**: actually perfect for 2D EM — but Windows-native, dev machine macOS
+  → ruled out immediately (decision locked in CLAUDE.md).
+- **PyVista — important note: PyVista is NOT a solver.** It's a 3D *visualization*
+  library (VTK wrapper). We **do use** PyVista correctly: `visualize.py` revolves 2D result to 3D
+  and exports GLB/OBJ. So the right comparison is not "code vs PyVista" but "custom
+  solver + PyVista for display."
+- **Python custom** costs us having to self-verify — and we have:
+  energy balance 0.000%, I²-scaling exactly 4.000000, coil temperature calibrated
+  against real IR data (HIKMICRO, RMS error ≈ 2.5 °C on transient).
+  ⚠️ **Update 2026-07-11**: lift force numbers below are stale (computed on geometry
+  before re-measurement 2026-07-10). Current: F_z(5A, z=3.8mm) ≈ 4.10N ≫
+  gravity 1.60N, but predicted equilibrium gap z_eq ≈ 11.7mm (disc bottom, visible
+  top ≈14.7mm) versus actual observation of only 7-8mm visible — an unresolved
+  discrepancy (see CLAUDE.md "LIFT FORCE" / `docs/BUG_REGISTER_2026-07-11.md`).
+  Experiments with nonlinear saturation model ruled out iron saturation as
+  cause (force changes <0.1%) — true cause still unknown.
 
 ---
 
-## 2.5. Công thức vật lý đầy đủ — tại sao custom code cần thiết
+## 2.5. Complete physics formulas — why custom code is necessary
 
-Bốn phương trình sau tạo thành "xương sống" của twin. Mỗi phương trình đòi hỏi
-một bước discretization/lắp ráp ma trận riêng biệt; không phần mềm chung chung nào
-cho phép tắc hiểu và tái cấu trúc một hệ thống bị gói lại như hộp đen.
+Four equations below form the "backbone" of the twin. Each requires
+its own discretization/matrix assembly step; no generic software allows you to dissect and restructure
+a system packaged as a black box.
 
-### (1) Phương trình điện từ phasor — từ trường biến thiên AC
+### (1) Phasor electromagnetic equation — time-varying AC magnetic field
 
 $$-\nabla \cdot (\nu \nabla A_\varphi) + \nu \frac{A_\varphi}{r^2} + j\omega\sigma A_\varphi = J_s$$
 
-Ký hiệu:
-- $A_\varphi(r,z)$ — thế vector thành phần azimuthal (chỉ thành phần này khác 0 do đối xứng trục)
-- $\nu = 1/\mu = 1/(\mu_r \mu_0)$ — độ từ thẩm đảo (nhỏ ở sắt → chứng từ)
+Notation:
+- $A_\varphi(r,z)$ — azimuthal vector potential component (only nonzero due to axisymmetry)
+- $\nu = 1/\mu = 1/(\mu_r \mu_0)$ — reluctivity (small in iron → channels flux)
 - $\omega = 2\pi f = 2\pi \cdot 50 = 314$ rad/s (50 Hz)
-- $\sigma$ — độ dẫn điện từng miền (Al: $3.4 \times 10^7$ S/m, Cu: $5.8 \times 10^7$ S/m)
-- $J_s$ — mật độ dòng điện nguồn trong cuộn dây (mỗi cuộn một dấu hiệu đối ngược)
+- $\sigma$ — conductivity per region (Al: $3.4 \times 10^7$ S/m, Cu: $5.8 \times 10^7$ S/m)
+- $J_s$ — source current density in coils (each coil opposite sign)
 
-**Vật lý:** Dòng điện AC trong cuộn sinh ra từ trường. Từ trường này kích thích dòng
-xoáy trong đĩa nhôm ($j\omega\sigma A_\varphi$ — số hạng phản ứng eddy). Sắt lõi
-(với $\mu_r$ cao, tức $\nu$ thấp) tập trung từ thông tại một vùng nhỏ, giống như
-một thấu kính từ tính. Số hạng $\nu A_\varphi/r^2$ là tác dụng hình học của đối xứng
-trục — nó là lý do cần giải 2D chứ không phải mô hình 3D khác.
+**Physics:** AC current in coil generates magnetic field. This field induces eddy
+current in aluminum disc ($j\omega\sigma A_\varphi$ — eddy reaction term). Iron core
+(high $\mu_r$, low $\nu$) concentrates flux in small region, like a magnetic lens. Term $\nu A_\varphi/r^2$
+is geometric effect of axisymmetry — why we solve 2D not 3D.
 
-**Ví dụ thực:** Tại 5 A RMS qua 1000 vòng cuộn trong, từ thông cực đại $B_{\max}$
-ở sắt lõi ≈ 0.66 T (chưa bão hòa, vẫn trong vùng tuyến tính). Độ sâu skin trong
-nhôm ở 50 Hz là $\delta \approx 12$ mm ≫ 3 mm bề dày đĩa → dòng xoáy gần như đều
-trong suốt độ dày, không cần mesh siêu mịn theo chiều dày.
+**Real example:** At 5 A RMS through 1000-turn inner coil, peak magnetic flux density $B_{\max}$
+in iron core ≈ 0.66 T (unsaturated, linear region). Skin depth in aluminum at
+50 Hz is $\delta \approx 12$ mm ≫ 3 mm disc thickness → eddy current nearly uniform
+through thickness, no ultra-fine through-thickness mesh needed.
 
-### (2) Mật độ tổn hao Joule — nguồn nhiệt chu kỳ bình quân
+### (2) Joule loss density — the cycle-averaged heat source
 
 $$q(r,z) = \frac{|J_e|^2}{2\sigma} = \frac{1}{2} \sigma \omega^2 |A_\varphi|^2 \quad [\text{W/m}^3]$$
 
-Ký hiệu:
-- $J_e = -j\omega\sigma A_\varphi$ — mật độ dòng xoáy (phasor)
-- Hệ số $1/2$ — kết quả từ lấy trung bình chu kỳ của $\sin^2(\omega t)$
+Symbols:
+- $J_e = -j\omega\sigma A_\varphi$ — eddy current density (phasor)
+- The factor $1/2$ — comes from cycle-averaging $\sin^2(\omega t)$
 
-**Vật lý:** Tổn hao bạo trận ($|J|^2/\sigma$) ở bất kỳ chạm dẫn nào cũng là
-$q = \frac{1}{2}\sigma\omega^2|A_\varphi|^2$. Cái quan trọng là nó phụ thuộc bình
-phương vào $|A_\varphi|$ — do đó I²-scaling mạnh mẽ: dôi dòng $\Rightarrow$ tăng 4 lần
-tổn hao. Hệ số $\omega^2$ cho thấy tần số cao hơn = tổn hao cao hơn (50 Hz so với
-DC là đêm và ngày).
+**Physics:** The Joule loss ($|J|^2/\sigma$) in any conductor is
+$q = \frac{1}{2}\sigma\omega^2|A_\varphi|^2$. What matters is that it depends on the
+square of $|A_\varphi|$ — hence the strong I²-scaling: doubling the current
+$\Rightarrow$ 4× the loss. The $\omega^2$ factor shows that a higher frequency means
+higher loss (50 Hz versus DC is night and day).
 
-**Ví dụ thực:** Tại 5 A đo được, tổn hao cuộn dây ≈ 106 W (126 W @ 7.8 A trong
-thử nghiệm IR 2026-06-23). Tổn hao đĩa nhôm ≈ 26 W (chứa từ trường mạnh vì gần lõi
-sắt). Kiểm chứng I²: tại 2 lần dòng (10 A), tổn hao dự đoán là $106 \times 4 = 424$ W
-vs $101 \times 4 \approx 404$ W — sai số < 5%, chứng tỏ mô hình tuyến tính giữ
-vững trong khoảng này.
+**Real example:** At the measured 5 A, coil loss ≈ 106 W (126 W @ 7.8 A in the
+2026-06-23 IR test). Aluminium disc loss ≈ 26 W (it sees a strong magnetic field
+because it is close to the iron core). I² check: at twice the current (10 A), the
+predicted loss is $106 \times 4 = 424$ W vs $101 \times 4 \approx 404$ W — an error
+< 5%, showing the linear model holds over this range.
 
-### (3) Độ dẫn điện phụ thuộc nhiệt độ — phản ứng với tăng nhiệt
+### (3) Temperature-dependent conductivity — the response to heating
 
 $$\sigma(T) = \frac{\sigma_0}{1 + \alpha(T - T_0)}$$
 
-Ký hiệu:
-- $\sigma_0$ — độ dẫn ở nhiệt độ tham chiếu $T_0$ (thường 20 °C)
-- $\alpha$ — hệ số nhiệt độ (nhôm, đồng ≈ 0.0039 K$^{-1}$)
+Symbols:
+- $\sigma_0$ — conductivity at the reference temperature $T_0$ (usually 20 °C)
+- $\alpha$ — temperature coefficient (aluminium, copper ≈ 0.0039 K$^{-1}$)
 
-**Vật lý:** Kim loại nóng hơn → nguyên tử rung động mạnh hơn → cản trở dòng điện →
-kháng suất tăng, độ dẫn giảm. Hiệu ứng này **không đối xứng**:
-- Tổn hao đĩa nhôm ∝ $\sigma_{\text{Al}}$ → đĩa nóng → $\sigma$ giảm → tổn hao giảm (phản hồi âm).
-- Tổn hao cuộn dây ∝ $1/\sigma_{\text{Cu}}$ → cuộn nóng → $\sigma$ giảm → tổn hao tăng (phản hồi dương).
+**Physics:** A hotter metal → atoms vibrate more → they impede the current →
+resistivity rises, conductivity falls. This effect is **asymmetric**:
+- Aluminium disc loss ∝ $\sigma_{\text{Al}}$ → hot disc → $\sigma$ falls → loss falls (negative feedback).
+- Coil loss ∝ $1/\sigma_{\text{Cu}}$ → hot coil → $\sigma$ falls → loss rises (positive feedback).
 
-Hai hiệu ứng này cân bằng một phần, nhưng cuộn dây vẫn là nguồn nhiệt dominant.
+The two effects partly cancel, but the coil remains the dominant heat source.
 
-**Ví dụ thực:** Tăng 70 K (từ 20 °C lên 90 °C) làm kháng suất tăng ~27%. Ở các điểm
-đo IR 2026-06-23 (cuộn trong 79 °C, cuộn ngoài 74 °C), ảnh hưởng của $\sigma(T)$ là
-điều chỉnh ±5–10 % trên công suất tính toán. Custom code cho phép áp dụng hiệu chỉnh
-này ở runtime: chỉ một phép nhân vô hướng, không cần giải lại FEM.
+**Real example:** A 70 K rise (from 20 °C to 90 °C) increases resistivity by ~27%.
+At the 2026-06-23 IR measurement points (inner coil 79 °C, outer coil 74 °C), the
+influence of $\sigma(T)$ is a ±5–10 % correction on the computed power. The custom
+code lets us apply this correction at runtime: a single scalar multiply, with no
+need to re-solve the FEM.
 
-### (4) Phương trình Fourier — lan tỏa nhiệt trong thời gian
+### (4) The Fourier equation — how heat spreads over time
 
 $$\rho c_p \frac{\partial T}{\partial t} = \nabla \cdot (k \nabla T) + q$$
 
-Ký hiệu:
-- $\rho c_p$ — dung lượng nhiệt khối lượng (J/(m³·K))
-- $k$ — độ dẫn nhiệt (W/(m·K))
-- $q$ — mật độ tổn hao từ công thức (2) trên
-- Điều kiện biên: convection Robin, $-k \frac{\partial T}{\partial n} = h(T - T_\infty)$
+Symbols:
+- $\rho c_p$ — volumetric heat capacity (J/(m³·K))
+- $k$ — thermal conductivity (W/(m·K))
+- $q$ — the loss density from equation (2) above
+- Boundary condition: Robin convection, $-k \frac{\partial T}{\partial n} = h(T - T_\infty)$
 
-**Vật lý:** Tổn hao Joule $q$ từ EM là "lửa"; phương trình Fourier là "cách lửa lan
-tỏa". Số hạng $\nabla \cdot (k \nabla T)$ là dẫn nhiệt Fourier (nguồn ở nơi nóng, chảy
-ra nơi lạnh). Hệ số đối lưu $h$ cho biết "khí gần có tác dụng mát bao nhiêu" — hiệu
-chuẩn từ dữ liệu cảm biến thực. Trong trạng thái ổn định ($\partial T/\partial t = 0$),
-nhiệt vào = nhiệt ra: $\int q \, dV = \int h(T - T_\infty) \, dA$.
+**Physics:** The Joule loss $q$ from the EM solve is the "fire"; the Fourier
+equation is "how the fire spreads". The term $\nabla \cdot (k \nabla T)$ is Fourier
+conduction (source where it is hot, flowing towards where it is cold). The
+convection coefficient $h$ says "how much cooling the nearby air provides" —
+calibrated from real sensor data. At steady state ($\partial T/\partial t = 0$),
+heat in = heat out: $\int q \, dV = \int h(T - T_\infty) \, dA$.
 
-**Ví dụ thực:** Đĩa nhôm R=80 mm, bề dày 3 mm, $\rho c_p \approx 2.47$ MJ/(m³·K).
-Hằng số thời gian nhiệt (từ ROM): $\tau \approx 5.5$ phút ở R=80 mm. Mô phỏng 20 phút
-= ~4τ đủ để tới steady state. Dữ liệu IR 2026-06-23 cho cuộn dây đạt trạng thái ổn
-định ≈ 7–10 phút tại 7.8 A, phù hợp với dự đoán.
+**Real example:** Aluminium disc R=80 mm, thickness 3 mm, $\rho c_p \approx 2.47$
+MJ/(m³·K). Thermal time constant (from the ROM): $\tau \approx 4.07$ minutes at
+R=80 mm. A 20-minute simulation ≈ 5τ, enough to reach steady state. The 2026-06-23
+IR data shows the coil reaching steady state in ≈ 7–10 minutes at 7.8 A, consistent
+with the prediction.
 
-### Tại sao chỉ custom code, không phải thư viện
+### Why custom code rather than a library
 
-**Các thư viện chung (scipy.sparse, FEniCS, FENICS) giải FEM tổng quát —
-nhưng không hiểu cấu trúc đặc biệt của bài toán này.** Custom code cho phép:
+**General-purpose libraries (scipy.sparse, FEniCS) solve FEM in general —
+but they do not understand the special structure of this problem.** Custom code
+lets us:
 
-1. **Kiểm soát ma trận từng phần tử.** Ví dụ: công thức (2) dựa trên $|A_\varphi|^2$
-   trong từng phần tử — cái này phải tính *sau* khi giải EM (lấy $A_\varphi$ từ node),
-   không phải *trước* như các generic solver. Custom code duyệt ma trận sau đó và
-   trích xuất q̂_plate(r,z) một cách chính xác.
+1. **Control the per-element matrices.** For example, equation (2) is based on
+   $|A_\varphi|^2$ within each element — this has to be computed *after* the EM
+   solve (taking $A_\varphi$ from the nodes), not *before*, as generic solvers
+   assume. The custom code walks the matrix afterwards and extracts q̂_plate(r,z)
+   exactly.
 
-2. **Xác minh energy balance 0.000%.** Tổng tổn hao vào = tổng nhiệt ra theo convection.
-   Nếu sai, ta biết ngay ở đâu — vì ta viết tất cả. Generic solver báo "solution found"
-   nhưng không chứng minh energy balance.
+2. **Verify energy balance to 0.000%.** Total loss in = total heat out by
+   convection. If it is wrong, we know immediately where — because we wrote all of
+   it. A generic solver reports "solution found" but does not prove energy balance.
 
-3. **Tách modal để ROM I²-scaling.** Real-time yêu cầu giải một lần, sau đó nhân I².
-   Điều này có thể làm vì tất cả dòng eddy và ohmic đều ∝ I² (từ vật lý). Custom code
-   lưu $q̂(r,z)$ (độc lập với I) rồi tại runtime chỉ nhân vô hướng.
+3. **Modal separation for the I²-scaling ROM.** Real-time requires solving once,
+   then multiplying by I². This is possible because all eddy and ohmic currents are
+   ∝ I² (from the physics). The custom code stores $q̂(r,z)$ (independent of I) and
+   at runtime only does a scalar multiply.
 
-4. **Ghép EM ↔ nhiệt liền mạch.** Công thức (2) → (4): output của EM là input của
-   nhiệt. Custom code nối chúng ngay giữa (gọi em_solver.py, lấy q, feed vào
-   thermal_solver.py), không có "import/export file" hay câu hỏi "format tương thích?"
+4. **Seamless EM ↔ thermal coupling.** Equation (2) → (4): the EM output is the
+   thermal input. The custom code connects them directly in memory (call
+   em_solver.py, take q, feed it into thermal_solver.py) — no "import/export file"
+   step and no "are the formats compatible?" question.
 
 ---
 
-## 3. Vì sao đầu ra là HTML thay vì thư viện/app khác
+## 3. Why the output is HTML rather than another library or app
 
-Yêu cầu cuối của đề bài: **AR app + QR code**. Kịch bản sử dụng: khách đứng cạnh
-rig, quét QR, twin mở ra ngay trên điện thoại của họ. Điều đó áp đặt các ràng buộc:
+The problem statement's final requirement: **AR app + QR code**. Usage scenario: a
+visitor stands next to the rig, scans the QR code, and the twin opens immediately on
+their phone. That imposes constraints:
 
-| Phương án | Vấn đề |
+| Option | Problem |
 |---|---|
-| App native / Unity AR | phải cài đặt, qua app store, toolchain nặng, mỗi lần sửa là một lần re-deploy |
-| Streamlit / Dash / Jupyter | cần **server Python chạy thường trực** — QR phải trỏ về một máy luôn bật |
-| matplotlib (`digital_twin.py`) | chỉ chạy trên desktop có Python — ta vẫn giữ nó làm công cụ dev nội bộ |
-| **1 file HTML tĩnh (chọn)** | không có vấn đề nào ở trên |
+| Native app / Unity AR | requires installation, an app store, a heavy toolchain; every fix is a re-deploy |
+| Streamlit / Dash / Jupyter | needs a **permanently running Python server** — the QR code has to point at a machine that is always on |
+| matplotlib (`digital_twin.py`) | only runs on a desktop with Python — we keep it as an internal dev tool |
+| **A single static HTML file (chosen)** | none of the above |
 
-Một file `digital_twin_fem.html` **tự chứa** (self-contained):
+A **self-contained** `digital_twin_fem.html`:
 
-- Kết quả FEM + ROM được **bake sẵn thành JavaScript** lúc build
-  (`build_twin_html_fem.py`) — trong browser chỉ còn phép toán O(n) →
-  60 fps trên điện thoại, đúng nhờ kiến trúc ROM ở mục 1.
-- Hosting tĩnh miễn phí (GitHub Pages) — không backend, không bảo trì server;
-  QR code (`gen_qr.py`) trỏ thẳng vào URL.
-- Không yêu cầu người xem cài bất cứ thứ gì: browser điện thoại là đủ.
-- Vẫn tương tác đầy đủ: slider dòng điện / núm variac (độ), 4 bán kính đĩa
-  swap trực tiếp, mô hình bay lên với dao động, T_amb lấy từ weather API.
+- The FEM + ROM results are **baked into JavaScript** at build time
+  (`build_twin_html_fem.py`) — in the browser only O(n) arithmetic remains →
+  60 fps on a phone, exactly thanks to the ROM architecture of section 1.
+- Free static hosting (GitHub Pages) — no backend, no server maintenance; the QR
+  code (`gen_qr.py`) points straight at the URL.
+- Requires the viewer to install nothing: a phone browser is enough.
+- Still fully interactive: current slider / variac dial (in degrees), 4 disc radii
+  swappable live, the model levitating with oscillation, T_amb from a weather API.
 
-Tóm lại: HTML không phải "thay thế thư viện mô phỏng" — nó là **kênh phân phối**
-duy nhất thỏa mãn ràng buộc "quét QR là chạy, không cài đặt". Toàn bộ vật lý vẫn
-được giải bằng Python; HTML chỉ nhận kết quả đã bake.
+In short: the HTML is not a "replacement for a simulation library" — it is the only
+**delivery channel** that satisfies the "scan the QR code and it runs, no install"
+constraint. All the physics is still solved in Python; the HTML only receives the
+baked results.
 
 ---
 
-## 4. Cấu trúc dự án, lộ trình đã qua, các bước còn lại
+## 4. Project structure, the road travelled, and the remaining steps
 
-### Kiến trúc pipeline (một chiều, mỗi file một nhiệm vụ)
+### Pipeline architecture (one-way, one job per file)
 
 ```
-params.yaml  (mọi tham số: hình học, vật liệu, dòng điện, BC — không hardcode)
+params.yaml  (every parameter: geometry, materials, current, BCs — nothing hardcoded)
     │
-config.py    (nạp + chuẩn hóa đơn vị mm→m, dẫn xuất I_peak = I_rms·√2)
+config.py    (load + normalise units mm→m, derive I_peak = I_rms·√2)
     │
 em_solver.py          thermal_solver.py
-(FEM phasor A_φ,      (FEM nhiệt đối xứng trục,
- tổn hao eddy + ohmic, energy balance 0.000%)
- lực nâng, benchmark)
+(phasor A_φ FEM,      (axisymmetric thermal FEM,
+ eddy + ohmic loss,    energy balance 0.000%)
+ lift force, benchmark)
     └────────┬────────┘
-          rom.py      (ROM real-time: I²-scaling + transient bậc nhất + σ(T))
+          rom.py      (real-time ROM: I²-scaling + first-order transient + σ(T))
              │
   ┌──────────┼──────────────────┐
 digital_twin.py   visualize.py   build_twin_html_fem.py
-(twin tương tác   (revolve 2D→3D, (bake → digital_twin_fem.html,
- matplotlib, dev)  GLB/OBJ)        sản phẩm AR cuối)
+(interactive twin (revolve 2D→3D, (bake → digital_twin_fem.html,
+ matplotlib, dev)  GLB/OBJ)        the final AR deliverable)
              │
 data_io.py + arduino/thermal_sensor.ino   gen_qr.py
-(cầu nối cảm biến → hiệu chuẩn ROM)       (QR → URL hosted)
+(sensor bridge → ROM calibration)         (QR → hosted URL)
 ```
 
-### Lộ trình đã đi qua (theo README roadmap)
+### The road travelled (per the README roadmap)
 
-- ✅ **Phase 1a** — Solver nhiệt đối xứng trục, kiểm chứng energy balance 0.000 %.
-- ✅ **Phase 1b** — Solver EM (dòng xoáy AC, phasor); tổn hao thực tính được;
-  hình học cuộn dây được đo lại bằng thước (2026-07-10, thay thế ước lượng
-  2026-07-01): đĩa Ø160 mm, cuộn trong 1000 vòng r=27.9–61.9 mm, cuộn ngoài
-  500 vòng r=82.9–102.9 mm.
-- ✅ **Phase 2** — ROM real-time (I² + transient + σ(T)); τ ≈ 4.07 phút @ R=80 mm
-  (tính lại sau khi đo lại hình học 2026-07-10).
-- ✅ **Phase 3** — Vòng lặp twin tương tác (slider I, chọn đĩa).
+- ✅ **Phase 1a** — Axisymmetric thermal solver, energy balance verified at 0.000 %.
+- ✅ **Phase 1b** — EM solver (AC eddy currents, phasor); real losses computed;
+  coil geometry re-measured with a ruler (2026-07-10, replacing the 2026-07-01
+  estimates): Ø160 mm disc, inner coil 1000 turns r=27.9–61.9 mm, outer coil
+  500 turns r=82.9–102.9 mm.
+- ✅ **Phase 2** — Real-time ROM (I² + transient + σ(T)); τ ≈ 4.07 min @ R=80 mm
+  (recomputed after the 2026-07-10 geometry re-measurement).
+- ✅ **Phase 3** — Interactive twin loop (current slider, disc selector).
 - ✅ **Phase 4** — Revolve 2D→3D, export GLB/OBJ (PyVista/meshio).
-- ✅ **Phase 5** — AR twin HTML độc lập + QR code generator.
-- ✅ **Phase 6** — Kiểm chứng kích thước miền (Dirichlet vs Neumann, hộp 1×1 m
-  theo yêu cầu giáo sư); chạy lại toàn pipeline với T_amb = 20 °C.
-- ✅ **Phase 8** — Pipeline dữ liệu cảm biến (`data_io.py` + firmware Arduino),
-  đã test đầu-cuối bằng CSV giả lập, chưa cần phần cứng.
-- ✅ **Hiệu chuẩn với rig thật** — 2 điểm vận hành đo được (190 V→5 A,
-  270 V→7.8 A), ảnh nhiệt HIKMICRO; mạng nhiệt lumped của cuộn dây fit được
-  RMS ≈ 2.5–3 °C; lực nâng validate khớp quan sát độ cao bay.
+- ✅ **Phase 5** — Standalone HTML AR twin + QR code generator.
+- ✅ **Phase 6** — Domain-size validation (Dirichlet vs Neumann, 1×1 m box as the
+  professor requested); full pipeline re-run with T_amb = 20 °C.
+- ✅ **Phase 8** — Sensor data pipeline (`data_io.py` + Arduino firmware), tested
+  end to end with a synthetic CSV, no hardware needed yet.
+- ✅ **Calibration against the real rig** — 2 measured operating points (190 V→5 A,
+  270 V→7.8 A), HIKMICRO thermal images; the coil's lumped thermal network fits to
+  RMS ≈ 2.5–3 °C.
+  ⚠️ **Correction (2026-07-28 doc audit):** an earlier version of this line also
+  claimed "lift force validated against the observed levitation height". That is no
+  longer true — since the 2026-07-10 geometry re-measurement the predicted gap
+  (z_eq ≈ 11.7 mm plate-bottom / 14.7 mm visible) disagrees with the observed 7–8 mm.
+  See the open question below and CLAUDE.md; **do not treat z_eq as validated.**
 
-### Các bước còn lại
+### Remaining steps
 
-1. **Phase 7 — phần cứng cảm biến thật** (bước lớn nhất, xem mục 5): lắp
-   Arduino + 2× MAX31855, ghi một lần chạy thực, hiệu chuẩn lại ROM từ dữ liệu đó.
-2. **Hosting + QR**: chọn URL (khả năng cao GitHub Pages) rồi phát hành QR.
-3. Các câu hỏi vật lý đang mở (không chặn tiến độ):
-   - ✅ Kiểm tra nam châm cho vòng sắt ngoài: **đã xong 2026-07-10** — vòng
-     là sắt từ (μᵣ=1000, giống lõi trung tâm), vị trí đo lại r=64.9–79.9mm
-     (trước đó 81–101mm). Còn mở: hợp kim/đường cong B-H thật chưa từng đo
-     (μᵣ=1000 chỉ là placeholder) — xem mục lực nâng ở trên.
-   - Bảng hiệu chuẩn núm variac → dòng điện dày hơn (hiện chỉ 3 điểm neo).
-   - Hỗ trợ đĩa vành khuyên (3 đĩa thực r_out=55/r_in=27.5 mm chưa mesh được).
-   - Benchmark TEAM 28 gốc: z_eq ≈ 14.5 mm vs 11.3 mm kỳ vọng (lệch 28%, số
-     liệu 2026-07-11 sau khi vá 1 bug RMS/peak — trước đó là 6.8mm/lệch 40%
-     theo hướng khác) — vẫn tạm dừng theo thống nhất nhóm, không ảnh hưởng rig thật.
-   - ✅ `validate_domain_size()`: **PASS trở lại** (mọi sai khác <1%, vd P_plate
-     0.767%) sau khi chạy lại trên hình học+sắt mới 2026-07-10 — từng FAIL
-     2.71% trước đó, nguyên nhân regression cũ vẫn chưa rõ nhưng không còn chặn.
+1. **Phase 7 — real sensor hardware** (the biggest step, see section 5): build the
+   Arduino + 2× MAX31855, log a real run, re-calibrate the ROM from that data.
+2. **Hosting + QR**: choose a URL (most likely GitHub Pages) and then publish the QR.
+3. Open physics questions (none of them blocking):
+   - ✅ Magnet test on the outer iron ring: **done 2026-07-10** — the ring is
+     ferromagnetic (μᵣ=1000, like the centre core), position re-measured at
+     r=64.9–79.9mm (previously 81–101mm). Still open: the real alloy / B-H curve
+     has never been measured (μᵣ=1000 is only a placeholder) — see the lift-force
+     item above.
+   - A denser variac dial → current calibration table (currently only 3 anchor points).
+   - Annulus disc support (3 real discs, r_out=55/r_in=27.5 mm, not meshable yet).
+   - Original TEAM 28 benchmark: z_eq ≈ 14.5 mm vs 11.3 mm expected (28% off, figure
+     from 2026-07-11 after patching an RMS/peak bug — before that it was 6.8mm/40%
+     off in the other direction) — still paused by team agreement, does not affect
+     the real rig.
+   - ✅ `validate_domain_size()`: **PASSES again** (all diffs <1%, e.g. P_plate
+     0.767%) after re-running on the new 2026-07-10 geometry + iron — it had FAILed
+     at 2.71% before; the cause of that old regression is still unknown but no
+     longer blocking.
 
 ---
 
-## 5. Phương án kết nối phần cứng (validation loop)
+## 5. Hardware connection plan (validation loop)
 
-Theo chỉ đạo của giáo sư (Juni 2026): *"Schaut was es genau bräuchte und baut
+Per the professor's guidance (June 2026): *"Schaut was es genau bräuchte und baut
 dann selbst eine kleine Lösung — Arduino plus ein paar Sensoren, und dann
-einfach noch ein Infrarot-Thermometer."* Chi tiết đầy đủ: `docs/SENSOR_PLAN.md`.
+einfach noch ein Infrarot-Thermometer."* Full details: `docs/SENSOR_PLAN.md`.
 
-### Kiến trúc đo
+### Measurement architecture
 
 ```
-Thermocouple K #1 (lõi/cuộn trong) ─▶ MAX31855 ─┐
-                                                 ├─▶ Arduino Uno/Nano ─USB serial─▶ Laptop
-Thermocouple K #2 (đáy đĩa nhôm)   ─▶ MAX31855 ─┘        (CSV, 1 Hz)
-IR thermometer cầm tay ──▶ đo điểm kiểm tra thủ công (đối chiếu)
+Type-K thermocouple #1 (core/inner coil) ─▶ MAX31855 ─┐
+                                                       ├─▶ Arduino Uno/Nano ─USB serial─▶ Laptop
+Type-K thermocouple #2 (disc underside)  ─▶ MAX31855 ─┘        (CSV, 1 Hz)
+Handheld IR thermometer ──▶ manual spot checks (cross-reference)
 ```
 
-- **Vì sao thermocouple chứ không chỉ IR**: ảnh nhiệt IR trên nhôm bóng /
-  lõi gốm **không tin được** (sai emissivity — đã xác nhận trong đợt đo
-  HIKMICRO 2026-06-23); chỉ cuộn dây sơn tối là đọc IR chuẩn. Thermocouple
-  tiếp xúc giải quyết đúng chỗ IR thất bại: **đáy đĩa nhôm** — cũng chính là
-  số liệu cần để phân định câu hỏi đang mở "đĩa hay cuộn dây nóng hơn".
-- Firmware đã viết xong: `arduino/thermal_sensor.ino` (2× MAX31855 qua SPI,
-  xuất CSV 1 Hz qua serial).
+- **Why thermocouples and not IR alone**: IR thermal images of shiny aluminium /
+  the ceramic core are **not trustworthy** (wrong emissivity — confirmed during the
+  2026-06-23 HIKMICRO session); only the dark-varnished coil gives a reliable IR
+  reading. A contact thermocouple solves exactly where IR fails: **the underside of
+  the aluminium disc** — which is also the measurement needed to settle the open
+  question of whether the disc or the coil runs hotter.
+- Firmware is already written: `arduino/thermal_sensor.ino` (2× MAX31855 over SPI,
+  CSV output at 1 Hz over serial).
 
-### Pipeline phần mềm (đã chạy được, chỉ chờ phần cứng)
+### Software pipeline (already working, only waiting on hardware)
 
 ```
 Arduino (CSV serial) ─▶ data_io.py SensorReader (mode serial | mock)
                      ─▶ calibrate_from_file()
-                     ─▶ rom.calibrate_UA()   ← fit hA, τ từ dữ liệu đo
+                     ─▶ rom.calibrate_UA()   ← fit hA, τ from measured data
 ```
 
-Toàn bộ chuỗi này **đã được test đầu-cuối** với `mock_sensor_data.csv` —
-tức là ngày phần cứng về, chỉ cần cắm USB và đổi `--mode mock` thành
-`--mode serial`, không phải viết thêm code.
+This whole chain has been **tested end to end** with `mock_sensor_data.csv` — so on
+the day the hardware arrives, it is just plug in the USB and change `--mode mock` to
+`--mode serial`; no additional code needs writing.
 
-### Các bước triển khai
+### Implementation steps
 
-1. Chốt shopping list (Reichelt/Conrad: Arduino Nano, 2× MAX31855 breakout,
-   2× thermocouple loại K, dây) → giáo sư mua.
-2. Lắp + nạp firmware, kiểm tra bằng nước đá/nước sôi (2 điểm chuẩn).
-3. Ghi một lần chạy thật đủ dài (nguội → steady state, ≥ 3τ ≈ 20 phút) tại
+1. Finalise the shopping list (Reichelt/Conrad: Arduino Nano, 2× MAX31855 breakout,
+   2× type-K thermocouple, wire) → the professor purchases it.
+2. Assemble + flash the firmware, check against ice water / boiling water (2 reference points).
+3. Log one sufficiently long real run (cold → steady state, ≥ 3τ ≈ 20 minutes) at
    190 V / 5 A.
-4. `data_io.py --mode calibrate` → hiệu chuẩn lại `hA_inner/hA_outer/UA` từ
-   dữ liệu thật (thay cho hiệu chuẩn IR hiện tại).
-5. Ghi thêm một lần **cooldown** (tắt nguồn, đo nguội) → fit riêng mô hình
-   hai-nút của cuộn dây (`coil_G_wind_W_per_K`, hiện mới đúng cỡ độ lớn).
-6. Mở rộng (sau này, ngoài Phase 1): thiết bị đo dòng real-time (giáo sư đã
-   xác nhận cần mua) → twin nhận I(t) đo thật thay vì hằng số 5 A; xa hơn nữa
-   có thể stream trực tiếp vào HTML twin qua Web Serial API.
+4. `data_io.py --mode calibrate` → re-calibrate `hA_inner/hA_outer/UA` from real
+   data (replacing the current IR-based calibration).
+5. Log a **cooldown** run as well (power off, measure the cooling) → separately fit
+   the coil's two-node model (`coil_G_wind_W_per_K`, currently only
+   order-of-magnitude correct).
+6. Extension (later, beyond Phase 1): a real-time current measurement device (the
+   professor has confirmed one needs to be purchased) → the twin takes a measured
+   I(t) instead of a constant 5 A; further out, this could stream directly into the
+   HTML twin via the Web Serial API.
 
 ---
 
-## Một câu trả lời gọn cho giáo sư
+## A short answer for the professor
 
-> "Chúng em không chọn code *thay cho* mô phỏng — chúng em code **vì** yêu cầu
-> là digital twin real-time trên điện thoại. Các công cụ như SimScale giải một
-> kịch bản trong vài phút; twin của chúng em phải trả lời trong mili-giây khi
-> người dùng xoay núm dòng điện. Điều đó chỉ khả thi khi khai thác cấu trúc
-> vật lý của bài toán (tổn hao ∝ I², phân bố không gian cố định) để giải FEM
-> đúng một lần rồi thu về ROM — và việc đó đòi hỏi kiểm soát solver ở mức mã
-> nguồn. Đổi lại, chúng em kiểm chứng nghiêm ngặt: energy balance 0.000 %,
-> I²-scaling đúng tuyệt đối, lực nâng và nhiệt độ cuộn dây khớp số liệu đo
-> trên rig thật."
+> "We did not choose to write code *instead of* simulating — we wrote code
+> **because** the requirement is a real-time digital twin on a phone. Tools like
+> SimScale solve one scenario in a few minutes; our twin has to answer in
+> milliseconds while the user turns the current knob. That is only feasible by
+> exploiting the physical structure of the problem (loss ∝ I², fixed spatial
+> distribution) to solve the FEM exactly once and reduce it to a ROM — and that
+> requires controlling the solver at source-code level. In exchange, we verify
+> rigorously: energy balance 0.000 %, exact I²-scaling, and coil temperatures that
+> match the measurements on the real rig."
+
+> ⚠️ **2026-07-28 doc audit:** this closing quote previously also claimed the lift
+> force matched the rig measurements. It no longer does — see the correction in
+> section 4. The claim has been removed rather than softened, because the
+> levitation-gap mismatch is a genuine open question, not a tolerance issue.

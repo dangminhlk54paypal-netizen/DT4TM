@@ -133,7 +133,7 @@ einzelne `calibrate_UA()`-Anpassung.
    Vergleiche T_meas mit T_sim. Erwartete ΔT_plate ≈ 3–5 K über Umgebung.
 
 2. **Transient Check**: Gerät einschalten, T(t) aufzeichnen. Vergleiche Zeitkonstante τ
-   (ROM: ~3.4 min) mit gemessenem Aufheizverhalten.
+   (ROM: ~4.07 min bei R=80mm, Stand 2026-07-10) mit gemessenem Aufheizverhalten.
 
 3. **Spatial Check**: IR Thermometer an verschiedenen Stellen der Scheibe. Vergleiche
    mit der simulierten radialen Temperaturverteilung.

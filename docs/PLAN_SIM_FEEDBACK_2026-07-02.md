@@ -1,333 +1,347 @@
-# KẾ HOẠCH — Nâng cấp mô phỏng 3D theo feedback thực tế (2026-07-02)
+# PLAN — 3D simulation upgrades from real-rig feedback (2026-07-02)
 
-Chia thành **4 work package (WP-A..D)** cho 3–4 agent Sonnet chạy song song.
-Mỗi WP tự chứa: nguyên nhân gốc, thiết kế vật lý, vị trí code, các bước, và
-tiêu chí nghiệm thu. Đọc CLAUDE.md trước khi bắt đầu.
+> Translated to English 2026-07-28 (repo-wide EN pass). Content otherwise unchanged:
+> this is a historical planning record, so its numbers are deliberately left as they
+> stood on 2026-07-02, including ones that later measurements superseded (most
+> notably the iron-ring position/material and every levitation-gap figure).
 
-> **QUAN TRỌNG — chống conflict:** cả 4 WP đều đụng `build_twin_html_fem.py`
-> nhưng ở các VÙNG KHÁC NHAU (xem "Bản đồ conflict" cuối file). Mỗi agent làm
-> trong **git worktree riêng**, merge theo thứ tự: **WP-C → WP-B → WP-A → WP-D**.
-> WP-D là người tích hợp + kiểm thử cuối.
+Split into **4 work packages (WP-A..D)** for 3–4 Sonnet agents to run in parallel.
+Each WP is self-contained: root cause, physical design, code location, steps, and
+acceptance criteria. Read CLAUDE.md before starting.
 
----
-
-## Bối cảnh — 3 feedback từ quan sát rig thật
-
-1. **Dao động levitation sai**: (a) tăng time-speed slider thì dao động KHÔNG
-   nhanh theo; (b) thực tế đĩa rung lạch cạch từ ~0.1A, rung mạnh dần theo
-   1→3A rồi mới nâng lên — mô phỏng hiện tại đứng im tuyệt đối dưới 4.54A;
-   (c) sau khi ổn định ở 5A, tăng lên 7.75–8A thì gap chỉ nhích nhẹ và dao
-   động NHỎ hơn nhiều so với lúc cất cánh — mô phỏng hiện tại dao động mạnh
-   y như nhau mọi lúc.
-2. **Cuộn dây nguội quá nhanh**: dây vừa nóng cần RẤT lâu để nguội trong không
-   khí; model RC bậc-1 hiện tại cho τ nguội = τ nóng (~350s) — phi thực tế.
-3. **Bán kính đĩa**: hiện tại R=80mm (Ø160mm). Muốn thêm đĩa lớn hơn che kín
-   tới mép ngoài separator ring (r=101mm) → đĩa **R=101mm (Ø202mm)**.
+> **IMPORTANT — conflict avoidance:** all 4 WPs touch `build_twin_html_fem.py` but in
+> DIFFERENT REGIONS (see the "Conflict map" at the end of this file). Each agent works
+> in its **own git worktree**, merging in the order: **WP-C → WP-B → WP-A → WP-D**.
+> WP-D is the integrator and final tester.
 
 ---
 
-## WP-A — Vật lý dao động levitation (agent 1)
+## Background — 3 pieces of feedback from observing the real rig
 
-> **STATUS: DONE (2026-07-02).** Xem CLAUDE.md Code status → mục "WP-A" cho đầy
-> đủ kết quả. Tóm tắt: `levStep` chuyển sang nghiệm giải tích + sim-time (speed
-> slider giờ hoạt động đúng), jitter dưới ngưỡng nâng đã có, ζ(I) đã theo I².
-> **2 câu hỏi mở chưa trả lời được** (xem mục "Câu hỏi cần user trả lời" cuối
-> file) — không chặn, code đã có chỗ điền sẵn.
+1. **Levitation oscillation is wrong**: (a) turning up the time-speed slider does NOT
+   speed up the oscillation; (b) in reality the disc rattles from ~0.1A, vibrating
+   more strongly through 1→3A before it finally lifts — the current simulation sits
+   perfectly still below 4.54A; (c) after settling at 5A, going up to 7.75–8A only
+   nudges the gap slightly and the oscillation is much SMALLER than at lift-off — the
+   current simulation oscillates equally strongly at all times.
+2. **The coil cools far too quickly**: a hot wire takes a VERY long time to cool in
+   air; the current first-order RC model gives τ_cool = τ_heat (~350s) — unrealistic.
+3. **Disc radius**: currently R=80mm (Ø160mm). We want a larger disc covering all the
+   way to the outer edge of the separator ring (r=101mm) → an **R=101mm (Ø202mm)** disc.
 
-### Nguyên nhân gốc (đã xác minh trong code)
-- `build_twin_html_fem.py` dòng ~1150–1170: dao động là **lò xo–khối lượng
-  tuyến tính hoá quanh z_eq**: `m·z̈ = mω²(z_eq−z) − 2ζω·m·ż` với
-  `LEV_OMEGA = √(g/z0) ≈ 21.4 rad/s`, `LEV_ZETA = 0.02` (hằng số).
-- Dòng ~1998: `levStep(I_display, wall_dt)` — tích phân theo **wall-time**
-  (comment ghi rõ là cố ý). Đây là lý do speed slider không ảnh hưởng.
-- Dòng ~1163: khi `I < I_LEV_MIN (4.54A)` thì `lev.z=0, lev.v=0` cứng → không
-  có rung dưới ngưỡng nâng.
+---
 
-### Thiết kế vật lý mới
-1. **Tích phân theo sim-time**: gọi `levStep(I_display, dt_sim)` thay vì
-   `wall_dt`. Vì ở speed 200× thì `dt_sim ≈ 3.3s/frame` mà ω=21 rad/s, KHÔNG
-   dùng Euler substep (sẽ cần ~700 substep/frame) — thay bằng **nghiệm giải
-   tích** của dao động tắt dần dưới-tới-hạn mỗi frame (exact, ổn định vô điều
-   kiện):
+## WP-A — Levitation oscillation physics (agent 1)
+
+> **STATUS: DONE (2026-07-02).** See CLAUDE.md Code status → the "WP-A" entry for full
+> results. Summary: `levStep` switched to a closed-form solution + sim-time (the speed
+> slider now works correctly), sub-lift-off jitter added, ζ(I) now follows I².
+> **2 open questions remain unanswered** (see "Questions for the user to answer" at the
+> end of this file) — not blocking; the code has placeholders ready.
+
+### Root cause (verified in the code)
+- `build_twin_html_fem.py` lines ~1150–1170: the oscillation is a **spring-mass system
+  linearised around z_eq**: `m·z̈ = mω²(z_eq−z) − 2ζω·m·ż` with
+  `LEV_OMEGA = √(g/z0) ≈ 21.4 rad/s` and a constant `LEV_ZETA = 0.02`.
+- Line ~1998: `levStep(I_display, wall_dt)` — integrated against **wall-time** (the
+  comment says this is deliberate). This is why the speed slider has no effect.
+- Line ~1163: when `I < I_LEV_MIN (4.54A)`, `lev.z=0, lev.v=0` is hard-set → no
+  vibration below the lift-off threshold.
+
+### New physical design
+1. **Integrate in sim-time**: call `levStep(I_display, dt_sim)` instead of `wall_dt`.
+   Because at 200× speed `dt_sim ≈ 3.3s/frame` while ω=21 rad/s, do NOT use Euler
+   substepping (it would need ~700 substeps/frame) — use the **closed-form solution**
+   of the under-damped oscillation each frame instead (exact, unconditionally stable):
    ```
    z(t+dt) = z_eq + e^(−ζωdt)·[ (z−z_eq)·cos(ω_d dt) + ((v+ζω(z−z_eq))/ω_d)·sin(ω_d dt) ]
    ω_d = ω√(1−ζ²)
    ```
-   (cập nhật v tương ứng bằng đạo hàm của biểu thức trên). Giữ floor-contact
-   clamp `z ≥ 0`.
-2. **Rung dưới ngưỡng nâng (0.1A → I_min)**: lực AC tức thời
-   `F(t) ∝ i(t)² = I²·(1−cos(2ωt))/2` → thành phần đập **100 Hz**. Đĩa nằm
-   trên coil bị "rúc lăng bần bật". 100Hz không render nổi ở 60fps → mô phỏng
-   bằng **jitter biên độ vật lý**: khi `lev.z < 0.5mm` và `I > 0.05A`, cộng
-   displacement hiển thị `A_jit·sin(φ₁)+0.5·A_jit·sin(φ₂)` với 2 pha chạy
-   nhanh không đồng bộ (aliased shimmer), biên độ:
+   (update v correspondingly by differentiating the expression above). Keep the
+   floor-contact clamp `z ≥ 0`.
+2. **Sub-lift-off vibration (0.1A → I_min)**: the instantaneous AC force
+   `F(t) ∝ i(t)² = I²·(1−cos(2ωt))/2` → a **100 Hz** beat component. The disc sitting
+   on the coil rattles. 100Hz cannot be rendered at 60fps → simulate it with a
+   **physical jitter amplitude**: when `lev.z < 0.5mm` and `I > 0.05A`, add a display
+   displacement `A_jit·sin(φ₁)+0.5·A_jit·sin(φ₂)` using 2 fast, non-synchronised
+   phases (an aliased shimmer), with amplitude:
    ```
-   A_jit(I) = JIT_MM · (I / I_ref)²     (JIT_MM ≈ 0.3 display-mm, clamp ≤ 1mm)
+   A_jit(I) = JIT_MM · (I / I_ref)²     (JIT_MM ≈ 0.3 display-mm, clamped ≤ 1mm)
    ```
-   → 0.1A rung li ti, 3A rung rõ, biến mất mượt khi đĩa nâng lên (fade theo
-   `max(0, 1 − lev.z/0.5)`).
-3. **Damping tăng theo dòng** (eddy-current damping ∝ B² ∝ I²):
+   → a tiny rattle at 0.1A, a clear one at 3A, fading away smoothly as the disc lifts
+   (fade by `max(0, 1 − lev.z/0.5)`).
+3. **Damping rising with current** (eddy-current damping ∝ B² ∝ I²):
    ```
-   ζ(I) = ζ0 + ζ1·(I/5)²    với ζ(5A) ≈ 0.02 (giữ settle ~9s lúc cất cánh),
+   ζ(I) = ζ0 + ζ1·(I/5)²    with ζ(5A) ≈ 0.02 (keeping the ~9s settle at lift-off),
                              ζ(7.75A) ≈ 0.05–0.08
    ```
-   → bước dòng 5→7.75A dao động nhỏ + tắt nhanh hơn hẳn lúc lift-off, đúng
-   quan sát.
-4. **CALIBRATION MỞ — hỏi user**: model hiện tại `z_eq(I)=4.1+2·z0·ln(I/5)`
-   với `z0=21.4mm` cho gap@7.75A ≈ 22.9mm (nâng RẤT nhiều), nhưng user quan
-   sát gap chỉ "nâng lên một tý". Nhiều khả năng `Z_DECAY_MM` quá lớn. Việc
-   của agent: viết công thức refit `z0 = (z_obs − 4.1)/(2·ln(7.75/5))` và ĐỂ
-   SẴN chỗ điền `z_obs` (gap thật ở 7.75A, user ước lượng bằng mm hoặc "x lần
-   bề dày đĩa"). Ghi chú: ω = √(g/(z0·1e-3)) đổi theo → cập nhật cùng nhau.
-5. **(Tuỳ chọn, làm cuối)**: xoay tròn trang trí — thêm `lev.spin` (rad/s) tắt
-   dần chậm (τ~60s), kích hoạt bằng nút "Poke disc" nhỏ trong panel; đĩa quay
-   quanh trục Y khi spin ≠ 0. Chỉ làm nếu còn thời gian.
+   → stepping the current 5→7.75A gives a smaller oscillation that damps out much
+   faster than at lift-off, matching the observation.
+4. **OPEN CALIBRATION — ask the user**: the current model `z_eq(I)=4.1+2·z0·ln(I/5)`
+   with `z0=21.4mm` gives gap@7.75A ≈ 22.9mm (a VERY large lift), but the user observes
+   the gap only "rises a little". `Z_DECAY_MM` is most likely too large. The agent's
+   job: write the refit formula `z0 = (z_obs − 4.1)/(2·ln(7.75/5))` and LEAVE A
+   PLACEHOLDER for `z_obs` (the real gap at 7.75A, which the user can estimate in mm
+   or as "× the disc thickness"). Note: ω = √(g/(z0·1e-3)) changes with it → update
+   them together.
+5. **(Optional, do last)**: decorative spin — add `lev.spin` (rad/s) decaying slowly
+   (τ~60s), triggered by a small "Poke disc" button in the panel; the disc rotates
+   about the Y axis while spin ≠ 0. Only if there is time left.
 
-### Vùng code
-JS: khối "Levitation gap physics" (~dòng 1129–1170), lời gọi trong render loop
-(~dòng 1995–2000), telemetry gap (~dòng 2020–2022). KHÔNG đụng `romStep`,
-KHÔNG đụng geometry Python.
+### Code region
+JS: the "Levitation gap physics" block (~lines 1129–1170), its call in the render loop
+(~lines 1995–2000), the gap telemetry (~lines 2020–2022). Do NOT touch `romStep`, do
+NOT touch the Python geometry.
 
-### Nghiệm thu (headless Playwright, pattern có sẵn trong các session trước)
-- 0 lỗi JS console.
-- Speed 1× vs 10×: thời gian settle (wall) của dao động sau bước dòng phải
-  ngắn hơn ~10× ở speed 10×.
-- I=0.5A: đĩa jitter thấy được (đo bằng `twinDebug` / position sampling),
-  I=0: đứng im tuyệt đối.
-- Bước 5→7.75A sau khi settle: overshoot đỉnh < 40% overshoot của bước 0→5A
-  (chuẩn hoá theo biên độ bước).
-- `lev.z` settle vẫn đúng `levGapEqMm(I)` ±0.05mm.
+### Acceptance (headless Playwright, the pattern already exists from earlier sessions)
+- 0 JS console errors.
+- Speed 1× vs 10×: the wall-clock settle time of the oscillation after a current step
+  must be ~10× shorter at speed 10×.
+- I=0.5A: visible disc jitter (measured via `twinDebug` / position sampling);
+  I=0: perfectly still.
+- Stepping 5→7.75A after settling: peak overshoot < 40% of the 0→5A step's overshoot
+  (normalised by the step amplitude).
+- The settled `lev.z` still matches `levGapEqMm(I)` to ±0.05mm.
 
 ---
 
-## WP-B — Làm nguội cuộn dây thực tế hơn (agent 2)
+## WP-B — More realistic coil cooling (agent 2)
 
-> **STATUS: DONE (2026-07-02).** Xem CLAUDE.md Code status → mục "WP-B". Tóm
-> tắt: đối lưu phi tuyến (h~ΔT^0.25) + coil 2-node (surface/winding-core,
-> `coil_G_wind_W_per_K=1.0`) đã implement + fit lại từ đầu. RMS ramp-test=2.5°C
-> (tốt hơn cả claim cũ), cooldown chậm hơn ~6-8× so với model cũ. Steady-state
-> không đổi (verify được). **Phát hiện phụ**: model cũ (trước WP-B) thực ra có
-> RMS=6.6°C trên `thermal_ramp_test`, không phải ~3°C như tài liệu cũ ghi — claim
-> đó đã cũ, có lẽ lệch sau khi thêm iron contact-conduction mà không re-check.
-> Chưa có dữ liệu NGUỘI thật để fit định lượng — xem câu hỏi cuối file.
+> **STATUS: DONE (2026-07-02).** See CLAUDE.md Code status → the "WP-B" entry.
+> Summary: nonlinear convection (h~ΔT^0.25) + a 2-node coil (surface/winding-core,
+> `coil_G_wind_W_per_K=1.0`) implemented and refitted from scratch. Ramp-test RMS=2.5°C
+> (better than even the old claim), cooldown ~6-8× slower than the old model.
+> Steady state unchanged (verified). **Side finding**: the old model (pre-WP-B)
+> actually had RMS=6.6°C on `thermal_ramp_test`, not the ~3°C the old documentation
+> claimed — that claim was stale, probably having drifted after iron contact-conduction
+> was added without a re-check. There is still no real COOLDOWN data to fit
+> quantitatively — see the questions at the end of this file.
 
-### Nguyên nhân gốc
-`romStep()` (~dòng 996–1035): mỗi coil là 1 node RC tuyến tính
-`dT/dt = (P − hA·(T−T_air))/C` → nguội đối xứng với nóng, τ ≈ C/hA ≈ 350s.
-Thực tế: (a) đối lưu tự nhiên yếu dần khi ΔT nhỏ (h ∝ ΔT^0.25) → đuôi nguội
-rất dài; (b) fit hiện tại `coil_C_scale=0.2241` nghĩa là chỉ 22% khối đồng
-"nhìn thấy được" bằng IR — phần lõi cuộn dây (78% khối lượng) trữ nhiệt sâu và
-nhả ra chậm khi tắt dòng.
+### Root cause
+`romStep()` (~lines 996–1035): each coil is a single linear RC node,
+`dT/dt = (P − hA·(T−T_air))/C` → cooling is symmetric with heating, τ ≈ C/hA ≈ 350s.
+In reality: (a) natural convection weakens as ΔT shrinks (h ∝ ΔT^0.25) → a very long
+cooling tail; (b) the current fit `coil_C_scale=0.2241` means only 22% of the copper
+mass is "visible" to IR — the winding core (78% of the mass) stores heat deep inside
+and releases it slowly once the current is switched off.
 
-### Thiết kế vật lý mới (làm CẢ HAI, chúng bổ trợ nhau)
-1. **Đối lưu phi tuyến** (mỗi node coil + iron):
+### New physical design (do BOTH — they complement each other)
+1. **Nonlinear convection** (for each coil + iron node):
    ```
    hA_eff(ΔT) = hA_cal · (max(ΔT, 0.1) / ΔT_cal)^0.25
    ```
-   `ΔT_cal` = độ tăng nhiệt tại điểm calibrate (T_ss(5A) − T_air ≈ 11.5K
-   inner) → steady-state tại 5A KHÔNG đổi, nhưng khi nguội ΔT nhỏ → hA giảm
-   → đuôi nguội kéo dài. (Đây là định luật Churchill-Chu đơn giản hoá.)
-2. **Coil 2 node** (surface + winding-core):
-   - `C_surf = coil_C_scale · C_solid` (= giá trị fit hiện tại, IR nhìn thấy)
-   - `C_deep = (1 − coil_C_scale) · C_solid` (phần đồng còn lại, có thật)
-   - Liên kết `G_wind` (W/K) giữa 2 node, nguồn P chia vào cả hai theo tỷ lệ C.
-   - `G_wind` là tham số fit MỚI: chọn sao cho transient NÓNG (ramp test
-     session 2, `thermal_ramp_test` trong params.yaml) vẫn RMS ≤ 3.5°C
-     (không tệ hơn fit cũ 3°C nhiều), tức G_wind đủ nhỏ để node deep gần như
-     "tàng hình" trong 450s đầu, nhưng khi tắt dòng nó nhả nhiệt ngược ra
-     surface → nguội chậm. Bắt đầu thử G_wind ≈ 1–3 W/K rồi fit.
-3. **Fit lại**: viết script fit nhỏ (scratch, không commit) chạy lại ramp-test
-   residual với model mới; ghi kết quả (hA giữ nguyên hay chỉnh nhẹ, G_wind,
-   RMS mới) vào params.yaml comment.
-4. **Đồng bộ 2 nơi**: model này sống ở JS (`romStep`) VÀ phải thêm các key mới
-   vào `params.yaml` block `lumped_thermal` + phần Python export `LUMPED`
-   (~dòng 185–210 của builder). Nếu `rom.py`/`digital_twin.py` dùng chung mạng
-   lumped coil thì đồng bộ luôn (kiểm tra bằng grep `hA_inner`).
-5. **TODO ghi vào CLAUDE.md**: chưa có dữ liệu NGUỘI thật — lần tới ra lab, log
-   một trajectory cooldown bằng IR (tắt dòng từ steady 5A, đọc coil mỗi 60s
-   trong 20–30 phút) để fit định lượng. Hiện tại chỉ nghiệm thu định tính.
+   `ΔT_cal` = the temperature rise at the calibration point (T_ss(5A) − T_air ≈ 11.5K
+   for the inner coil) → the steady state at 5A is UNCHANGED, but during cooling ΔT
+   shrinks → hA falls → the cooling tail stretches out. (This is a simplified
+   Churchill-Chu law.)
+2. **2-node coil** (surface + winding-core):
+   - `C_surf = coil_C_scale · C_solid` (= the current fitted value, what IR sees)
+   - `C_deep = (1 − coil_C_scale) · C_solid` (the remaining, genuinely present copper)
+   - A link `G_wind` (W/K) between the two nodes, with the source P split between them
+     in proportion to C.
+   - `G_wind` is a NEW fitting parameter: choose it so the HEATING transient (session 2's
+     ramp test, `thermal_ramp_test` in params.yaml) still gives RMS ≤ 3.5°C (not much
+     worse than the old 3°C fit) — i.e. G_wind small enough that the deep node is
+     almost "invisible" during the first 450s, but releases heat back into the surface
+     once the current is cut → slow cooling. Start around G_wind ≈ 1–3 W/K and fit.
+3. **Refit**: write a small fitting script (scratch, not committed) that re-runs the
+   ramp-test residual with the new model; record the results (whether hA stays or
+   shifts slightly, G_wind, the new RMS) in a params.yaml comment.
+4. **Keep two places in sync**: this model lives in JS (`romStep`) AND the new keys must
+   be added to the `lumped_thermal` block in `params.yaml` + the Python `LUMPED` export
+   (~lines 185–210 of the builder). If `rom.py`/`digital_twin.py` share the lumped coil
+   network, sync those too (check with `grep hA_inner`).
+5. **TODO for CLAUDE.md**: there is no real COOLDOWN data yet — next lab visit, log a
+   cooldown trajectory with IR (cut the current from steady 5A, read the coil every 60s
+   for 20–30 minutes) to fit it quantitatively. For now the acceptance is qualitative only.
 
-### Vùng code
-JS `romStep` + hằng LUMPED (~dòng 950–1035), Python export block (~185–210),
-`params.yaml` (`lumped_thermal`), có thể `rom.py`. KHÔNG đụng khối levitation,
-KHÔNG đụng geometry.
+### Code region
+JS `romStep` + the LUMPED constants (~lines 950–1035), the Python export block
+(~185–210), `params.yaml` (`lumped_thermal`), possibly `rom.py`. Do NOT touch the
+levitation block, do NOT touch the geometry.
 
-### Nghiệm thu
-- Steady-state KHÔNG đổi: T_inner_ss(5A) ≈ 40.5°C, T_outer_ss ≈ 38.5°C (±0.3K).
+### Acceptance
+- Steady state UNCHANGED: T_inner_ss(5A) ≈ 40.5°C, T_outer_ss ≈ 38.5°C (±0.3K).
 - Heating ramp-test RMS ≤ 3.5°C.
-- Cooldown test (JS, speed cao): từ steady 5A → I=0, thời gian để inner coil
-  về `T_air + 0.1·ΔT` phải ≥ **3×** so với model cũ; nhiệt độ giảm nhanh lúc
-  đầu, chậm dần về sau (kiểm tra dT/dt giảm đơn điệu và đuôi dài).
-- 0 lỗi JS, energy sanity: không node nào xuống dưới T_amb.
+- Cooldown test (in JS, at high speed): from steady 5A → I=0, the time for the inner
+  coil to reach `T_air + 0.1·ΔT` must be at least **3×** that of the old model; the
+  temperature should fall quickly at first and slow down later (check that dT/dt
+  decreases monotonically and the tail is long).
+- 0 JS errors, energy sanity: no node ever drops below T_amb.
 
 ---
 
-## WP-C — Đĩa lớn Ø202mm + chạy lại EM (agent 3)
+## WP-C — The large Ø202mm disc + re-running the EM (agent 3)
 
-> **STATUS: DONE (2026-07-02).** Xem CLAUDE.md Code status → mục "WP-C" cho đầy
-> đủ kết quả số + caveat. Tóm tắt: đĩa Ø202mm KHÔNG bay ở 5A_rms (thiếu 40% lực,
-> cần I_min_lev≈6.45A) — kết quả khoa học, không phải lỗi. `LEV_ANCHORS` đã được
-> tính sẵn trong build_twin_html_fem.py cho WP-D dùng, chưa nối vào JS sống.
+> **STATUS: DONE (2026-07-02).** See CLAUDE.md Code status → the "WP-C" entry for the
+> full numbers + caveats. Summary: the Ø202mm disc does NOT levitate at 5A_rms (40%
+> short on force; it needs I_min_lev≈6.45A) — a scientific result, not a bug.
+> `LEV_ANCHORS` has been precomputed in build_twin_html_fem.py for WP-D to use, but is
+> not yet wired into the live JS.
 
-### Trả lời câu hỏi
-Đĩa hiện tại: **R = 80mm (Ø160mm)**, dày 3mm (`plate_material.radius_mm: 80.0`
-trong params.yaml). Separator ring nằm ở r = 81–101mm → đĩa che kín mép ngoài
-ring cần **R = 101mm (Ø202mm)**.
+### Answering the question
+The current disc: **R = 80mm (Ø160mm)**, 3mm thick (`plate_material.radius_mm: 80.0` in
+params.yaml). The separator ring sits at r = 81–101mm → covering the ring's outer edge
+requires **R = 101mm (Ø202mm)**.
 
-### Việc cần làm
-1. **Thêm plate mới** vào `plate_library` trong params.yaml:
+### Work to do
+1. **Add the new plate** to `plate_library` in params.yaml:
    `{name: "Al Ø202mm", radius_mm: 101.0, thickness_mm: 3.0, material: aluminium}`.
-   KHÔNG đổi mặc định `plate_material.radius_mm` (80mm là đĩa thật đã
-   validate) — thêm cách chọn đĩa khi bake, ví dụ CLI:
-   `python build_twin_html_fem.py --plate-radius 101` (override radius trước
-   khi build ROM/EM, output `outputs/digital_twin_fem_R101.html`).
-2. **Chạy lại EM ở R=101mm** (bắt buộc — KHÔNG scale từ kết quả R=80, vì đĩa
-   mới phủ lên vùng iron-ring/outer-coil, phân bố eddy khác hẳn):
-   - `P_plate` mới, map `q_e` mới.
-   - Đường cong lực `F_z(z)` tại I_rms=5A (nhớ **×2 convention**: solver dùng
-     I_peak = I_rms·√2, xem CLAUDE.md "CURRENT CONVENTION").
-   - Khối lượng mới: `m = 2700·π·0.101²·0.003 ≈ 0.2596 kg` → `mg ≈ 2.55N`
-     (đĩa cũ 163g/1.60N).
-   - Giải `F_z(z_eq) = mg` → z_eq mới; nếu `F_z_max(5A) < 2.55N` thì đĩa
-     KHÔNG bay ở 5A → tính `I_min_lev` mới và BÁO CÁO rõ (đây là kết quả
-     khoa học quan trọng, không phải lỗi).
-3. **Bake anchor mới vào JS**: `Z_GAP_5A_MM`, `Z_DECAY_MM` (refit từ 2 điểm
-   F_z(z) mới), khối lượng — phối hợp với WP-D: các hằng này phải đi qua
-   PARAMS JSON chứ không hardcode (xem WP-D). Nếu WP-D chưa merge, tạm ghi
-   giá trị vào một dict Python duy nhất `LEV_ANCHORS` để WP-D dùng.
-4. **Nhiệt**: ROM build lại tự động với R=101 (P_plate mới) khi override —
-   kiểm tra `thermal_solver` energy balance vẫn 0.000%.
-5. **Cảnh báo trong báo cáo**: iron ring (r=81–101mm) đang model là AIR
-   (μ_r=1, magnet test PENDING). Đĩa Ø202 nằm ngay trên ring → nếu ring hoá ra
-   ferromagnetic thì F_z và P_plate đổi lớn (xem μ_r sensitivity trong
-   CLAUDE.md). Kết quả R=101 hiện tại chỉ đúng với giả định ring = air.
+   Do NOT change the default `plate_material.radius_mm` (80mm is the real, validated
+   disc) — add a way to choose the disc at bake time, e.g. via CLI:
+   `python build_twin_html_fem.py --plate-radius 101` (overriding the radius before
+   building the ROM/EM, output `outputs/digital_twin_fem_R101.html`).
+2. **Re-run the EM at R=101mm** (mandatory — do NOT scale from the R=80 result, because
+   the new disc covers the iron-ring/outer-coil region and the eddy distribution is
+   completely different):
+   - a new `P_plate` and a new `q_e` map.
+   - the force curve `F_z(z)` at I_rms=5A (remember the **×2 convention**: the solver
+     uses I_peak = I_rms·√2, see CLAUDE.md "CURRENT CONVENTION").
+   - the new mass: `m = 2700·π·0.101²·0.003 ≈ 0.2596 kg` → `mg ≈ 2.55N` (the old disc
+     is 163g/1.60N).
+   - solve `F_z(z_eq) = mg` → the new z_eq; if `F_z_max(5A) < 2.55N` then the disc does
+     NOT levitate at 5A → compute a new `I_min_lev` and REPORT it clearly (this is an
+     important scientific result, not a failure).
+3. **Bake the new anchors into JS**: `Z_GAP_5A_MM`, `Z_DECAY_MM` (refitted from the 2
+   new F_z(z) points), and the mass — coordinate with WP-D: these constants must travel
+   through the PARAMS JSON rather than being hardcoded (see WP-D). If WP-D has not
+   merged yet, temporarily write the values into a single Python dict `LEV_ANCHORS` for
+   WP-D to consume.
+4. **Thermal**: the ROM rebuilds automatically for R=101 (with the new P_plate) when
+   overridden — check that `thermal_solver`'s energy balance is still 0.000%.
+5. **Warning to include in the report**: the iron ring (r=81–101mm) is currently
+   modelled as AIR (μ_r=1, magnet test PENDING). The Ø202 disc sits directly over the
+   ring → if the ring turns out to be ferromagnetic, F_z and P_plate change
+   substantially (see the μ_r sensitivity study in CLAUDE.md). The current R=101 results
+   are only valid under the assumption that the ring is air.
 
-### Vùng code
-`params.yaml` (plate_library), `build_twin_html_fem.py` phần Python (argparse
-+ bake, ~dòng 340–600), chạy `em_solver.py` qua API `compute_losses`/lift-force
-(không sửa em_solver trừ khi cần expose hàm F_z(z) — nếu sửa, chỉ THÊM hàm).
+### Code region
+`params.yaml` (plate_library), the Python part of `build_twin_html_fem.py` (argparse +
+bake, ~lines 340–600), calling `em_solver.py` through the `compute_losses`/lift-force
+API (do not modify em_solver unless an F_z(z) function needs exposing — and if so, only
+ADD a function).
 
-### Nghiệm thu
-- `python config.py` chạy sạch với params mới.
-- Báo cáo số: P_plate(R101), F_z_max(5A), z_eq hoặc I_min_lev, so sánh bảng
-  với R=80.
-- `outputs/digital_twin_fem_R101.html`: 0 lỗi JS, đĩa render Ø202 phủ tới mép
-  ngoài separator ring (screenshot xác nhận), file mặc định R=80 KHÔNG đổi
-  hành vi.
-
----
-
-## WP-D — Refactor hằng số + tích hợp + kiểm thử (agent 4, merge cuối)
-
-> **STATUS: DONE (2026-07-02).** Block `levitation:` đã thêm vào params.yaml,
-> `coil_hot_display_C` đã thêm vào `lumped_thermal:`. Python `lev_params(cfg)`
-> đọc params + `LEV_ANCHORS`/`_lev_anchor()` (deliverable của WP-C) → JS đọc
-> `PARAMS.lev.*` thay vì hardcode `Z_GAP_5A_MM`/`Z_DECAY_MM`/`ζ0`/`ζ1`/`JIT_*`;
-> `LUMPED.T_coil_hot_display_C` thay `T_COIL_HOT`. **Bug WP-C cờ lại đã được
-> sửa**: file R=101 giờ tính riêng anchor của nó thay vì dùng lại của R=80 —
-> verify: R=80 gap@5A=4.1000mm (regression giữ nguyên tuyệt đối, chưa đổi 1 bit),
-> R=101 gap@5A=0.0000mm + I_LEV_MIN=6.450A (đúng bằng số WP-C đã tính, KHÔNG còn
-> gap sai ở R101 nữa). Cả 2 file: 0 lỗi JS console (Playwright headless).
-
-### Lý do
-Locked decision của repo: "All tunable parameters live in params.yaml. Never
-hardcode constants" — nhưng JS đang hardcode: `Z_GAP_5A_MM=4.1`,
-`Z_DECAY_MM=21.4`, khối lượng đĩa (ẩn trong 163g/1.60N), `T_COIL_HOT=80`,
-`JIT_MM`/`ζ0`/`ζ1` mới của WP-A, key cooling mới của WP-B.
-
-### Việc cần làm
-1. Tạo block `levitation:` và mở rộng `lumped_thermal:` trong params.yaml chứa
-   toàn bộ hằng trên (kèm comment nguồn gốc từng số).
-2. Python builder đọc → nhét vào PARAMS JSON đã có (`ROM`/`LUMPED` pattern,
-   ~dòng 580–600) → JS đọc từ `PARAMS.lev.*` thay literal.
-3. **Merge coordinator**: merge theo thứ tự C → B → A, resolve conflict trong
-   `build_twin_html_fem.py` (các vùng đã tách nhưng vẫn có thể chạm nhau ở
-   PARAMS export + render loop).
-4. **Kiểm thử tổng** (headless Playwright, cả file R=80 mặc định lẫn R101):
-   toàn bộ checklist nghiệm thu của A, B, C + regression: gap 4.1mm@5A (file
-   R=80), coil glow, label không chồng, B-field density theo I (các fix
-   2026-07-02 trước đó không được hỏng).
-5. Cập nhật CLAUDE.md (Code status + TODO log-cooldown-data + câu hỏi
-   calibration z_obs@7.75A cho user) và README nếu cần.
+### Acceptance
+- `python config.py` runs cleanly with the new params.
+- A numerical report: P_plate(R101), F_z_max(5A), z_eq or I_min_lev, tabulated against R=80.
+- `outputs/digital_twin_fem_R101.html`: 0 JS errors, the Ø202 disc renders covering the
+  separator ring's outer edge (confirmed by screenshot), and the default R=80 file's
+  behaviour is UNCHANGED.
 
 ---
 
-## Bản đồ conflict trong build_twin_html_fem.py
+## WP-D — Constant refactor + integration + testing (agent 4, final merge)
 
-> Lịch sử (tham khảo) — cả 4 WP đã DONE, không còn merge nào đang chờ. Trên
-> thực tế cả 4 WP chạy tuần tự trong cùng một working tree (không dùng git
-> worktree riêng như dự kiến ban đầu) nên không có conflict thật nào xảy ra.
+> **STATUS: DONE (2026-07-02).** The `levitation:` block was added to params.yaml and
+> `coil_hot_display_C` to `lumped_thermal:`. Python's `lev_params(cfg)` reads params +
+> `LEV_ANCHORS`/`_lev_anchor()` (WP-C's deliverable) → JS reads `PARAMS.lev.*` instead of
+> hardcoded `Z_GAP_5A_MM`/`Z_DECAY_MM`/`ζ0`/`ζ1`/`JIT_*`; `LUMPED.T_coil_hot_display_C`
+> replaces `T_COIL_HOT`. **The bug WP-C flagged has been fixed**: the R=101 file now
+> computes its own anchors instead of reusing R=80's — verified: R=80 gap@5A=4.1000mm
+> (regression held absolutely, not one bit changed), R=101 gap@5A=0.0000mm +
+> I_LEV_MIN=6.450A (exactly the numbers WP-C computed; the wrong R101 gap is gone). Both
+> files: 0 JS console errors (headless Playwright).
+
+### Rationale
+The repo's locked decision: "All tunable parameters live in params.yaml. Never hardcode
+constants" — yet the JS hardcodes `Z_GAP_5A_MM=4.1`, `Z_DECAY_MM=21.4`, the disc mass
+(hidden inside 163g/1.60N), `T_COIL_HOT=80`, WP-A's new `JIT_MM`/`ζ0`/`ζ1`, and WP-B's
+new cooling keys.
+
+### Work to do
+1. Create a `levitation:` block and extend `lumped_thermal:` in params.yaml to hold all
+   the constants above (with a comment giving the provenance of each number).
+2. The Python builder reads them → injects them into the existing PARAMS JSON (the
+   `ROM`/`LUMPED` pattern, ~lines 580–600) → JS reads `PARAMS.lev.*` instead of literals.
+3. **Merge coordinator**: merge in the order C → B → A, resolving conflicts in
+   `build_twin_html_fem.py` (the regions are separate but can still meet at the PARAMS
+   export + render loop).
+4. **Full testing** (headless Playwright, both the default R=80 file and R101): the
+   complete acceptance checklists of A, B and C plus regressions: gap 4.1mm@5A (the R=80
+   file), coil glow, non-overlapping labels, B-field density tracking I (the earlier
+   2026-07-02 fixes must not break).
+5. Update CLAUDE.md (Code status + the TODO to log cooldown data + the z_obs@7.75A
+   calibration question for the user) and the README if needed.
+
+---
+
+## Conflict map inside build_twin_html_fem.py
+
+> Historical (for reference) — all 4 WPs are DONE and no merges are pending. In
+> practice all 4 WPs ran sequentially in the same working tree (not in separate git
+> worktrees as originally planned), so no real conflict ever occurred.
 
 | WP | Python | JS |
 |----|--------|-----|
 | A  | — | ~1129–1170 (lev physics), ~1995–2022 (loop/telemetry) |
 | B  | ~185–210 (LUMPED export), params.yaml | ~950–1035 (romStep) |
-| C  | ~340–600 (geometry/bake/argparse), params.yaml, em_solver API | hằng lev anchors |
-| D  | ~580–600 (PARAMS export), params.yaml | thay literal → PARAMS.lev |
+| C  | ~340–600 (geometry/bake/argparse), params.yaml, em_solver API | lev anchor constants |
+| D  | ~580–600 (PARAMS export), params.yaml | replace literals → PARAMS.lev |
 
-Điểm nóng: **PARAMS export (~580–600)** — B, C, D đều thêm key vào đây → mỗi
-agent chỉ THÊM key mới (không sửa key cũ), D resolve cuối. **params.yaml** —
-B thêm vào `lumped_thermal`, C thêm vào `plate_library`, D thêm block
-`levitation` → vùng khác nhau, conflict dễ resolve.
+Hot spot: the **PARAMS export (~580–600)** — B, C and D all add keys there → each agent
+only ADDS new keys (never edits existing ones), and D resolves at the end.
+**params.yaml** — B adds to `lumped_thermal`, C adds to `plate_library`, D adds the
+`levitation` block → different regions, easy to resolve.
 
-## Câu hỏi cần user trả lời (cập nhật 2026-07-02, sau khi cả 4 WP xong)
+## Questions for the user to answer (updated 2026-07-02, after all 4 WPs finished)
 
-Không cái nào chặn việc dùng twin hiện tại — đều là "độ chính xác", không phải
-lỗi chạy. Xếp theo mức ưu tiên.
+None of these block using the twin as it stands — they are all "accuracy" questions,
+not runtime bugs. Ordered by priority.
 
-1. **[WP-A] Gap thật ở 7.75A ≈ bao nhiêu mm** (hoặc mấy lần bề dày đĩa)? Code
-   đã có chỗ điền sẵn: biến `Z_OBS_7_75A_MM` (JS, khối "Levitation gap physics")
-   — hiện `null`, điền số vào là `Z_DECAY_MM` tự refit. Hiện đang dùng
-   `z_decay_mm=21.4mm` (params.yaml `levitation:`), dự đoán gap@7.75A≈22.9mm,
-   nhưng bạn quan sát gap "chỉ nhích nhẹ" — 21.4mm nhiều khả năng quá lớn.
+1. **[WP-A] What is the real gap at 7.75A, in mm** (or as a multiple of the disc
+   thickness)? The code already has a placeholder: the `Z_OBS_7_75A_MM` variable (JS,
+   in the "Levitation gap physics" block) — currently `null`; fill in a number and
+   `Z_DECAY_MM` refits itself. It currently uses `z_decay_mm=21.4mm` (params.yaml
+   `levitation:`), predicting gap@7.75A≈22.9mm, but you observe the gap "only rises a
+   little" — 21.4mm is most likely too large.
 
-2. **[WP-A] Mâu thuẫn số liệu trong chính kế hoạch này, CHƯA tự ý sửa**: tiêu
-   chí nghiệm thu WP-A đòi overshoot bước 5→7.75A phải <40% overshoot bước
-   0→5A — muốn vậy cần ζ(7.75A)≈0.3. Nhưng công thức vật lý ζ(I)=ζ0+ζ1·(I/5)²
-   neo tại ζ(5A)=0.02 (khớp quan sát settle ~9s) chỉ cho ra ζ(7.75A)≈0.048 —
-   KHÔNG thể đạt 0.3 nếu không phá neo 5A. Đo được: overshoot ratio thực tế là
-   91.5%, test FAIL theo tiêu chí gốc. Cần bạn quyết định: (a) nới tiêu chí
-   overshoot, (b) đổi sang luật damping dốc hơn (kém "vật lý" hơn), hay (c) chờ
-   dữ liệu dao động thật ở 7.75-8A để fit ζ cho đúng.
+2. **[WP-A] A numerical contradiction inside this very plan, deliberately NOT resolved
+   unilaterally**: WP-A's acceptance criterion demands that the 5→7.75A step's overshoot
+   be <40% of the 0→5A step's — which would require ζ(7.75A)≈0.3. But the physical law
+   ζ(I)=ζ0+ζ1·(I/5)², anchored at ζ(5A)=0.02 (matching the observed ~9s settle), only
+   yields ζ(7.75A)≈0.048 — 0.3 is unreachable without breaking the 5A anchor. Measured:
+   the real overshoot ratio is 91.5%, so the test FAILS against the original criterion.
+   You need to decide: (a) relax the overshoot criterion, (b) switch to a steeper (less
+   "physical") damping law, or (c) wait for real 7.75-8A oscillation data to fit ζ properly.
 
-3. **[WP-B] Chưa có dữ liệu NGUỘI thật.** `coil_G_wind_W_per_K=1.0` hiện chỉ
-   fit được từ đường NÓNG (ramp test) + mục tiêu định tính "chậm hơn nhiều" —
-   coi là order-of-magnitude. Lần tới ra lab: giữ dòng ổn định ở 5A cho tới
-   steady state, tắt dòng, đọc IR nhiệt độ coil mỗi 60s trong 20-30 phút → fit
-   định lượng `coil_G_wind_W_per_K` và `convection_exponent`.
+3. **[WP-B] There is no real COOLDOWN data.** `coil_G_wind_W_per_K=1.0` was only fitted
+   from the HEATING curve (the ramp test) plus the qualitative target "much slower" —
+   treat it as order-of-magnitude. Next lab visit: hold the current steady at 5A until
+   steady state, cut the current, and read the coil temperature by IR every 60s for
+   20-30 minutes → fit `coil_G_wind_W_per_K` and `convection_exponent` quantitatively.
 
-4. **[WP-C/D] Hai cách tính z0 (decay length) lệch nhau ~1.5×, đã tìm thấy khi
-   nối WP-C vào WP-D, KHÔNG tự ý chọn 1 bên**: số đang DÙNG trong file R=80
-   mặc định là `z0=21.4mm` (khớp F(1mm) và điểm cắt F=F_grav — cách tính gốc,
-   2026-07-01). WP-C tính lại bằng cách khác (khớp F(1mm) và F(5mm) trực tiếp,
-   không phụ thuộc khối lượng đĩa) ra `z0=13.6mm` cho CÙNG một đĩa R=80mm. Cả
-   hai đều "đúng" theo cách định nghĩa riêng — chênh nhau vì F(z) không phải
-   một hàm mũ sạch trên khoảng đó. R=101 hiện dùng cách tính của WP-C (13.6mm
-   kiểu). Câu hỏi: có dữ liệu đo gap thực ở nhiều mức dòng để chọn cách nào mô
-   phỏng đúng hơn không? (Câu hỏi #1 ở trên — gap@7.75A — sẽ giúp trả lời câu
-   này luôn.)
+4. **[WP-C/D] Two ways of computing z0 (the decay length) disagree by ~1.5×, found while
+   wiring WP-C into WP-D; deliberately NOT picking a side**: the value currently USED in
+   the default R=80 file is `z0=21.4mm` (fitting F(1mm) and the F=F_grav crossing — the
+   original method, 2026-07-01). WP-C recomputed it a different way (fitting F(1mm) and
+   F(5mm) directly, independent of the disc mass) and got `z0=13.6mm` for the SAME R=80mm
+   disc. Both are "correct" by their own definition — they differ because F(z) is not a
+   clean exponential over that interval. R=101 currently uses WP-C's method (the 13.6mm
+   style). The question: is there measured gap data at several current levels to decide
+   which one models reality better? (Question #1 above — gap@7.75A — would answer this too.)
 
-5. **[WP-C] Đĩa Ø202mm KHÔNG bay ở dòng vận hành chuẩn 5A_rms** — cần
-   I_min_lev≈6.45A (thiếu ~40% lực nâng so với 2.55N trọng lượng). Đây là kết
-   quả mô phỏng, chưa kiểm chứng bằng đĩa thật. Nếu định thực sự đúc đĩa Ø202mm
-   để thử trên rig, có đáng thử không, hay giữ đĩa Ø160mm hiện tại?
+5. **[WP-C] The Ø202mm disc does NOT levitate at the standard 5A_rms operating current**
+   — it needs I_min_lev≈6.45A (about 40% short of the 2.55N weight). This is a simulation
+   result, not yet verified with a real disc. If a Ø202mm disc is actually going to be
+   made to test on the rig, is it worth trying, or do we stay with the current Ø160mm disc?
 
-6. **[Nền, không riêng WP nào] Iron/separator ring (r=81-101mm) — magnet test
-   CHƯA làm.** Đang model là air (μ_r=1). Nếu ferromagnetic thật, P_plate và
-   F_z có thể đổi rất lớn (xem "μ_r SENSITIVITY TEST" trong CLAUDE.md) — ảnh
-   hưởng cả kết quả R=101 (WP-C) lẫn các số levitation hiện tại. Cần magnet test
-   thực tế trên vành ring này (giống test đã làm với center core).
+6. **[Background, not specific to any WP] The iron/separator ring (r=81-101mm) — the
+   magnet test has NOT been done.** It is currently modelled as air (μ_r=1). If it really
+   is ferromagnetic, P_plate and F_z could change enormously (see the "μ_r SENSITIVITY
+   TEST" in CLAUDE.md) — affecting both the R=101 results (WP-C) and the current
+   levitation numbers. A real magnet test on this ring is needed (like the one already
+   done on the centre core).
 
-7. **[Nền] Đĩa nóng hơn hay cuộn dây nóng hơn?** Twin hiện dự đoán
-   T_ss(plate,5.5A)=61.7°C CAO HƠN cả cuộn dây (~59°C), nhưng dữ liệu IR nói
-   cuộn dây nóng hơn đĩa nhiều. Model đĩa (FEM, ΔT_max=27K@5A) CHƯA từng được
-   fit bằng dữ liệu thật (IR đĩa không đáng tin — đĩa nhôm bóng, ε sai). Cần đo
-   nhiệt độ đĩa bằng thermocouple tiếp xúc thật (không phải IR) để fit hệ số h
-   của đĩa.
+7. **[Background] Is the disc hotter or is the coil hotter?** The twin currently predicts
+   T_ss(plate, 5.5A)=61.7°C, HIGHER than the coil (~59°C), but the IR data says the coil
+   is much hotter than the disc. The disc model (FEM, ΔT_max=27K@5A) has NEVER been fitted
+   against real data (disc IR is untrustworthy — shiny aluminium, wrong ε). The disc
+   temperature needs measuring with a real contact thermocouple (not IR) so the disc's h
+   coefficient can be fitted.
 
-8. **[Nền, phát hiện phụ của WP-C] Độ nhạy lưới (mesh)**: làm mịn lưới EM
-   (`em_domain.fine_step_mm` 2.0→1.0mm) làm z_eq(R=80) đổi từ 4.15mm xuống
-   ~3.5mm-tương-đương (đủ để đĩa R=80 lúc đó KHÔNG bay ở 5A nữa!), và
-   I_min_lev(R=101) đổi từ 6.45A→6.9A. Tức con số "z_eq=4.1mm đã validated"
-   nhạy với lưới hơn tưởng — chưa xử lý (nằm ngoài phạm vi WP-C, liên quan tới
-   cuộc điều tra benchmark 37% đang PAUSED). Ai đó nên revisit khi có thời gian.
+8. **[Background, a side finding of WP-C] Mesh sensitivity**: refining the EM mesh
+   (`em_domain.fine_step_mm` 2.0→1.0mm) changes z_eq(R=80) from 4.15mm to the equivalent
+   of ~3.5mm (enough that the R=80 disc would then NOT levitate at 5A!), and
+   I_min_lev(R=101) from 6.45A to 6.9A. So the "validated z_eq=4.1mm" figure is more
+   mesh-sensitive than assumed — unresolved (out of WP-C's scope, and connected to the
+   PAUSED 37% benchmark investigation). Someone should revisit this when there is time.

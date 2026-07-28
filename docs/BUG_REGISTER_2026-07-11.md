@@ -7,7 +7,7 @@ by user suspicion that these updates broke something. 3 parallel Explore
 agents covered the EM chain, the thermal/ROM chain, and HTML/docs staleness;
 findings below were then fixed by the main agent (commits listed per item).
 Companion doc: `docs/AUDIT_FIX_PLAN_2026-07-04.md` (previous audit round —
-still has open items, see its Phần 4).
+still has open items, see its Part 4).
 
 > Severity: **BUG** = wrong number/behavior in a real code path. **DOC** =
 > stale comment/doc, no runtime effect. **OPEN** = genuine physics unknown,
@@ -139,6 +139,6 @@ commit message for the WP-5 rebuild commit.)
   the time you read this).
 - Gitignored `outputs/*.png`/`.glb` predate the 2026-07-10 geometry — cosmetic,
   regenerate on demand (`python visualize.py --no-show`, `sim_plates.py`, etc.).
-- All Phần 4 open questions in `docs/AUDIT_FIX_PLAN_2026-07-04.md` (OQ-1
+- All Part 4 open questions in `docs/AUDIT_FIX_PLAN_2026-07-04.md` (OQ-1
   through OQ-9) are unaffected by this round except OQ-6, now resolved (ring
   confirmed ferromagnetic 2026-07-10) — mark it there.

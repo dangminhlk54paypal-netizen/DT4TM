@@ -1,276 +1,277 @@
 # Quick Start Guide for Agents — DT4TM Project
 
-**Mục đích:** Hướng dẫn các agent (Gemini, Claude, etc.) nhanh chóng hiểu kiến trúc dự án và có thể debug lỗi.
+**Purpose:** get an agent (Claude, Gemini, etc.) up to speed on the project
+architecture quickly enough to debug it.
 
-## Thứ tự đọc file .md
+> **Rewritten 2026-07-28.** The previous version was a 2026-07-02 snapshot written
+> in Vietnamese, and had drifted badly out of date — it quoted the superseded coil
+> radii (inner 28–78mm, outer 104–124mm), the old thermal calibration
+> (hA_inner=3.5611 / hA_outer=4.3446), a benchmark result of z_eq≈7.1mm, a domain
+> diff of <0.06%, and — most misleadingly — claimed the lift force was **validated**
+> when it is now a known open mismatch. All of that is corrected below. Historical
+> detail lives in `docs/CHANGELOG.md`.
 
-### 1. **CLAUDE.md** (bắt đầu ở đây)
-- **Bắt buộc đọc trước tiên** — chứa tất cả quyết định đã khóa (locked decisions)
-- Device specs: R=80mm plate, I=5A RMS (peak=7.07A), coil radii (inner 28–78mm, outer 104–124mm)
-- Current convention: `current_A` trong params.yaml = **RMS measured**, nhưng EM solver cần **peak = RMS×√2**
-- Thermal calibration: hA_inner=3.5611, hA_outer=4.3446, coil_C_scale=0.2241 (2026-07-01)
-- Lift force validated: F_z≈1.85N > F_gravity(163g)=1.60N → z_eq≈4.1mm gap ✓
-- Status code: cái nào [x] (done), cái nào [ ] (paused/pending)
+## Reading order for the .md files
+
+### 1. **CLAUDE.md** (start here)
+- **Must be read first** — contains every locked decision.
+- Device specs: R=80mm plate (Ø160mm), 3mm thick, I=5A RMS (peak=7.07A).
+- Coil radii (re-measured 2026-07-10): core 0–25.9 | inner coil 27.9–61.9 |
+  iron ring 64.9–79.9 | outer coil 82.9–102.9 mm.
+- Current convention: `current_A` in params.yaml is the **RMS measured** value. The
+  LOSS chain deliberately treats it as the amplitude (the ×2 error is absorbed into
+  the calibrated hA). The FORCE chain needs the true amplitude — use `cfg.I_peak`.
+  This distinction has caused a real bug twice; read that section carefully.
+- Thermal calibration: hA_inner=2.9493, hA_outer=3.4509, coil_C_scale=0.2241
+  (refitted 2026-07-11).
+- ⚠️ Lift force is **NOT validated** — see the open questions below.
+- Status codes: `[x]` done, `[ ]` paused/pending.
 
 ### 2. **README.md**
-- Cách setup (`python3 -m venv + pip install`)
-- Chạy từng script (config.py → em_solver.py → thermal_solver.py → rom.py → digital_twin.py)
-- Layout repo: source scripts flat (params.yaml, *.py), docs/ folder, outputs/ (gitignored)
-- Roadmap Phase 1–8 (nhận biết Phase 6b, 7 chưa hoàn)
+- Setup (`python3 -m venv` + `pip install -r requirements.txt`).
+- How to run each script, in dependency order.
+- Repo layout: source scripts flat in the root, `docs/`, `outputs/` (gitignored
+  except the HTML deliverable).
+- Roadmap Phase 1–8 (Phase 7 — real sensor hardware — is the only one still open).
 
 ### 3. **docs/physics.md**
-- Công thức chi tiết: eddy current → Joule loss q = ½σω²|A_φ|² [W/m³] (NOT |∇T|²/σ)
-- σ(T) dependency: -0.39%/K (aluminum/copper) — dùng runtime multiplier, không re-solve EM
-- Time-scale separation: **đừng** time-step EM at 50Hz, chỉ dùng phasor + cycle-average
-- Iron core assumptions: linear μ_r, nhưng cần check saturation nếu B→1.5T
-- Thermal FEM check: Q_in (∫q dV) = Q_out (∫h(T−T∞)dA) phải bằng nhau 0.000%
+- The formulation: eddy current → Joule loss q = ½σω²|A_φ|² [W/m³] (NOT |∇T|²/σ).
+- σ(T) dependency: α ≈ 0.0039/K — applied as a runtime multiplier, never a re-solve.
+- Time-scale separation: **do not** time-step the EM at 50Hz; use the phasor +
+  cycle average.
+- Iron core: linear μ_r, but check saturation if B approaches 1.5T.
+- Thermal FEM check: Q_in (∫q dV) = Q_out (∫h(T−T∞)dA) must match to 0.000%.
 
-### 4. **docs/SENSOR_PLAN.md**
-- Hardware: Arduino + MAX31855×2 thermocouple + IR thermometer
-- Pipeline: serial CSV → data_io.py → calibrate_UA() → rom update
-- Status: mock_sensor_data.csv đã test, real hardware chưa build (2026-07-01)
+### 4. **docs/ARCHITECTURE.md**
+- File-by-file dependency graph and data flow. Kept current.
 
-### 5. **docs/3D_MODEL_UPDATE_PLAN.md** (optional)
-- 3D geometry: procedural vs STL model
-- Separator ring rendering (region 5, r=81–101mm)
+### 5. **docs/HANDOFF.md**
+- Short status snapshot + the current open questions. Kept current.
 
-### 6. **docs/ARCHITECTURE.md** (optional, historical)
-- Cũ, nhưng ghi chú về design tradeoffs
+### 6. **docs/SENSOR_PLAN.md**
+- Hardware: Arduino + 2× MAX31855 thermocouple + IR thermometer.
+- Pipeline: serial CSV → `data_io.py` → `calibrate_UA()` → ROM update.
+- Status: mock-tested end to end; real hardware **not built yet**.
 
-### 7. **docs/HANDOFF.md** (optional, historical)
-- Cũ, reference cho phase trước
+### 7. **docs/CHANGELOG.md** (historical)
+- Session-by-session history. Go here to find out *why* a number changed.
 
 ---
 
-## Key Numbers to Know (để debug)
+## Key numbers to know (for debugging)
 
 | Quantity | Value | Unit | Source |
 |----------|-------|------|--------|
 | Plate radius | 80 | mm | measured 2026-07-01 |
 | Plate thickness | 3 | mm | measured 2026-07-01 |
-| Inner coil r_min–r_max | 28–78 | mm | corrected 2026-07-01 |
-| Outer coil r_min–r_max | 104–124 | mm | corrected 2026-07-01 |
+| Centre core (iron) | 0–25.9 | mm | ruler-measured 2026-07-10 |
+| Inner coil (1000T) | 27.9–61.9 | mm | ruler-measured 2026-07-10 |
+| Iron ring | 64.9–79.9 | mm | ruler-measured 2026-07-10 |
+| Outer coil (500T) | 82.9–102.9 | mm | ruler-measured 2026-07-10 |
 | Current (operating) | 5.0 | A (RMS) | measured 190V→5A |
-| Current peak (for EM) | 7.07 | A | =5×√2 (RMS→peak) |
-| Lift force @ 5A | 1.85 | N | validates gravity (1.60N) ✓ |
-| z_eq gap | 4.1 | mm | EM result, matches obs 2–3× |
-| T_steady inner coil @ 5A | 40.5 | °C | at T_amb=20°C |
-| T_steady outer coil @ 5A | 38.5 | °C | at T_amb=20°C |
-| Domain size | ±500 | mm | validated Dirichlet vs Neumann <0.06% diff |
-| Mesh refinement (EM) | — | — | domain-dependent, see em_solver.py |
+| Current peak (for FORCE) | 7.07 | A | = 5×√2 (`cfg.I_peak`) |
+| Plate eddy loss | 25.81 | W | `compute_losses` @5A |
+| Iron core + ring loss | 5.86 | W | `compute_losses` @5A |
+| Coil ohmic loss | 106.44 | W | inner 52.32 / outer 54.12 |
+| **Total loss** | **138.11** | W | @5A, T_amb=20°C |
+| Disc time constant τ | 244.3 (4.07 min) | s | ROM, R=80mm |
+| B_max in iron | 0.66 | T | ≪ B_sat=1.5T → unsaturated |
+| Domain size | ±500 | mm | Dirichlet vs Neumann, all diffs <1% (P_plate 0.767%) |
 | σ_Al(20°C) | 3.4e7 | S/m | params.yaml |
 | σ_Cu(20°C) | 5.96e7 | S/m | params.yaml |
 | Frequency | 50 | Hz | AC mains |
-| Skin depth (Al) | 12 | mm | >>3mm plate → no fine through-thickness mesh |
+| Skin depth (Al) | 12 | mm | ≫3mm plate → no fine through-thickness mesh |
 
 ---
 
-## Common Debugging Checkpoints
+## Open questions — do NOT assume these are solved
 
-### EM Solver
-1. Check `config.py` output: current peak = 7.07A (if input 5A RMS)
-2. Check benchmark: z_eq≈7.1mm (improved from 3.4mm, but not yet 11.3mm target)
-3. Check losses: P_plate, P_iron, P_coil > 0; I²-check = 4.000 (double current → 4× power)
-4. Domain size: run validate_domain_size() → Dirichlet vs Neumann diff <0.06%?
+1. **Lift force / levitation gap MISMATCH.** F_z(5A peak) ≈ 4.10N ≫ F_gravity
+   (163g) = 1.60N, so it levitates — but the predicted z_eq is **11.7mm**
+   (plate bottom) / **14.7mm** visible, while the observed visible gap is **7–8mm**.
+   Prime suspect: `mu_r=1000` is an unmeasured mild-steel-*like* placeholder.
+   Saturation was tested and ruled out (<0.1% change in F_z).
+   **Never report z_eq as validated.**
+2. **Original TEAM 28 benchmark is PAUSED** at z_eq ≈ 14.5mm vs 11.3mm expected
+   (28% overshoot). It read 40% *undershoot* until 2026-07-11, when a missed
+   RMS-vs-peak call site was fixed — the sign flipped, a residual remains.
+3. **Plate-vs-coil temperature ordering** is only *tied* in the model; IR data says
+   the coil should be clearly hotter. The disc model has never been calibrated
+   (IR on shiny aluminium is unreliable). Needs a contact thermocouple.
 
-### Thermal Solver
-1. Energy balance at steady state: Q_in (∫q dV) = Q_out (∫h(T−T∞)dA), error <0.001%
-2. Convection BC: h_bot fix applied (q boundary condition, not T boundary)
-3. Check temp range: plate 30–50°C, inner coil 35–45°C @ nominal 5A/20°C
+---
+
+## Common debugging checkpoints
+
+### EM solver
+1. `config.py` output: `I_peak` = 7.07A when input is 5A RMS.
+2. Losses: P_plate, P_iron, P_coil all > 0; I² check = 4.000 (double current → 4× power).
+3. Domain: `validate_domain_size()` → Dirichlet vs Neumann, all diffs <1%.
+4. Saturation: `check_saturation()` covers BOTH `iron_core` and `outer_iron_ring`.
+
+### Thermal solver
+1. Energy balance at steady state: Q_in = Q_out, error <0.001%.
+2. Convection BC applied as a flux condition, not a fixed-temperature condition.
 
 ### ROM
-1. I² scaling: T_ss(2I)/T_ss(I) = 4.0 exactly (no iteration needed)
-2. σ(T) correction: 70K rise → ~27% R change, visible in τ but small on T_ss
+1. I² scaling: T_ss(2I)/T_ss(I) = 4.0 exactly, no iteration.
+2. σ(T) correction: a 70K rise → ~27% resistance change.
 
-### HTML Twin (build_twin_html_fem.py)
-1. No JS errors in headless Playwright test
-2. Color: center core + separator ring use writeRampMetal() (silver→warm orange); coils use writeRampCopper() (dark red-brown→orange-yellow)
-3. Levitation gap: z_eq(I)=4.1+2·21.4·ln(I/5) mm — LIÊN TỤC từ lift-off ≈4.54A
-   (4.1mm @5A, ≈18.5mm @7A), kèm spring-mass dynamics (đĩa dao động ~9s rồi lắng).
-   Display: `Z_GAP_EXAG=2.0` (SAME hệ số zex như độ dày đĩa) — gap KHÔNG còn bake
-   vào geometry Python (`z_disc_bot = z_coil_top`, đĩa ngồi ngay trên coil top);
-   toàn bộ gap hiển thị = `lev.z * 2.0` cộng ở runtime (JS `levLiftY()`).
-4. Time history: inner/outer coil temps + plate T_max plotted live
-5. Geometry 100% procedural from params.yaml — STL NOT used for body (see "3D body geometry" section below)
-6. Geometry đã khớp thiết bị thật từ 2026-07-01 session 4 (khung gỗ r=174..194,
-   air gaps để trống, coil màu vecni nâu sậm) — chi tiết trong section 3D Body
-   Geometry bên dưới
-7. **4 render fixes (2026-07-02)**: (a) gap display — xem mục 3 ở trên; (b) B-field
-   lines giờ phản ứng với I: opacity + tốc độ dash flow scale theo `emScale =
-   I_display/I_em_ref` (0 khi I=0, nhanh/đậm hơn khi I tăng, geometry hình dạng vẫn
-   TĨNH vì bài toán tuyến tính); (c) màu coil chuyển sang thang TUYỆT ĐỐI cố định
-   `T_COIL_HOT=80°C` (neo theo IR session 1: inner coil 79°C@7.8A) thay vì chia cho
-   T_ss(I) — trước đây tăng I làm màu "nguội" tức thời; core/separator dùng cùng
-   thang ×1.8 boost; (d) bỏ hẳn bloom (`EffectComposer`/`UnrealBloomPass` removed,
-   `renderer.render()` trực tiếp) + vật liệu lì hơn cho coil/core/wood
-   (`envMapIntensity` 0.8→0.15-0.25, chỉ đĩa nhôm giữ metallic 0.45).
+### Twins — there are three, sharing ONE integrator
+- `twin_core.py` is the **SSOT time integrator** (numpy + stdlib only). Run
+  `python twin_core.py` → 6/6 self-checks must PASS.
+- `digital_twin.py` (matplotlib) and `digital_twin_pyvista.py` (VTK, optional
+  dependency) both drive `twin_core.TwinState`. Neither has its own physics.
+- `build_twin_html_fem.py` bakes a **separate JS copy** of the same integrators into
+  `outputs/digital_twin_fem.html`.
+- `xval_twin.py` pins the two against each other via Playwright. Run
+  `python xval_twin.py` after ANY change to the integrators or coefficients.
+  It has two independent assertions: **A** integrator match (1e-9 abs) and
+  **B** bake freshness (1e-6 rel). Assertion B exists because a coefficient fix that
+  never got re-baked into the HTML has already shipped once (commit d4f73d6).
+
+### HTML twin (`build_twin_html_fem.py`)
+1. Zero JS errors under headless Playwright.
+2. Geometry is **100% procedural from params.yaml** — the STL is not used for the body.
+3. Coil colours use a fixed ABSOLUTE scale anchored at `T_COIL_HOT=80°C` (from the
+   IR session: inner coil 79°C @ 7.8A), not divided by the current-dependent T_ss(I).
+4. The levitation gap is **not** baked into the Python geometry (`z_disc_bot =
+   z_coil_top`); the whole visible gap is added at JS runtime as `lev.z * 2.0`.
+5. **Never commit a build that contains a real API key.** The default build uses the
+   `YOUR_KEY_HERE` placeholder; `--bake-key` gates the real one. A `PreToolUse` hook
+   in `.claude/settings.json` blocks commits containing a Google key pattern.
 
 ---
 
-## File Dependencies (for debugging integration)
+## File dependencies
 
 ```
 params.yaml
     ↓
-config.py (normalize units mm→m, derive I_peak from I_rms)
+config.py (normalise mm→m, derive I_peak from I_rms)
     ↓
-em_solver.py (→ q_e map, P_plate/P_coil, lift F_z, benchmark check)
+em_solver.py (→ q_e map, P_plate/P_coil/P_iron, lift F_z, benchmark)
     ↓
-thermal_solver.py (interp q_e, solve FEM, check energy balance)
-    ├→ rom.py (build ROM from thermal FEM at I_ref)
-    │   ├→ digital_twin.py (live GUI + I(t) → T(t))
-    │   └→ build_twin_html_fem.py (bake into HTML)
+thermal_solver.py (interpolate q_e, solve FEM, check energy balance)
+    ├→ rom.py (build ROM from the thermal FEM at I_ref)
+    │   ├→ twin_model.py (coeffs_from_live: live solve → frozen coefficients)
+    │   │      ↓
+    │   │   twin_core.py (TwinState — the ONE integrator)
+    │   │      ├→ digital_twin.py           (matplotlib live twin)
+    │   │      ├→ digital_twin_pyvista.py   (PyVista/VTK 3D live twin)
+    │   │      └→ data_io.py                (sensor comparison)
+    │   │
+    │   └→ build_twin_html_fem.py (bakes its own JS copy → HTML)
+    │          ↑
+    │       xval_twin.py (pins twin_core against that baked JS)
     │
     └→ visualize.py (revolve 2D→3D, export GLB)
-
-data_io.py (sensor CSV → calibrate_UA)
-    └→ rom.calibrate_UA() (update τ from measurement)
 ```
 
 ---
 
-## Mẹo cho Agent Debugging
+## Tips for agent debugging
 
-1. **Luôn kiểm tra CLAUDE.md trước** — tất cả quyết định khóa ở đó
-2. **Đọc kỹ comment "CORRECTED 2026-07-01"** — coil radii và thermal constants thay đổi
-3. **Chú ý I_rms vs I_peak** — EM dùng peak (×√2), thermal dùng RMS (calibrated to RMS)
-4. **σ(T) không phá vỡ real-time** — chỉ là scalar multiplier, không re-solve EM
-5. **Energy balance là "source of truth"** — nếu không 0%, có lỗi tích phân hoặc BC
-6. **Benchmark chưa hoàn** (z_eq≈7.1 vs 11.3 expected) — coi như known issue, không blocking
-7. **Sensor pipeline testable mà không hardware** — dùng mock_sensor_data.csv
+1. **Always read CLAUDE.md first** — every locked decision is there.
+2. **Watch I_rms vs I_peak.** The force chain needs `cfg.I_peak`; the loss chain
+   stays on `cfg.I`. Missing this at one call site is a bug that has shipped twice.
+3. **σ(T) does not break real-time** — it is a scalar multiplier, never a re-solve.
+4. **Energy balance is the source of truth** — if it is not ~0%, there is an
+   integration or BC error.
+5. **Run `xval_twin.py` after touching any integrator or coefficient.** A green
+   assertion A with a red assertion B means the code is right but the HTML is stale.
+6. **The sensor pipeline is testable without hardware** — use `mock_sensor_data.csv`.
+7. **Never Read `outputs/digital_twin_fem.html` whole** (~1MB of baked JS) — grep for
+   the section you need.
 
 ---
 
-## 3D Body Geometry trong digital_twin_fem.html (SUPERSEDED 2026-07-10 — xem GROUND TRUTH v2 bên dưới; giữ lại session-3 table cho lịch sử)
+## 3D body geometry in `digital_twin_fem.html`
 
-**Tất cả geometry được xây dựng PROCEDURALLY từ params.yaml — STL file chỉ dùng tham khảo hình dáng.**
+**All geometry is built PROCEDURALLY from params.yaml** — the STL file is only a
+shape reference and is no longer read by the builder.
 
-### GROUND TRUTH v2 (2026-07-10, đo trực tiếp bằng thước trên rig thật — SUPERSEDES bảng session-3 bên dưới)
-Bán kính và vật liệu chính xác, đọc từ `coils:`/`iron_core:`/`outer_iron_ring:` trong params.yaml:
+### Ground truth (2026-07-10, ruler-measured on the real rig)
+Radii and materials read from `coils:` / `iron_core:` / `outer_iron_ring:` in params.yaml:
 ```
-r =    0..25.9   lõi trung tâm — SẮT (xác nhận hút nam châm 2026-07-10, mu_r=1000/sigma=1e6)
+r =    0..25.9   centre core — IRON (magnet-attracted, confirmed 2026-07-10; mu_r=1000, sigma=1e6)
 r =  25.9..27.9  AIR GAP 2mm
-r =  27.9..61.9  INNER COIL, 1000 vòng, rộng 34mm (KHÁC session-3: khi đó ghi 28..78/50mm)
+r =  27.9..61.9  INNER COIL, 1000 turns, 34mm wide
 r =  61.9..64.9  AIR GAP 3mm
-r =  64.9..79.9  IRON RING, rộng 15mm — SẮT (xác nhận hút nam châm 2026-07-10, cùng vật
-                 liệu lõi trung tâm; KHÁC session-3: khi đó ghi 81..101/20mm)
+r =  64.9..79.9  IRON RING, 15mm wide — IRON (same magnet test, same material as the centre core)
 r =  79.9..82.9  AIR GAP 3mm
-r =  82.9..102.9 OUTER COIL, 500 vòng, rộng 20mm (KHÁC session-3: khi đó ghi 104..124)
-r = 102.9..~130.4 AIR 25-30mm → vách trong khung gỗ
-r ~130.4..~180.4  khung gỗ plywood BÁT GIÁC (8 cạnh), tổng ~50mm từ outer coil ra mép ngoài
+r =  82.9..102.9 OUTER COIL, 500 turns, 20mm wide
+r = 102.9..~130.4 AIR 25-30mm → inner wall of the wooden frame
+r ~130.4..~180.4  OCTAGONAL plywood frame (8 sides), ~50mm from outer coil to outer edge
 ```
-⚠️ **OPEN QUESTION (chưa giải quyết)**: mu_r=1000 là placeholder mild-steel-like (chưa đo
-B-H curve thật) — với giá trị này, lực nâng dự đoán z_eq≈11.7mm (khe nhìn thấy≈14.7mm),
-NHƯNG quan sát thực tế là 7-8mm. Xem CLAUDE.md mục "LIFT FORCE" để biết chi tiết — KHÔNG
-coi z_eq/khe hở hiện tại là đã validated.
+Note the Ø160mm disc (R=80mm) now **overlaps the iron ring** (64.9–79.9mm). This is a
+structurally different EM picture from the pre-2026-07-10 geometry, and it is why the
+plate's share of the losses grew ~8.5×.
 
-### GROUND TRUTH v1 (2026-07-01 session 3, xem docs/real_model.png) — SUPERSEDED, giữ cho lịch sử
+### Coordinate system (Z-up, mm)
 ```
-r =   0..25    lõi trung tâm — SẮT TỪ (user xác nhận trực quan; từng có "note conflict" với
-               test 2026-07-01 nói KHÔNG hút — conflict này đã giải quyết 2026-07-10: user
-               re-test xác nhận CÓ hút, xem GROUND TRUTH v2 ở trên)
-r =  25..28    AIR GAP ~2–3mm (khe hở thật giữa lõi và inner coil)
-r =  28..78    INNER COIL, 1000 vòng — dây đồng + lớp keo/nhựa thông cách điện màu nâu sậm
-r =  78..81    AIR GAP ~3–3.5mm
-r =  81..101   SEPARATOR / IRON RING — sắt từ (user xác nhận trực quan; magnet test PENDING)
-r = 101..104   AIR GAP ~2mm
-r = 104..124   OUTER COIL, 500 vòng — cấu tạo giống inner coil
-r = 124..~174  AIR ~50mm — outer coil đứng HOÀN TOÀN ĐỘC LẬP, vách ngoài tiếp xúc không khí
-r = ~174+      khung gỗ plywood BÁT GIÁC (8 cạnh) — KHÔNG ôm sát coil
+z = 0         → floor (bottom of the wooden base)
+z = 8         → bottom of the coil assembly
+z = 60        → top of the coil assembly
+z = 60        → disc underside in the BAKED geometry (= z_coil_top; the gap is NOT
+                baked — it is added at JS runtime via lev.z * 2.0)
+z = 60+zex    → disc top at rest (zex = thickness × display_z_exaggeration)
 ```
 
-### Coordinate System (Z-up, mm)
+### Region labels (`reg`)
+| reg | Part | Material | r_in..r_out (mm) | z (mm) | Mesh | Thermal colour |
+|-----|------|----------|------------------|--------|------|----------------|
+| 0 | Levitating disc | Aluminium | 0..80 | 60..top (gap at runtime) | `plateM` | FEM vertex field (`writeRamp`) |
+| 1 | Inner coil (1000T) | Copper + dark varnish | 27.9..61.9 | 8..60 | `coilM` | `writeRampCopper` |
+| 2 | Outer coil (500T) | Copper + dark varnish | 82.9..102.9 | 8..60 | `coilM` | `writeRampCopper` |
+| 3 | Centre core | Iron (mu_r=1000) | 0..25.9 | 8..60 | `baseM` | `writeRampMetal` |
+| 4 | Plywood octagonal frame | Wood | from `device_frame` in params.yaml | 0..60 | `woodM` | Flat brown (static) |
+| 5 | Outer iron ring | Iron (mu_r=1000) | 64.9..79.9 | 8..60 | `baseM` | `writeRampMetal` |
+| — | Air gaps (NOT meshed) | Air | 25.9–27.9, 61.9–64.9, 79.9–82.9, 102.9–130.4 | — | — | — |
+
+### Triangle counts (verified 2026-07-28)
 ```
-z = 0         → sàn (đáy tấm gỗ)
-z = 8         → đáy cụm cuộn dây (coil assembly bottom)
-z = 60        → đỉnh cụm cuộn dây (coil assembly top)
-z = 60        → đáy đĩa nhôm trong BAKED geometry (= z_coil_top, KHÔNG bake gap —
-                fixed 2026-07-02; gap vật lý được cộng ở JS runtime qua lev.z*2.0)
-z = 60+zex    → đỉnh đĩa lúc nghỉ (zex = thickness × display_z_exaggeration từ params)
+centre core     :  960 tris   (build_solid_core)
+inner coil      :  960 tris   (revolve_ring)
+iron ring       :  960 tris   (revolve_ring)
+outer coil      :  960 tris   (revolve_ring)
+wood frame      :   96 tris   (octagon, 8 sides)
+TOTAL body      : 3936 tris
+levitating disc :  720 tris   (build_disc_mesh, FEM field mapped)
+GRAND TOTAL     : 4656 tris across 5 meshes, 13968 vertices
 ```
+`digital_twin_pyvista.py --self-check` reproduces these exact counts — the two
+renderers share the same geometry builders, so a mismatch means a real regression.
 
-### Region Labels (reg) — theo thiết bị thật (code đã khớp từ 2026-07-01 session 4)
-| reg | Phần | Material | r_in..r_out (mm) | z (mm) | Three.js mesh | Màu nhiệt |
-|-----|------|----------|-----------------|--------|---------------|-----------|
-| 0 | Levitating disc (đĩa nhôm) | Aluminium | 0..80 | 60..top (baked; gap runtime) | `plateM` | FEM vertex field (writeRamp) |
-| 1 | Inner coil (1000T) | Đồng + keo cách điện nâu sậm | 28..78 | 8..60 | `coilM` | writeRampCopper |
-| 2 | Outer coil (500T) | Đồng + keo cách điện nâu sậm | 104..124 | 8..60 | `coilM` | writeRampCopper |
-| 3 | Center core (lõi giữa) | Sắt từ (per user; model hiện mu_r=1.0) | 0..25 | 8..60 | `baseM` | writeRampMetal |
-| 4 | Plywood octagonal frame | Wood | 174..194 (từ `device_frame` trong params.yaml) | 0..60 | `woodM` | Flat brown (WOOD_RGB, static) |
-| 5 | Separator / iron ring | Sắt từ (per user; magnet test pending) | 81..101 | 8..60 | `baseM` | writeRampMetal |
-| — | Air gaps (KHÔNG mesh, để trống) | Air | 25..28, 78..81, 101..104, 124..174 | — | — | — |
+### Why the STL is not used for the body
+The old STL path produced five visual defects: `classify()` used r=26..45mm for the
+inner coil when it is really much wider, so almost the whole inner coil was
+misclassified; the STL shell was hollow and see-through from below; the flat red
+source material looked like plastic; the frame was a 6-sided hexagon instead of the
+real 8-sided octagon; and the heat ramp only reached the outer shell.
 
-### ✅ 3 sai lệch render đã FIX (2026-07-01 session 4)
-User đối chiếu render với mô hình thật (real_model.png) và chỉ ra 3 lỗi; đã sửa
-trong build_twin_html_fem.py, verify bằng headless Playwright (0 JS errors):
-1. **Khung gỗ ôm sát coil** — TRƯỚC: `r_frame_in = r_o_out + 6.0` ≈ 130mm, nuốt mất
-   ~50mm không khí. SAU: đọc từ block `device_frame` trong params.yaml
-   (air_gap_mm=50, wall_thickness_mm=20) → frame r=174..194mm, outer coil đứng độc lập.
-2. **Air gaps bị lấp đặc** — TRƯỚC: khe 25..28mm lấp bằng vật liệu coil (`V_coregap`);
-   separator lấp toàn bộ 78..104mm. SAU: bỏ hẳn V_coregap; separator chỉ còn đúng
-   81..101mm (đọc từ `outer_iron_ring` trong params.yaml); cả 4 khe không khí
-   (25-28, 78-81, 101-104, 124-174) là khoảng trống hình học thật.
-3. **Coil trông như nhựa phát sáng** — TRƯỚC: COPPER_COLD=[0.52,0.18,0.07] đỏ bão hòa,
-   metalness=0.68 chung với các phần kim loại. SAU: tách mesh `coilM` riêng
-   (roughness=0.30, metalness=0.20 — vecni bóng phủ dây đồng, không phải kim loại
-   trần); COPPER_COLD=[0.30,0.14,0.08] nâu sô-cô-la sậm khớp ảnh thật,
-   COPPER_HOT=[0.93,0.55,0.16] cam ấm (bớt neon).
-Ngoài ra: label "Center Core (ceramic)" → "Center Core" (vật liệu đang tranh chấp),
-và expose `window.twinDebug = {camera, controls, size}` để test headless đặt camera.
-
-### Three.js Mesh Split (materials) — matte pass 2026-07-02, xem "4 render fixes" ở trên
+### Three.js Y/Z swap (a recurring source of confusion)
+The JS template swaps y/z when reading from the buffer:
 ```javascript
-// makeMesh(sub, roughness, metalness, envMapIntensity=0.8)
-baseM  = makeMesh(core + separator: reg 3,5)  // roughness=0.60, metalness=0.30, envInt=0.25 — kim loại xỉn/oxit
-coilM  = makeMesh(coils: reg 1,2)             // roughness=0.80, metalness=0.05, envInt=0.15 — vecni lì, hấp thụ sáng
-woodM  = makeMesh(plywood frame: reg 4)       // roughness=0.90, metalness=0.00, envInt=0.05
-plateM = makeMesh(aluminium disc: reg 0)      // roughness=0.45, metalness=0.65, envInt=0.45 — kim loại thật duy nhất
-```
-Bloom postprocessing (`EffectComposer`/`UnrealBloomPass`) đã bị XÓA hoàn toàn
-(2026-07-02) — render trực tiếp qua `renderer.render(scene, camera)`. Trước đó
-bloom.strength=0.42 gần như luôn bật (mặc định I=5A) gây chói/loá kim loại.
-
-### Triangle Counts (geometry, sau fix session 4)
-```
-center core     : ~960 tris   r=0..25mm     (build_solid_core)
-inner coil      : ~960 tris   r=28..78mm    (revolve_ring, solid toroid; khe 25-28 để trống)
-separator ring  : ~960 tris   r=81..101mm   (revolve_ring; khe 78-81 và 101-104 để trống)
-outer coil      : ~960 tris   r=104..124mm  (revolve_ring, solid toroid)
-wood frame      :  ~96 tris   r=174..194mm  (octagon 8 cạnh, cách coil 50mm air)
-TOTAL body      : ~3936 tris
-levitating disc :  ~3072 tris (build_disc_mesh, FEM field mapped)
-```
-
-### Lý do KHÔNG dùng STL cho body geometry
-STL cũ gây 5 lỗi hình ảnh:
-1. `classify()` dùng r=26..45mm cho inner coil nhưng thực tế r=28..78mm → 99%+ inner coil bị misclassify, chỉ có 260 tris ở z=-2mm (mặt đáy mỏng)
-2. STL shell rỗng → nhìn thấy xuyên qua (hollow) từ dưới lên
-3. Màu flat red của material gốc → trông như nhựa, không phải kim loại
-4. Khung hexagonal 6 cạnh (STL) thay vì bát giác 8 cạnh (thực tế)
-5. Heat ramp chỉ trên outer shell, không có seamless fill
-
-### Tọa độ chú ý (Three.js Y/Z swap)
-JS template (lines ~868-870) swaps y/z khi đọc từ buffer:
-```javascript
-positions[i+1] = z;   // Three.js Y = physical Z (chiều cao)
+positions[i+1] = z;   // Three.js Y = physical Z (height)
 positions[i+2] = -y;  // Three.js Z = -physical Y
 ```
-→ `bb.max.y - bb.min.y` = chiều cao model (height axis), không phải bán kính.
+→ `bb.max.y - bb.min.y` is the model **height**, not a radius.
+`digital_twin_pyvista.py` deliberately does NOT do this — it stays Z-up in mm,
+because the Y-up swap is a three.js convention, not a physical one.
 
-### Thermal Ramp Functions (JS)
+### Thermal ramp functions (JS)
 ```javascript
-writeRamp(col, idx, tnorm)       // scientific: blue→cyan→green→yellow→red (plate + legacy)
+writeRamp(col, idx, tnorm)       // scientific: blue→cyan→green→yellow→red (disc)
 writeRampCopper(col, idx, tnorm) // copper: dark red-brown (cold) → orange-yellow (hot)
-writeRampMetal(col, idx, tnorm)  // metal: silver-gray (cold) → warm orange (hot)
+writeRampMetal(col, idx, tnorm)  // metal: silver-grey (cold) → warm orange (hot)
 ```
-Disc (`writeRamp`): `tnorm` adaptive/relative — see `colorScaleMode` (auto/relative/absolute).
-Coils/core/ring (`writeRampCopper`/`writeRampMetal`, fixed 2026-07-02): `tnorm` = ABSOLUTE
-scale `(T - T_amb) / (T_COIL_HOT=80°C - T_amb)`, anchored to IR session 1 (inner coil
-79°C@7.8A, hottest ever measured) — NOT divided by the current-dependent T_ss(I) anymore
-(that made the color flip "cold" instantly whenever I changed, and pin to full-hot at any
-steady state). Core/separator (`tnIron`) apply the same absolute scale ×1.8 boost (real
-core/ring only reach ~45°C, tnorm≈0.31 unboosted — would look frozen silver).
+Disc (`writeRamp`): `tnorm` is adaptive — see `colorScaleMode` (auto/relative/absolute).
+Coils/core/ring: `tnorm` is an ABSOLUTE scale `(T - T_amb) / (T_COIL_HOT − T_amb)`
+with `T_COIL_HOT = 80°C`, anchored to the hottest real IR reading (inner coil 79°C
+@ 7.8A). Core and ring apply the same scale with a ×1.8 boost, because they only
+reach ~45°C in reality and would otherwise render as frozen silver.
 
 ---
 
-## Tài liệu này cập nhật: 2026-07-02
+## This document was last updated: 2026-07-28

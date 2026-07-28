@@ -1,6 +1,6 @@
 # DT4TM — File Architecture & Data Flow
 
-> Last updated: 2026-06-22 (Professor feedback Juni 2026).
+> Last updated: 2026-07-28 (SSOT integrator port + PyVista desktop twin, WP-HOOK→WP-DOC).
 > Single-source-of-truth for file relationships.
 > Source scripts + input data live **flat in repo root** (no src/ subfolder);
 > docs live in `docs/`, generated files in `outputs/`.
@@ -17,13 +17,28 @@ DT4TM/
 ├── em_solver.py                 ← AC eddy-current FEM (axisymmetric, complex A_φ)
 ├── thermal_solver.py            ← Steady-state heat FEM (axisymmetric, P1 triangles)
 ├── rom.py                       ← Real-time ROM: I²-scaling + first-order ODE + σ(T)
-├── digital_twin.py              ← Interactive live twin (matplotlib, sliders)
+├── twin_core.py                 ← SSOT time integrator (dual-β disc + lumped coil/iron/
+│                                  air RC + levitation spring-mass-damper). numpy+stdlib
+│                                  ONLY — ports what used to live only inside
+│                                  build_twin_html_fem.py's baked JS. `TwinState`.
+├── twin_model.py                ← heavy bridge: resolve_active_plate/PlateCache/
+│                                  i_max_for/coeffs_from_live/build_plate_variant —
+│                                  turns a live (cfg, em, rom) into twin_core coefficients.
+├── xval_twin.py                 ← pins twin_core.py against the baked JS engine in
+│                                  outputs/digital_twin_fem.html (Playwright + traceRom()).
+├── digital_twin.py              ← Interactive live twin (matplotlib, sliders) — uses
+│                                  twin_core.TwinState + twin_model, no physics of its own.
+├── digital_twin_pyvista.py      ← Interactive live twin (PyVista/VTK 3D) — same
+│                                  twin_core.TwinState, reuses build_twin_html_fem.py's
+│                                  procedural geometry builders. Optional dependency
+│                                  (~400MB VTK); --self-check runs without it.
 ├── visualize.py                 ← Revolve 2D→3D, export outputs/plate.glb + thermal_3d.png
 ├── sim_plates.py                ← Batch compare plate materials from plate_library
 ├── build_twin_html_fem.py       ← Bake FEM+STL+ROM → outputs/digital_twin_fem.html
 │                                  (build_twin_html.py — older lumped-only bake script —
 │                                   deleted 2026-07-02, commit ec64ec1, superseded by this file)
 ├── data_io.py                   ← SensorReader (serial/mock) → calibrate_from_file() → rom.calibrate_UA()
+│                                  live_compare() uses twin_core.TwinState too.
 │
 ├── 3D_model.stl                 ← CAD geometry (meters, axisymmetric, ~467 KB)
 ├── levitation_height_team28.csv ← Benchmark Table I: t_ms, z_mm (levitation height)
@@ -86,16 +101,33 @@ rom.py                                                   │
     │    └─ simulate(I_arr, t_arr) → β(t) ODE           │
     │                                                    │
     ▼                                                    │
-digital_twin.py  ──────────────────────────────────────►│
-    │  DigitalTwin(rom)                                  │
-    │  run_live(): matplotlib animation                  │
-    │  Signals: step / ramp / sine / pulse / manual      │
+twin_model.py :: coeffs_from_live(cfg, em, rom)          │
+    │  bridges (cfg, em, rom) into twin_core's frozen     │
+    │  RomCoeffs/LumpedCoeffs/LevCoeffs (calls             │
+    │  build_twin_html_fem.py's OWN lumped_physics()/       │
+    │  lev_params() — not reimplemented here)               │
+    ▼                                                    │
+twin_core.py :: TwinState(rom, lumped, lev, T_amb)       │
+    │  SSOT integrator (numpy+stdlib only): dual-β disc,  │
+    │  lumped coil/iron/air RC, levitation spring-damper. │
+    │  .step(I, dt) / .T_field — pinned bit-for-bit        │
+    │  against the JS engine below by xval_twin.py.        │
+    │                                                    │
+    ├──────────────────────┐                             │
+    ▼                      ▼                             │
+digital_twin.py    digital_twin_pyvista.py                │
+    │  matplotlib       │  PyVista/VTK 3D (optional dep)  │
+    │  run_live()       │  TwinPyVista.run_live()          │
     │                                                    │
     ▼                                                    │
 build_twin_html_fem.py ◄────────────────────────────────┘
-    │  Reads: 3D_model.stl + em_losses + rom_params
-    │  Bakes all into one self-contained HTML:
-    └──► digital_twin_fem.html  (568 KB, no server needed)
+    │  Reads: em_losses + rom_params (100% procedural
+    │  geometry from params.yaml, no STL — see below)
+    │  Bakes all into one self-contained HTML, including
+    │  its OWN copy of the integrator as JS (romStep/
+    │  levStep) — xval_twin.py is what keeps that copy and
+    │  twin_core.py from silently drifting apart.
+    └──► digital_twin_fem.html  (~1 MB, no server needed)
 ```
 
 ---
@@ -113,14 +145,23 @@ build_twin_html_fem.py ◄──────────────────
               │        │        │
               └────────┴────────┘
                        │
-              ┌────────┴──────────┐
-              │                   │
-        digital_twin.py   build_twin_html_fem.py
-              │                   │
-         (matplotlib)    digital_twin_fem.html
-                                  │
-                              3D_model.stl
-                          (STL geometry baked in)
+              build_twin_html_fem.py ── lumped_physics()/lev_params()
+                       │                (coefficients — SSOT stays here)
+                       ▼
+                 twin_model.py :: coeffs_from_live()
+                       │
+                       ▼
+                 twin_core.py :: TwinState
+                  (integrator — SSOT, numpy+stdlib only)
+                 /                        \
+                /                          \
+       digital_twin.py           digital_twin_pyvista.py
+        (matplotlib)                (PyVista/VTK, optional)
+
+    build_twin_html_fem.py also bakes digital_twin_fem.html
+    (three.js), which carries its OWN JS copy of the same
+    integrator — pinned against twin_core.py by xval_twin.py,
+    NOT part of the Python import graph above.
 ```
 
 ---
@@ -155,6 +196,7 @@ All generated files land in `outputs/` (gitignored, except `digital_twin_fem.htm
 | `outputs/plate.glb` | `python visualize.py` | ~247 KB |
 | `outputs/thermal_3d.png` | `python visualize.py --no-show` | — |
 | `outputs/thermal_2d_section.png` | `python visualize.py --no-show` | — |
+| `outputs/twin_pv.png` | `python digital_twin_pyvista.py --screenshot outputs/twin_pv.png --no-show` (optional pyvista/vtk dep) | — |
 
 ---
 
@@ -169,11 +211,14 @@ levitation_height_team28.csv
     └──► em_solver.py: run_benchmark_validation()
              Uses benchmark_team28_original block (960/576 turns, 20A, R=65mm, no iron,
              coil radii 15-28/41-46.5mm from TeamProblem28.pdf Fig.2)
-             Result: z_eq ≈ 7.1 mm vs 11.3 mm CSV — IMPROVED but NOT YET matching
-             (2026-06-23: was z_eq≈3.4mm before the coil-radii fix; the "10.9mm ✓" once
-             logged here was never reproducible at all, bisected through git history.
-             Remaining 37% error unexplained — mesh/domain/sign all ruled out. See
-             CLAUDE.md.)
+             Result: z_eq ≈ 14.5 mm vs 11.3 mm CSV — 28% OVERSHOOT, still PAUSED
+             (history: z_eq≈3.4mm → 7.1mm after the 2026-06-23 coil-radii fix, then
+             → 14.5mm on 2026-07-11 when a missed WP-PEAK call site was fixed — this
+             function called compute_lift_force(cfg) without I_amplitude=cfg.I_peak,
+             so F_z was ~2x too small at every z. The error flipped sign: 40% UNDER
+             → 28% OVER. The "10.9mm ✓" once logged here was never reproducible at
+             all, bisected through git history. Residual 28% unexplained — mesh/
+             domain/sign all ruled out. See CLAUDE.md.)
 ```
 
 ---
