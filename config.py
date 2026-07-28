@@ -47,7 +47,7 @@ class Config:
         force error absorbed into the thermal calibration constants (hA_inner/
         hA_outer). The FORCE chain must NOT reuse that convention -- lift force
         needs the true amplitude, self.I * sqrt(2). See CLAUDE.md "CURRENT
-        CONVENTION" and docs/AUDIT_FIX_PLAN_2026-07-04.md WP-PEAK."""
+        CONVENTION" and docs/archive/2026-07-04_AUDIT_FIX_PLAN.md WP-PEAK."""
         return self.I * math.sqrt(2.0)
     @property
     def I_ref(self):   return float(self.raw["excitation"]["current_ref_A"])

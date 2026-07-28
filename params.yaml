@@ -266,10 +266,10 @@ plate_library_annulus_TODO:
   - {name: "Al Ø110/55mm t2.8", outer_radius_mm: 55.0, inner_radius_mm: 27.5, thickness_mm: 2.8, material: aluminium, mass_g: 60}
   - {name: "Al Ø110/55mm t1.8", outer_radius_mm: 55.0, inner_radius_mm: 27.5, thickness_mm: 1.8, material: aluminium, mass_g: 41}
 
-# --- Levitation gap spring-mass-damper (WP-A/WP-D, docs/PLAN_SIM_FEEDBACK_2026-07-02.md) ---
+# --- Levitation gap spring-mass-damper (WP-A/WP-D, docs/archive/2026-07-02_PLAN_SIM_FEEDBACK.md) ---
 # JS reads these via PARAMS.lev (build_twin_html_fem.py lev_params()/romStep)
 # instead of hardcoding them.
-# WP-LEV (2026-07-28, docs/BUG_REGISTER_2026-07-28.md L1/L2): z_gap_5A_mm/
+# WP-LEV (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md L1/L2): z_gap_5A_mm/
 # z_decay_mm below are NO LONGER read by lev_params() for R=80mm specifically --
 # EVERY plate radius, including the default 80mm, now goes through the SAME
 # `_lev_anchor()` root-find (a real bracketing solve of F(z)=F_grav over
@@ -296,7 +296,7 @@ levitation:
   z_decay_mm: 11.79    # [mm] REFERENCE ONLY (see note above) -- EM force decay length
                         # z0, R=80mm, same F(1mm)/F(5mm) method as WP-Z0 below
                         # (z0=(5-1)/ln(F(1mm)/F(5mm)), F(1mm)=4.58N, F(5mm)=3.26N)
-  # --- Pre-2026-07-10 history (WP-Z0, docs/AUDIT_FIX_PLAN_2026-07-04.md OQ-4): two
+  # --- Pre-2026-07-10 history (WP-Z0, docs/archive/2026-07-04_AUDIT_FIX_PLAN.md OQ-4): two
   # fitting methods disagreed for the SAME disc under the OLD (non-iron) geometry --
   # 21.4mm (F(1mm)/F_grav crossing) vs 13.6mm (F(1mm)/F(5mm) refit, used for every OTHER
   # plate radius via _lev_anchor() in build_twin_html_fem.py). User confirmed the real
@@ -314,7 +314,7 @@ levitation:
   jit_freq2_rad_s: 71.0
   jit_fade_mm: 0.5      # display-only: jitter amplitude fades out once levitation gap exceeds this, in mm
   z_gap_exaggeration: 2.0  # display exaggeration, matches levitating_disc.display_z_exaggeration
-  # ADDED 2026-07-28 (WP-SHIMMER V2, docs/BUG_REGISTER_2026-07-28.md V2). DISPLAY
+  # ADDED 2026-07-28 (WP-SHIMMER V2, docs/archive/2026-07-28_BUG_REGISTER.md V2). DISPLAY
   # ONLY -- see docs/physics.md §11 "Why a levitating disc oscillates" for the
   # derivation this rides on: the real 100Hz vertical force ripple (F ∝ i², 100%
   # modulated at Ω=2ω) only moves the disc ~0.025mm at the default R=80mm/50Hz
@@ -342,7 +342,7 @@ material_props:
     sigma_S_per_m: 5.96e7
     mu_r: 1.0
     sigma_tempco_per_K: 3.9e-3
-  # ADDED 2026-07-28 (WP-COOL T2, docs/BUG_REGISTER_2026-07-28.md T2): mild-steel-
+  # ADDED 2026-07-28 (WP-COOL T2, docs/archive/2026-07-28_BUG_REGISTER.md T2): mild-steel-
   # like values (matches the mu_r=1000/sigma=1e6 placeholder already used for
   # iron_core:/outer_iron_ring: -- see CLAUDE.md "CENTER CORE + IRON RING"). Used
   # by lumped_physics() to compute the iron/core lumped-network node's REAL heat
@@ -369,7 +369,7 @@ em_domain:
 # --- Transient (Phase 2) --- WIRED 2026-07-10: digital_twin.py's --dt/--window
 # argparse flags now default from dt_s/t_end_s here instead of duplicating them
 # as hardcoded literals (see _parse() in digital_twin.py).
-# quickstart_ramp_s ADDED 2026-07-28 (WP-SHIMMER V1, docs/BUG_REGISTER_2026-07-28.md
+# quickstart_ramp_s ADDED 2026-07-28 (WP-SHIMMER V1, docs/archive/2026-07-28_BUG_REGISTER.md
 # V1): ramp time for the new `quickstart` I(t) scenario (0->I over this many
 # seconds), used as the HTML twin's default on-load/on-reset scenario so the
 # disc visibly ramps up and bobs instead of snapping straight to its I=5A gap.
@@ -536,7 +536,7 @@ validation_data:
 # not worth destabilizing the mass-based value for a 0.06C gain. Revisit with real
 # cooldown IR data (see CLAUDE.md NEXT list) rather than re-fitting this same ramp.
 #
-# REFITTED 2026-07-28 (WP-COOL T4, docs/BUG_REGISTER_2026-07-28.md T4/`refit_hA.py`):
+# REFITTED 2026-07-28 (WP-COOL T4, docs/archive/2026-07-28_BUG_REGISTER.md T4/`refit_hA.py`):
 # the 2026-07-11 refit above solved hA through the LINEAR steady-state formula
 # `T = T_amb + P/hA + AIR_DT_SS`, but the deployed code applies the NONLINEAR
 # `hAEff = hA_cal*(dT/dT_cal)^convection_exponent` correction on top -- since
@@ -565,14 +565,14 @@ lumped_thermal:
                                # after 2026-07-01 (pre-geometry-update).
   coil_C_scale: 0.2241        # HELD UNCHANGED through WP-COOL T1/T4 (2026-07-28) -- WP-COOL T1
                                # fixed how this ratio is APPLIED (P_ref now split surf/deep in
-                               # this same ratio, was 100% surface, see docs/BUG_REGISTER_2026-07-28.md
+                               # this same ratio, was 100% surface, see docs/archive/2026-07-28_BUG_REGISTER.md
                                # T1), not the ratio itself. Physically-derived mass fraction, not
                                # re-fit to the (internally inconsistent) thermal_ramp_test -- see
                                # docs/CHANGELOG.md WP-COOL entry for the accepted ramp-RMS regression.
   hA_iron_W_per_K: 0.244      # iron/core -> local air (fit 2026-07-02, see note above)
   G_iron_cond_W_per_K: 0.06   # inner coil -> iron/core contact conduction (fit 2026-07-02)
   # air_node_C_J_per_K/air_node_hA_far_W_per_K: UNIDENTIFIED fudge factors (WP-COOL
-  # T5, docs/BUG_REGISTER_2026-07-28.md T5) -- both self-labelled "illustrative"
+  # T5, docs/archive/2026-07-28_BUG_REGISTER.md T5) -- both self-labelled "illustrative"
   # since they were introduced and never independently fit. tau_air=C/hA_far=75s
   # caps how long the WHOLE rig (every coil/iron node dumps into this one shared
   # air pocket) can stay warm -- hA_far=40 W/K over a rig surface of ~0.2 m^2

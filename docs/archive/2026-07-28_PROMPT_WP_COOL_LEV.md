@@ -1,7 +1,7 @@
 # WP-COOL / WP-LEV / WP-SHIMMER — implementation work order (2026-07-28)
 
 Debug + root-cause already done. Full evidence, all reproduction numbers and
-the derivations are in **`docs/BUG_REGISTER_2026-07-28.md` — read that first,
+the derivations are in **`docs/archive/2026-07-28_BUG_REGISTER.md` — read that first,
 in full.** Do not re-derive; do not re-debug. This file is the work order.
 
 ---
@@ -300,12 +300,12 @@ fixed-current shimmer checks and the disc-swap gap ordering above.
    and the new `params.yaml` keys.
 2. **`CLAUDE.md`** — replace the long `OPEN (2026-07-28, user-reported…)` block
    with a short `[x] RESOLVED 2026-07-28` summary in the established style
-   (a few lines + a pointer to `docs/BUG_REGISTER_2026-07-28.md`). **The file
+   (a few lines + a pointer to `docs/archive/2026-07-28_BUG_REGISTER.md`). **The file
    is 446 lines against a ~200-line budget — this is a trim, not an append.**
    Also update the "First quantitative result" and "Real-rig validation"
    sections if the hA refit moved their numbers.
-3. **`docs/BUG_REGISTER_2026-07-28.md`** — add a "Fixed this session" table
-   with commit hashes, matching the `BUG_REGISTER_2026-07-11.md` format.
+3. **`docs/archive/2026-07-28_BUG_REGISTER.md`** — add a "Fixed this session" table
+   with commit hashes, matching the `docs/archive/2026-07-11_BUG_REGISTER.md` format.
 4. **`README.md`** — only if a CLI surface changed (new `--refit-hA` mode, new
    scenario names in the run list).
 5. **`docs/physics.md` §11** — flip the "OPEN" framing to resolved for (a)–(d),

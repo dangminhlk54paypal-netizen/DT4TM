@@ -84,7 +84,7 @@ Notes per tool:
   before re-measurement 2026-07-10). Current: F_z(5A, z=3.8mm) ≈ 4.10N ≫
   gravity 1.60N, but predicted equilibrium gap z_eq ≈ 11.7mm (disc bottom, visible
   top ≈14.7mm) versus actual observation of only 7-8mm visible — an unresolved
-  discrepancy (see CLAUDE.md "LIFT FORCE" / `docs/BUG_REGISTER_2026-07-11.md`).
+  discrepancy (see CLAUDE.md "LIFT FORCE" / `docs/archive/2026-07-11_BUG_REGISTER.md`).
   Experiments with nonlinear saturation model ruled out iron saturation as
   cause (force changes <0.1%) — true cause still unknown.
 

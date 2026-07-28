@@ -15,7 +15,7 @@ Features:
 The time integrator (β/coil/lev) lives in twin_core.TwinState — this module
 used to carry its own single-β `DigitalTwin` class (a second, drifting copy
 of the same physics also baked into outputs/digital_twin_fem.html's JS; see
-docs/PYVISTA_TWIN_PLAN_2026-07-28.md). Removed in WP-CORE2: twin_core.TwinState
+docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md). Removed in WP-CORE2: twin_core.TwinState
 with f_eddy=1/f_air=0 is an exact superset of the old single-β model (proven
 by twin_core.py's own self-check #1, pinned bit-for-bit against the JS engine
 by xval_twin.py) — there is no remaining reason to keep a second copy.
@@ -56,7 +56,7 @@ def run_live(
     # Find the plate_library entry that matches the ACTIVE (default) plate by
     # value — radius_mm + material — not by reconstructing a name string and
     # string-matching it (that broke silently when plate_library's naming
-    # convention didn't match: see CLAUDE.md H4 / docs/AUDIT_FIX_PLAN_2026-07-04.md).
+    # convention didn't match: see CLAUDE.md H4 / docs/archive/2026-07-04_AUDIT_FIX_PLAN.md).
     active = resolve_active_plate(cfg)
     plate_names, default_name = active.plate_names, active.name
 

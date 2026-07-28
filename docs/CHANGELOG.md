@@ -1,7 +1,7 @@
 # CHANGELOG — Thermal Digital Twin (TEAM 28-like Levitator)
 
 Full narrative history of every fix/feature session, moved out of CLAUDE.md
-(2026-07-10, WP-TRIM per docs/AUDIT_FIX_PLAN_2026-07-04.md) to keep CLAUDE.md
+(2026-07-10, WP-TRIM per docs/archive/2026-07-04_AUDIT_FIX_PLAN.md) to keep CLAUDE.md
 under its ~250-line budget. CLAUDE.md's "Code status" section keeps only a
 compact CURRENT-STATE checklist; this file has the full "how we got there"
 detail for every entry, unabridged, in roughly chronological order.
@@ -198,7 +198,7 @@ detail for every entry, unabridged, in roughly chronological order.
       refit with thermocouples later). Now T_iron_ss(5A)=35.6°C ✓. Verified headless:
       0 JS errors, gap curve continuous (0/4.5A, 4.1/5A, 19/7A), bob-and-settle observed,
       coils golden + separator warm after 30 sim-min.
-- [x] 4 render fixes (2026-07-02, docs/HTML_TWIN_FIX_PLAN_2026-07-02.md):
+- [x] 4 render fixes (2026-07-02, docs/archive/2026-07-02_HTML_TWIN_FIX_PLAN.md):
       (1) Gap displayed too high (~87 display-mm, disc floating above the whole
       device): root cause was a 3.8mm gap BAKED into the disc geometry (Python
       `z_disc_bot`) stacked with a `LIFT_BASE` JS offset AND `Z_GAP_EXAG=8.0` — all
@@ -273,7 +273,7 @@ detail for every entry, unabridged, in roughly chronological order.
       thermocouple measurement (already on the SENSOR_PLAN NEXT list) is needed to
       fully resolve this, not just narrow it — don't over-trust plate/coil ordering
       until then.
-- [x] WP-C (2026-07-02, docs/PLAN_SIM_FEEDBACK_2026-07-02.md): **Al Ø202mm disc option**
+- [x] WP-C (2026-07-02, docs/archive/2026-07-02_PLAN_SIM_FEEDBACK.md): **Al Ø202mm disc option**
       (R=101mm, covers out to the separator ring's outer edge). Added as a NEW
       `plate_library` entry — default `plate_material.radius_mm` stays 80mm (the real,
       validated disc). Build with `python build_twin_html_fem.py --plate-radius 101`
@@ -304,7 +304,7 @@ detail for every entry, unabridged, in roughly chronological order.
       Z_GAP_5A_MM/Z_DECAY_MM constants (WP-A/WP-D territory); the R101 HTML's
       Levitation Gap telemetry currently still shows a (wrong) nonzero gap because
       of this — expected, closes once WP-D wires PARAMS.lev per radius.
-- [x] WP-B (2026-07-02, docs/PLAN_SIM_FEEDBACK_2026-07-02.md): **realistic coil
+- [x] WP-B (2026-07-02, docs/archive/2026-07-02_PLAN_SIM_FEEDBACK.md): **realistic coil
       cooling** (rig feedback: hot windings take much longer to cool than to heat;
       the old single-node RC model cooled with the SAME τ it heated with, ~350s).
       Two additions in `romStep`/`lumped_physics` (build_twin_html_fem.py) +
@@ -343,7 +343,7 @@ detail for every entry, unabridged, in roughly chronological order.
       **NEXT** (unchanged ask, still open): next lab session, log a real
       cooldown trajectory (steady 5A → I=0, read coil IR every 60s for 20-30 min)
       to actually fit `coil_G_wind_W_per_K` and `convection_exponent`.
-- [x] WP-A (2026-07-02, docs/PLAN_SIM_FEEDBACK_2026-07-02.md): **levitation
+- [x] WP-A (2026-07-02, docs/archive/2026-07-02_PLAN_SIM_FEEDBACK.md): **levitation
       oscillation physics**, JS-only (`build_twin_html_fem.py` "Levitation gap
       physics" block + render loop + `window.twinDebug`), no Python/geometry
       changes. Fixes rig feedback: (a) speed slider didn't speed up the bob;
@@ -391,7 +391,7 @@ detail for every entry, unabridged, in roughly chronological order.
       and the R101 build still uses the R=80 lift-force anchors (see WP-C entry
       above), so its levitation telemetry is known-wrong until WP-D wires
       `LEV_ANCHORS` per plate radius. **Resolved by WP-D below.**
-- [x] WP-D (2026-07-02, docs/PLAN_SIM_FEEDBACK_2026-07-02.md): **constants
+- [x] WP-D (2026-07-02, docs/archive/2026-07-02_PLAN_SIM_FEEDBACK.md): **constants
       refactor + final integration**. Added `levitation:` block to params.yaml
       (z_gap_5A_mm, z_decay_mm, zeta0/1, jit_mm, jit_freq1/2, z_gap_exaggeration)
       and `coil_hot_display_C` to `lumped_thermal:`. New `lev_params(cfg)`
@@ -411,7 +411,7 @@ detail for every entry, unabridged, in roughly chronological order.
       `digital_twin_fem_R101.html`: 0 JS console errors, coil glow still runs
       correctly through the relocated `T_COIL_HOT`.
       **Consolidated ALL open questions from every WP into one place**: see
-      docs/PLAN_SIM_FEEDBACK_2026-07-02.md, final section "Questions for the user to answer"
+      docs/archive/2026-07-02_PLAN_SIM_FEEDBACK.md, final section "Questions for the user to answer"
       (8 items — gap@7.75A calibration, a genuine numeric conflict inside
       WP-A's own spec between the ζ∝I² law and its 40% overshoot acceptance
       target, coil cooldown data, TWO disagreeing z0 decay-length derivations
@@ -536,7 +536,7 @@ detail for every entry, unabridged, in roughly chronological order.
       to compare by `radius_mm`+material instead of a broken name string),
       WP-DOCS (6 stale `build_twin_html.py` references cleaned up, README
       roadmap Phase 6a/6b checked off). Full per-WP verify output in
-      docs/AUDIT_FIX_PLAN_2026-07-04.md's Execution Log. Real Google API key
+      docs/archive/2026-07-04_AUDIT_FIX_PLAN.md's Execution Log. Real Google API key
       that had been sitting baked in the unstaged `outputs/digital_twin_fem.html`
       working tree is now confirmed gone (both HTML outputs rebuilt fresh,
       `grep -c AIzaSy` = 0). Not committed — left for user review.
@@ -587,7 +587,7 @@ detail for every entry, unabridged, in roughly chronological order.
       Verified headless (Playwright, `digital_twin_fem.html`): dial=220°→badge
       "~196 V" (was "~220 V"), dial=270°→badge "~240 V" (was "~270 V"), 0 JS
       errors. Both HTML outputs rebuilt.
-- [x] WP-PEAK (docs/AUDIT_FIX_PLAN_2026-07-04.md Phase 2, H2/M5/M6/L2):
+- [x] WP-PEAK (docs/archive/2026-07-04_AUDIT_FIX_PLAN.md Phase 2, H2/M5/M6/L2):
       **RMS/peak convention cleanup for the FORCE chain** — the most sensitive WP,
       run alone after Phase 1 since it touches `em_solver.py`/`config.py` shared
       by everything else. Hard constraint respected throughout: the LOSS chain
@@ -709,7 +709,7 @@ structurally unaffected by the iron-material flip). `solve_em_saturating()`'s
 pre-existing M5 guard (see WP-PEAK entry above — "currently inert... will fire
 loudly if someone flips [outer_iron_ring.mu_r]") fired exactly as designed: now
 prints a WARNING every run since the ring really is high-mu_r, since its own Picard
-saturation correction still only tracks `iron_core` (docs/AUDIT_FIX_PLAN_2026-07-04.md
+saturation correction still only tracks `iron_core` (docs/archive/2026-07-04_AUDIT_FIX_PLAN.md
 M5, not fixed in this session, not urgent since B_max is well under B_sat).
 
 **Consequential regression, flagged as an OPEN QUESTION rather than fixed**: lift
@@ -834,7 +834,7 @@ which is a separate, longer task; documented as NEXT in both `params.yaml` and
 2026-07-10, `outer_iron_ring` is confirmed ferromagnetic (`mu_r=1000.0`, same
 as `iron_core`), but `solve_em_saturating()`'s Picard loop only ever corrected
 `iron_core`'s μ_r(B) — `outer_iron_ring` stayed pinned at its linear value,
-silently (a known gap since docs/AUDIT_FIX_PLAN_2026-07-04.md M5, dormant only
+silently (a known gap since docs/archive/2026-07-04_AUDIT_FIX_PLAN.md M5, dormant only
 because `outer_iron_ring.mu_r` used to be 1.0/air-like). Rewrote the function
 to track both regions independently: separate `iron_idx`/`oir_idx` element
 selection, separate `nu_iron`/`nu_oir` arrays and `mu_r_lin`/`B_sat` per region,
@@ -871,7 +871,7 @@ that "the model updated today might have affected results and caused
 unwanted outcomes." Ran 3 Explore agents in parallel (EM chain, thermal/ROM
 chain, HTML+docs staleness) before touching any code. Full findings, the
 verified-clean list, and the two experiment write-ups (WP-6, WP-7) live in
-**docs/BUG_REGISTER_2026-07-11.md** — this entry is the short version.
+**docs/archive/2026-07-11_BUG_REGISTER.md** — this entry is the short version.
 
 **The one real numeric bug: Phase B's hA refit used the wrong formula.**
 Phase B (above) solved `hA_inner`/`hA_outer` from `AIR_DT_SS = P_total(7.8A) /
@@ -927,15 +927,15 @@ present, new values present, no real API key baked (grep-only check, file
 never read in full).
 
 **Not done this session (deferred to a future pass, see
-docs/BUG_REGISTER_2026-07-11.md "Not investigated"):** porting corrected
+docs/archive/2026-07-11_BUG_REGISTER.md "Not investigated"):** porting corrected
 geometry into `docs/REPORT_WHY_CUSTOM_CODE_DE.md`/EN counterpart; CLAUDE.md
 has drifted back over its own ~200-line budget (304 lines) since the last
 WP-TRIM — flagged for the user, not trimmed unilaterally (WP-TRIM requires
-explicit user approval per `docs/AUDIT_FIX_PLAN_2026-07-04.md`).
+explicit user approval per `docs/archive/2026-07-04_AUDIT_FIX_PLAN.md`).
 
 ## 2026-07-28 — SSOT integrator port + PyVista desktop 3D twin (WP-HOOK → WP-DOC)
 
-Full plan: `docs/PYVISTA_TWIN_PLAN_2026-07-28.md`. Root problem this session
+Full plan: `docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md`. Root problem this session
 set out to fix: the physics was split in two. `build_twin_html_fem.py`
 computed per-plate *coefficients* in Python (`lumped_physics`/`lev_params`)
 but its 3 time *integrators* (dual-β disc, lumped coil/iron/air RC,
@@ -1083,8 +1083,8 @@ policy as the 2026-07-11 entry above.
 ---
 
 ## WP-LEV / WP-COOL / WP-SHIMMER (2026-07-28) — three user-reported HTML-twin
-defects, root-caused and fixed same session in `docs/BUG_REGISTER_2026-07-28.md`,
-work order in `docs/PROMPT_WP_COOL_LEV_2026-07-28.md`. All three land in BOTH
+defects, root-caused and fixed same session in `docs/archive/2026-07-28_BUG_REGISTER.md`,
+work order in `docs/archive/2026-07-28_PROMPT_WP_COOL_LEV.md`. All three land in BOTH
 `twin_core.py` (SSOT integrator) and the baked JS in `build_twin_html_fem.py`,
 pinned by `python xval_twin.py` (assertion A: integrator match, all-zero diffs
 this session, i.e. bit-exact; assertion B: bake freshness, 0 relative diff) —
@@ -1266,3 +1266,47 @@ New `params.yaml` keys: `material_props.iron.{rho_kg_per_m3,cp_J_per_kgK}`
 `refit_hA.py`. `levitation.z_gap_5A_mm`/`z_decay_mm` (params.yaml) are now
 documented as reference-only (every radius, R=80 included, computes its own
 live anchor via `_lev_anchor()`) — values themselves unchanged.
+
+---
+
+## WP-TIDY (2026-07-28) — repo tidy-up: docs/archive/, CLAUDE.md trim, dead files
+
+Housekeeping session, no physics changed. Three parts. (The `extensions/` folder
+landed separately — see WP-EXT below.)
+
+**1. `docs/archive/`.** `docs/` had grown to 20 *.md / 6462 lines, with finished
+one-off plans and bug registers interleaved with living reference. Nine
+completed docs moved (via `git mv`, rename history preserved) and renamed to
+`YYYY-MM-DD_TOPIC.md` so a plain listing reads chronologically:
+`3D_MODEL_UPDATE_PLAN` → `2026-06-23_…`; `HTML_TWIN_FIX_PLAN_2026-07-02`,
+`PLAN_SIM_FEEDBACK_2026-07-02`, `implemetation_Plan` (misspelling dropped) →
+`2026-07-02_…`; `AUDIT_FIX_PLAN_2026-07-04` → `2026-07-04_…`;
+`BUG_REGISTER_2026-07-11` → `2026-07-11_…`; `BUG_REGISTER_2026-07-28`,
+`PROMPT_WP_COOL_LEV_2026-07-28`, `PYVISTA_TWIN_PLAN_2026-07-28` →
+`2026-07-28_…`. New `docs/archive/README.md` indexes all nine with what each
+was and how it ended, plus an explicit warning that archived numbers are
+frozen-in-time and never the source of truth. All 152 `docs/*.md` references
+across 36 files re-pointed and verified to resolve. `docs/math_formulation.md`
+kept in place (user decision — still wanted for the report/thesis).
+
+**2. `CLAUDE.md` 432 → 212 lines**, back under its own stated ~200-line budget.
+It had accumulated resolved `[x]` entries and superseded history (the
+"WAS WRONG (2026-07-01: …)" geometry, the three-round hA refit narrative)
+duplicating this file. Before cutting, every dropped fact was verified present
+elsewhere (`docs/CHANGELOG.md:684/703/771`, `docs/QUICK_START_FOR_AGENTS.md:8`,
+the archive) — nothing lost. Kept in full: the RMS-vs-peak CURRENT CONVENTION,
+both OPEN QUESTIONS (lift-force/z_eq mismatch, unmeasured μᵣ), the PAUSED
+benchmark, the secrets rule, token discipline. Verbose `[x]` module entries
+became a compact table; open items became their own section.
+
+**3. Dead files.** `calc_res.py` deleted — 23-line scratch script, referenced
+nowhere, duplicating `em_solver.py:505-510`, and hardcoding an absolute
+`/Users/minh/...` path in violation of the repo's own `__file__` self-location
+rule. Five orphaned `outputs/` artifacts removed after confirming no current
+script writes them (`digital_twin.html` — builder deleted 2026-07-02;
+`digital_twin_fem_R101.html` — R=101 dropped from `plate_library`;
+
+Verified: all 152 `docs/*.md` references resolve, `python twin_core.py` 6/6
+PASS, `python xval_twin.py` PASS, `compileall` clean. Every changed line in the
+10 touched `.py`/`.yaml` files is a comment or docstring — no executable code
+changed.

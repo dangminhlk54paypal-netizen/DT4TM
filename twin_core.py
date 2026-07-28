@@ -9,7 +9,7 @@ to live ONLY inside the JS <script> template baked by build_twin_html_fem.py:
 
 Consumers: digital_twin.py (matplotlib), the upcoming PyVista twin, and
 data_io.py — all three should import RomCoeffs/LumpedCoeffs/LevCoeffs/TwinState
-from here instead of re-deriving the physics. See docs/PYVISTA_TWIN_PLAN_2026-07-28.md
+from here instead of re-deriving the physics. See docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md
 for the "9 traps" this port has to reproduce exactly (each one is called out
 at its corresponding line below).
 
@@ -45,7 +45,7 @@ def scenario_pulse(I: float = 5.0):
     return (lambda t: I if (t % 120) < 60 else 0.0), f"Pulse {I}A ON60/OFF60s"
 
 def scenario_quickstart(I: float = 5.0, t_r: float = 8.0):
-    """WP-SHIMMER V1 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V1): fast
+    """WP-SHIMMER V1 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md V1): fast
     0->I ramp, t_r from params.yaml transient.quickstart_ramp_s (default 8s,
     user asked for 5-10s). Same functional form as scenario_ramp (just a much
     shorter default ramp time + its own label) -- this is the HTML twin's
@@ -80,10 +80,10 @@ class RomCoeffs:
     dT_mean_ref: float
     alpha: float
     # f_eddy=1/f_air=0 is the single-β model (digital_twin.py's DigitalTwin) —
-    # dual-β is a strict generalization of it (docs/PYVISTA_TWIN_PLAN_2026-07-28.md).
+    # dual-β is a strict generalization of it (docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md).
     f_eddy: float = 1.0
     f_air: float = 0.0
-    # WP-COOL T3 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T3): the disc's
+    # WP-COOL T3 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md T3): the disc's
     # heat-up τ (`tau` above) was derived from a FEM whose bottom BC includes
     # the coil-plume enhancement (h_bottom=25 W/m2K); that enhancement dies
     # with the current, so cooldown is physically slower than heat-up. 1.0
@@ -139,7 +139,7 @@ class NodeCoeffs:
     C_deep: float | None = None   # inner/outer only (winding-core mass)
     G_wind: float = 0.0           # inner/outer only (surface<->deep conductance)
     G_cond: float = 0.0           # iron only (contact conduction FROM the inner coil)
-    # WP-COOL T1 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T1): P_ref split
+    # WP-COOL T1 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md T1): P_ref split
     # across the surface/deep nodes in the SAME ratio as their heat capacity
     # (coil_C_scale), instead of dumping 100% of P_ref onto the surface node
     # while the deep node (holding most of the copper mass) got none -- that
@@ -255,7 +255,7 @@ class LevCoeffs:
     jit_freq2: float
     z_gap_exaggeration: float
     jit_fade_mm: float
-    # WP-SHIMMER V2 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V2): sustained
+    # WP-SHIMMER V2 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md V2): sustained
     # shimmer while levitating, DISPLAY ONLY (see x_ripple_mm below for the
     # traceable physical number it's built on). gain=0.0 (default) reproduces
     # the OLD behaviour exactly (no sustained shimmer) so an older baked HTML
@@ -363,12 +363,12 @@ class TwinState:
                    # value from rom.T_amb (the offline solve-time ambient); JS
                    # anchors every live temperature (coils/air/disc) to
                    # T_AMB_JS, which may diverge from PARAMS.rom.T_amb (see
-                   # docs/PYVISTA_TWIN_PLAN_2026-07-28.md's T_AMB_FALLBACK_C
+                   # docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md's T_AMB_FALLBACK_C
                    # note). A caller that wants the two tied together (e.g.
                    # the matplotlib twin, offline-only) just passes the same
                    # value for both.
     current_clamp_A: float = 20.0
-    # TODO(WP-cleanup, per docs/PYVISTA_TWIN_PLAN_2026-07-28.md trap 8): the
+    # TODO(WP-cleanup, per docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md trap 8): the
     # asymmetric current clamp below (romStep clamps to current_clamp_A,
     # levStep does not) is ported VERBATIM from JS (build_twin_html_fem.py
     # :2721 vs :2763) because it is CURRENT, live behaviour — not because it
@@ -483,7 +483,7 @@ class TwinState:
         else:
             jit_contact = 0.0
 
-        # WP-SHIMMER V2 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V2):
+        # WP-SHIMMER V2 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md V2):
         # sustained shimmer while actually levitating (z>0) -- jit_contact
         # above is gated OFF above jit_fade_mm=0.5mm, so every disc above
         # ~3.2A was previously perfectly rigid. This is an honest DISPLAY-ONLY

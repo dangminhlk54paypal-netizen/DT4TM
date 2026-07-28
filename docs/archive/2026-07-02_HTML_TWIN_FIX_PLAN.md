@@ -5,7 +5,7 @@
 **Implementation model:** Sonnet (subsequent sessions). Follow order Task 1 → 4; verify each task before moving to next.
 
 > Source: user report 2026-07-02 (images `docs/z_achse_260701.png`, `docs/thermal_test.png`)
-> + Gemini analysis in `docs/implemetation_Plan.md`. Claude (Fable) verified
+> + Gemini analysis in `docs/archive/2026-07-02_IMPLEMENTATION_PLAN.md`. Claude (Fable) verified
 > each claim directly against code on 2026-07-02 — verification results noted at start of each task.
 > Line numbers below are correct for build_twin_html_fem.py at 2026-07-02 (pre-fix);
 > if file has changed, search by variable/function name instead of line number.

@@ -13,7 +13,7 @@ qrcode>=7.4           # phase 5 QR code — gen_qr.py
 # build_twin_html_fem.py (three.js/HTML) — those all work without this block.
 # Version floor: 0.45 needs PolyData.from_regular_faces (0.44+) and
 # interaction_event (0.38+ rename of event_type). VTK capped <9.7 to match
-# the pyvista range tested in docs/PYVISTA_TWIN_PLAN_2026-07-28.md.
+# the pyvista range tested in docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md.
 # pip install "pyvista>=0.45" "vtk>=9.3,<9.7"
 # pyvista>=0.45
 # vtk>=9.3,<9.7

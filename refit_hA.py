@@ -1,4 +1,4 @@
-"""refit_hA.py — WP-COOL T4 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T4).
+"""refit_hA.py — WP-COOL T4 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md T4).
 
 Solves `lumped_thermal.hA_inner_W_per_K`/`hA_outer_W_per_K` through the ACTUAL
 deployed integrator (twin_core.TwinState — the same code build_twin_html_fem.py

@@ -9,7 +9,7 @@ baked JS engine by xval_twin.py) via twin_model's coefficient/plate bridges.
 Geometry: reuses build_twin_html_fem.py's procedural mesh builders VERBATIM
 (build_octagonal_base/frame, build_solid_core, revolve_ring, build_disc_mesh,
 compute_em_field_lines, compute_eddy_field) — geometry is NOT reimplemented
-here. See docs/PYVISTA_TWIN_PLAN_2026-07-28.md for the full architecture and
+here. See docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md for the full architecture and
 the reasoning behind every non-obvious choice below.
 
 Coordinate system: Z-up, millimetres — the SAME frame build_twin_html_fem.py
@@ -49,7 +49,7 @@ except ImportError:
 # compute_em_field_lines() (called from solve_plate_variant(), used by the
 # worker-thread plate rebuild below) — matplotlib.use() is not thread-safe, so
 # it must be called explicitly, once, HERE on the main thread before any
-# worker thread can race it (docs/PYVISTA_TWIN_PLAN_2026-07-28.md WP-PLATE
+# worker thread can race it (docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md WP-PLATE
 # note). Harmless: this script never opens an interactive matplotlib window.
 import matplotlib
 matplotlib.use("Agg")
@@ -505,7 +505,7 @@ class TwinPyVista:
         # Registered BEFORE show(): add_timer_event owns the event loop from
         # here on. show(interactive_update=True)+update() is the WRONG
         # pattern (it fights VTK's own Cocoa run loop on macOS and starves
-        # it) — see docs/PYVISTA_TWIN_PLAN_2026-07-28.md WP-LOOP.
+        # it) — see docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md WP-LOOP.
         pl.add_timer_event(max_steps=2**31 - 1, duration=33, callback=self._on_timer)
         pl.show()
 

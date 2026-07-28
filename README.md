@@ -79,7 +79,11 @@ arduino/thermal_sensor/thermal_sensor.ino  # MAX31855x2 firmware, 1Hz CSV over s
 3D_model.stl                    # colleague's CAD (source, meters, axisymmetric)
 levitation_height_team28.csv    # Table I from the PDF (levitation height, validation)
 mock_sensor_data.csv            # synthetic sensor log for testing data_io.py
-docs/               # physics.md, ARCHITECTURE.md, HANDOFF.md, SENSOR_PLAN.md, 3D_MODEL_UPDATE_PLAN.md
+docs/               # LIVING docs: physics.md, ARCHITECTURE.md, CHANGELOG.md, HANDOFF.md,
+                    #   SENSOR_PLAN.md, QUICK_START_FOR_AGENTS.md, math_formulation.md,
+                    #   REPORT_WHY_CUSTOM_CODE{,_DE}.md
+docs/archive/       # COMPLETED plans + bug registers, named YYYY-MM-DD_TOPIC.md.
+                    #   Historical record only — see docs/archive/README.md for the index.
 outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin_fem.html)
 ```
 

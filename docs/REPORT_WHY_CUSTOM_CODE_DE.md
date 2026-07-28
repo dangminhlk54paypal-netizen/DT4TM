@@ -92,7 +92,7 @@ Anmerkungen zu jedem Werkzeug:
   Neuvermessung 2026-07-10). Aktuell: F_z(5A, z=3,8mm) ≈ 4,10 N ≫ Gravitationskraft 1,60 N,
   aber der vorhergesagte Gleichgewichtsspalt liegt bei z_eq ≈ 11,7 mm (Plattenunterseite,
   sichtbar ≈ 14,7 mm) gegenüber beobachteten 7–8 mm sichtbar — eine offene Diskrepanz
-  (siehe CLAUDE.md "LIFT FORCE" / `docs/BUG_REGISTER_2026-07-11.md`). Ein Experiment mit
+  (siehe CLAUDE.md "LIFT FORCE" / `docs/archive/2026-07-11_BUG_REGISTER.md`). Ein Experiment mit
   dem nichtlinearen Sättigungsmodell für μᵣ hat Sättigung als Erklärung ausgeschlossen
   (Kraftänderung < 0,1 %) — die Ursache bleibt offen.
 

@@ -54,7 +54,7 @@ from scipy.optimize import brentq
 # PARAMS JSON export via lev_params() below -- the JS levitation-gap block
 # (search "Levitation gap physics") now reads PARAMS.lev instead of hardcoding
 # Z_GAP_5A_MM/Z_DECAY_MM.
-# WP-LEV (2026-07-28, docs/BUG_REGISTER_2026-07-28.md L1/L2): EVERY plate
+# WP-LEV (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md L1/L2): EVERY plate
 # radius -- including the default R=80mm -- now goes through `_lev_anchor()`'s
 # root-find below; R=80mm no longer special-cases straight to params.yaml's
 # `levitation.z_gap_5A_mm`/`z_decay_mm` scalars (those are kept only as a
@@ -150,7 +150,7 @@ def _lev_anchor(radius_mm: float, plate_thickness_mm: float = 3.0) -> dict:
         cfg.raw["plate_material"]["z_bottom_mm"] = float(z_mm)
         cfg.geometry = Geometry(plate_radius_m=R_m, plate_thickness_m=t_m,
                                  plate_z_bottom_m=float(z_mm) * 1e-3)
-        # WP-PEAK (docs/AUDIT_FIX_PLAN_2026-07-04.md): force needs the TRUE
+        # WP-PEAK (docs/archive/2026-07-04_AUDIT_FIX_PLAN.md): force needs the TRUE
         # phasor amplitude cfg.I_peak, not a manual current_A=5*sqrt(2) mutation
         # (the old pattern here, now handled cleanly via compute_lift_force's
         # own I_amplitude parameter). cfg.I stays at its natural params.yaml
@@ -394,7 +394,7 @@ def lumped_physics(cfg, em: dict) -> dict:
         Vc = c["turns"] * (2 * math.pi * r_mean) * A_wire
         return 8960.0 * 385.0 * Vc  # rho_Cu * cp_Cu * V_Cu, full solid-copper mass
 
-    # WP-COOL T2 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T2): the iron
+    # WP-COOL T2 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md T2): the iron
     # lumped-network node's REAL heat capacity, from the iron_core:/
     # outer_iron_ring: geometry and material_props.iron (params.yaml) -- was
     # `0.5*C_plate` (half the ALUMINIUM DISC's capacity, unrelated to iron and
@@ -451,7 +451,7 @@ def lumped_physics(cfg, em: dict) -> dict:
         "nodes": {
             "inner": {
                 "P_ref":  P_inner,
-                # WP-COOL T1 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T1):
+                # WP-COOL T1 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md T1):
                 # split P_ref across the surface/deep nodes in the SAME ratio
                 # as their heat capacity (coil_C_scale), instead of dumping
                 # 100% of P_ref onto the surface node while the deep node (77.6%
@@ -578,7 +578,7 @@ def build_separator_rings(cfg, z_bot_mm: float, z_top_mm: float, n_theta: int) -
     spanning [z_bot_mm, z_top_mm] (full device height from params.yaml coil z-range).
     They render as solid rings standing among the windings, visually closing the gaps
     between core/inner coil and inner/outer coil. The real STL has NO surface at these
-    exact radii (a genuine geometric gap -- see 3D_MODEL_UPDATE_PLAN.md), so they can't
+    exact radii (a genuine geometric gap -- see docs/archive/2026-06-23_3D_MODEL_UPDATE_PLAN.md), so they can't
     be produced by recolouring existing triangles like the other regions; they're
     synthesized the same way the levitating disc is. Radii come from params.yaml, not
     hardcoded. These rings receive thermal coloring (tnIron) at runtime, showing heat
@@ -694,7 +694,7 @@ def build_disc_mesh(cfg, rom, z_bottom_mm: float, je_field=None):
 # ─── Disc cooldown-vs-heatup τ ratio (WP-COOL T3) ─────────────────────────────
 
 def disc_tau_cool_natural_frac(cfg) -> float:
-    """WP-COOL T3 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T3): the disc's
+    """WP-COOL T3 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md T3): the disc's
     ROM τ was derived from a FEM whose bottom BC is h_bottom_W_per_m2K=25
     ("enhanced convection facing coils" -- the coil plume). That enhancement
     fades with the coils' own current, so cooldown is physically slower than
@@ -1550,7 +1550,7 @@ function coilAirDrive() {
 }
 
 // ── I(t) scenarios (same as digital_twin.py / twin_core.py SCENARIOS) ────────
-// WP-SHIMMER V1 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V1): `quickstart`
+// WP-SHIMMER V1 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md V1): `quickstart`
 // is a fast 0->I ramp (PARAMS.quickstart_ramp_s, default 8s) -- same form as
 // `ramp` (60s) but short enough to watch the disc bob on page load instead of
 // snapping straight to its gap the way `step` does. It is the DEFAULT scenario
@@ -1599,7 +1599,7 @@ function romStep(I, dt) {
   let Qconv = 0.0;
   for (const k in LUMPED.nodes) {
     const nd = LUMPED.nodes[k];
-    // WP-COOL T1 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T1): split
+    // WP-COOL T1 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md T1): split
     // P_ref across surface/deep in the coil's own C-ratio instead of dumping
     // 100% onto the surface node while the deep node (most of the copper
     // mass) got none -- that made heat-up AND cooldown ~4.5x too fast.
@@ -1633,7 +1633,7 @@ function romStep(I, dt) {
   // trap 1: coil temperatures are already updated above, so coilAirDrive()
   // below reads the FRESH sim.T.inner/sim.T.outer from this same step.
   const airDrive = coilAirDrive();
-  // WP-COOL T3 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md T3): the disc's τ
+  // WP-COOL T3 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md T3): the disc's τ
   // was fit from a FEM with an "enhanced convection facing coils" bottom BC
   // (the coil plume) -- that enhancement fades with the coils' own drive, so
   // cooldown is physically slower than heat-up. ROM.tau_cool_natural_frac
@@ -1813,7 +1813,7 @@ function applyLevParams(levObj, radiusMm) {
   // `0.5` inlined in levStep()'s fadeIn calc) -- read from PARAMS.lev, falls
   // back to that same 0.5 if the key isn't present yet.
   JIT_FADE_MM = LEV.jit_fade_mm !== undefined ? LEV.jit_fade_mm : 0.5;
-  // WP-SHIMMER V2 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V2): sustained
+  // WP-SHIMMER V2 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md V2): sustained
   // shimmer while levitating, DISPLAY ONLY -- see the params.yaml comment on
   // lev_ripple_display_gain and docs/physics.md §11. X_RIPPLE_MM is the real
   // (but invisible, ~25um) 1-DOF forced-response amplitude to the 100Hz force
@@ -1868,7 +1868,7 @@ function levStep(I, dt) {
     jitContact = 0.0;
   }
 
-  // WP-SHIMMER V2 (2026-07-28, docs/BUG_REGISTER_2026-07-28.md V2): sustained
+  // WP-SHIMMER V2 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md V2): sustained
   // shimmer while actually levitating (z>0) -- jitContact above is gated OFF
   // above JIT_FADE_MM=0.5mm, so every disc above ~3.2A was previously
   // perfectly rigid. Honest DISPLAY-ONLY rendering of the real (but

@@ -427,7 +427,7 @@ sanity check before use"*).
 
 ---
 
-## Fixed this session (docs/PROMPT_WP_COOL_LEV_2026-07-28.md work order)
+## Fixed this session (docs/archive/2026-07-28_PROMPT_WP_COOL_LEV.md work order)
 
 Verification: `python xval_twin.py` — **PASS** (assertion A: bit-exact across
 all 7 integrator schedules + the dt=25s substep check; assertion B: 0 relative

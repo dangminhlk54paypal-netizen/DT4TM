@@ -165,7 +165,7 @@ Professor: team designs own measurement solution for thermal validation.
 See `SENSOR_PLAN.md` for the detailed component list and wiring plan.
 
 ## 11. Lumped-network defects found 2026-07-28 — RESOLVED same session (WP-COOL,
-see docs/BUG_REGISTER_2026-07-28.md T1-T5 / docs/CHANGELOG.md)
+see docs/archive/2026-07-28_BUG_REGISTER.md T1-T5 / docs/CHANGELOG.md)
 Section 6(c) recommends the lumped RC network as "the natural bridge to measured
 data". The implementation in `build_twin_html_fem.py lumped_physics()` +
 `twin_core.py _rom_step()` violated that formulation in four ways (all found by
@@ -235,7 +235,7 @@ then sits still. Any sustained shimmer added to the twin is therefore a
 **display effect**: derive the 0.025 mm honestly, then apply a separately-named
 `lev_ripple_display_gain`, exactly as `z_gap_exaggeration = 2.0` is handled today.
 
-**RESOLVED 2026-07-28 (WP-SHIMMER V2, docs/BUG_REGISTER_2026-07-28.md V2):**
+**RESOLVED 2026-07-28 (WP-SHIMMER V2, docs/archive/2026-07-28_BUG_REGISTER.md V2):**
 implemented exactly as derived above. `LevCoeffs.x_ripple_mm`/JS `X_RIPPLE_MM`
 compute this amplitude at runtime from `z_decay_mm` + the mains frequency
 (never pasted — verified 0.0249mm at the default R=80mm/50Hz constants,

@@ -52,7 +52,7 @@ def make_mesh_em(cfg):
     rs = _graded([(0, r_fine_mm, fs), (r_fine_mm, rmax, cs)]) * 1e-3
     # Fine mesh covers from -60mm to max(15, z_plate_top+10)mm to track plate
     # position -- and the payload's top too, when enabled (M6,
-    # docs/AUDIT_FIX_PLAN_2026-07-04.md): a thick payload stacked on the plate
+    # docs/archive/2026-07-04_AUDIT_FIX_PLAN.md): a thick payload stacked on the plate
     # would otherwise fall partly into the coarse mesh region with no warning.
     z_top_mm = p["z_bottom_mm"] + p["thickness_mm"]
     pl = cfg.raw.get("payload_model", {})
@@ -266,7 +266,7 @@ def check_saturation(res, cfg=None, B_scale: float = 1.0):
     default 1.0 for internal callers (solve_em_saturating's own Picard loop
     calls _compute_B_per_element directly, not through here, and must stay on
     the loss chain's convention -- see WP-PEAK in
-    docs/AUDIT_FIX_PLAN_2026-07-04.md).
+    docs/archive/2026-07-04_AUDIT_FIX_PLAN.md).
 
     Returns (B_max_iron, B_e) where:
         B_max_iron  [T]  — peak RMS B over iron_core UNION outer_iron_ring
@@ -538,7 +538,7 @@ def compute_lift_force(cfg, res=None, I_amplitude: float | None = None,
     permeability differs from the fixed linear value once B is non-negligible
     vs B_sat=1.5T. This is a REPORTING option only: it does not change the
     default force/z_eq calculations used anywhere else in the codebase (see
-    docs/BUG_REGISTER_2026-07-11.md WP-7 for the experiment this was added
+    docs/archive/2026-07-11_BUG_REGISTER.md WP-7 for the experiment this was added
     for -- report numbers only, do not reverse-fit mu_r to match the observed
     levitation gap). EXPERIMENT RESULT (2026-07-11, at I_peak, B~0.68T RMS):
     saturation changes F_z by <0.1% everywhere in the rig sweep and z_eq is
@@ -630,7 +630,7 @@ def run_benchmark_validation():
     print(f"  {'z_bottom (mm)':>14}  {'F_z (N)':>10}  {'F_z/mg':>8}  {'note'}")
     print(f"  {'-'*50}")
 
-    # WP-PEAK (docs/AUDIT_FIX_PLAN_2026-07-04.md): force needs the TRUE phasor
+    # WP-PEAK (docs/archive/2026-07-04_AUDIT_FIX_PLAN.md): force needs the TRUE phasor
     # amplitude (I_peak = I_rms*sqrt(2)), not I_rms used as-if-amplitude (the
     # loss chain's calibrated convention -- see config.Config.I_peak docstring).
     # Mirrors the fix already applied to run_rig_validation() below (commit
@@ -695,7 +695,7 @@ def run_rig_validation():
     print(f"  {'z_bottom (mm)':>14}  {'F_z (N)':>10}  {'F_z/mg':>8}  note")
     print(f"  {'-'*50}")
 
-    # WP-PEAK (docs/AUDIT_FIX_PLAN_2026-07-04.md): force needs the TRUE phasor
+    # WP-PEAK (docs/archive/2026-07-04_AUDIT_FIX_PLAN.md): force needs the TRUE phasor
     # amplitude (I_peak = I_rms*sqrt(2)), not I_rms used as-if-amplitude (the
     # loss chain's calibrated convention -- see config.Config.I_peak docstring).
     # This was previously a manual "×2.0 the returned F_z" patch at the caller;

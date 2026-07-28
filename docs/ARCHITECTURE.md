@@ -1,6 +1,6 @@
 # DT4TM — File Architecture & Data Flow
 
-> Last updated: 2026-07-28 (SSOT integrator port + PyVista desktop twin, WP-HOOK→WP-DOC).
+> Last updated: 2026-07-28 (repo tidy-up: docs/archive/, WP-TIDY).
 > Single-source-of-truth for file relationships.
 > Source scripts + input data live **flat in repo root** (no src/ subfolder);
 > docs live in `docs/`, generated files in `outputs/`.
@@ -50,16 +50,22 @@ DT4TM/
 ├── arduino/thermal_sensor/
 │   └── thermal_sensor.ino       ← MAX31855×2 firmware, 1Hz CSV (see docs/SENSOR_PLAN.md)
 │
-├── docs/                        ← project documentation
+├── docs/                        ← LIVING documentation (current state)
 │   ├── physics.md               ← Full physics derivations + formulas
 │   ├── ARCHITECTURE.md          ← This file
+│   ├── CHANGELOG.md             ← Session-by-session history (every fix/calibration round)
 │   ├── HANDOFF.md               ← Quick status handoff for team members
 │   ├── SENSOR_PLAN.md           ← Hardware shopping list + sensor architecture
-│   └── 3D_MODEL_UPDATE_PLAN.md  ← Separator-ring / coil geometry update notes
+│   ├── QUICK_START_FOR_AGENTS.md ← Onboarding brief for a fresh agent/teammate
+│   ├── math_formulation.md      ← Standalone maths write-up (for report/thesis)
+│   ├── REPORT_WHY_CUSTOM_CODE{,_DE}.md ← "why not FEMM/COMSOL" report (EN + DE)
+│   └── archive/                 ← COMPLETED one-off plans + bug registers, date-prefixed.
+│                                   Historical record only — never the source of truth for
+│                                   current behaviour (that is params.yaml + CLAUDE.md).
+│                                   See docs/archive/README.md for the index.
 │
 └── outputs/                     ← [GENERATED — gitignored except digital_twin_fem.html]
     ├── digital_twin_fem.html    ← Full AR twin — double-click to run (kept in git)
-    ├── digital_twin.html        ← Older version (lumped only)
     ├── plate.glb / plate.obj    ← 3D exports for AR
     └── *.png                    ← render outputs (thermal_3d, rom_demo, plates_*, …)
 ```

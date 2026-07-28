@@ -1,6 +1,6 @@
 """twin_model.py — the HEAVY half of the twin split (config/em_solver/rom/
 build_twin_html_fem-dependent code). Companion to twin_core.py (integrators
-only, numpy+stdlib). See docs/PYVISTA_TWIN_PLAN_2026-07-28.md for the overall
+only, numpy+stdlib). See docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md for the overall
 architecture: build_twin_html_fem.py stays the SSOT for per-plate
 *coefficients* (lumped_physics/lev_params/solve_plate_variant — reused here,
 NOT reimplemented); twin_core.py is the SSOT for the time *integrators*;
@@ -37,7 +37,7 @@ def resolve_active_plate(cfg) -> ActivePlate:
     """Find the plate_library entry matching the ACTIVE plate (cfg.geometry /
     cfg.plate) by VALUE — radius_mm + material — never by re-deriving/string-
     matching a name. That was the original H4 bug (CLAUDE.md / docs/
-    AUDIT_FIX_PLAN_2026-07-04.md): a RadioButtons entry could show as
+    docs/archive/2026-07-04_AUDIT_FIX_PLAN.md): a RadioButtons entry could show as
     pre-selected while a DIFFERENT radius was actually running, and because
     the label already "matched", clicking it was a permanent no-op. If no
     entry matches, synthesize an honest, distinct label instead of

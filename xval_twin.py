@@ -23,7 +23,7 @@ a future change makes the test red — that is what this comment is for):
 JS `Number` is IEEE-754 float64, exactly like numpy's `float64`. Both sides
 run the SAME forward-Euler update, the SAME dt, in the SAME operation order
 (the "9 traps", see twin_core.py's _rom_step/_lev_step docstrings and
-docs/PYVISTA_TWIN_PLAN_2026-07-28.md) — so the only possible residual is ULP
+docs/archive/2026-07-28_PYVISTA_TWIN_PLAN.md) — so the only possible residual is ULP
 noise from pow/exp/sin/log, which different JS engines and numpy build
 against different libm implementations for. Every ODE integrated here is
 CONTRACTIVE (every eigenvalue of the linearized system is negative — see
