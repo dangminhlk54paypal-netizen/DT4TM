@@ -248,3 +248,17 @@ the disc was rigid above ≈3.2A (`jit_fade_mm=0.5mm` gates `jit_contact` off
 entirely once the gap clears 0.5mm) — now it visibly moves at every operating
 current, with the mean position provably unbiased (`mean(z+jit) ≈ z_gap_eq(I)`
 to <0.001mm, verified numerically).
+
+**⚠️ SUPERSEDED same day (2026-07-28, user review of the built HTML):
+`lev_ripple_display_gain` set 40.0 → 0.0 — no sustained vertical shimmer.**
+The "~1mm on screen" above under-counted three stacked factors — the two-sine
+peak (1.5×), the `(I/5)²` current scaling (2.43× at 7.8A), and `Z_GAP_EXAG=2.0`
+being applied to `(z+jit)` in `levLiftY()` — so the disc actually bobbed
+6.0mm p2p @5A (25% of the displayed gap) to 14.5mm p2p @7.8A (45%) at
+4.3+11.3Hz, forever. The user correctly read this as unphysical: as this very
+section derives, the real vertical ripple is invisible (25µm @100Hz) and the
+rig's *visible* wobble is the lateral/tilt mode, which a vertical offset cannot
+honestly represent. The `jit_lev` machinery stays in `twin_core.py`/the baked
+JS, gated by the 0.0 gain (params.yaml documents the decision); a future
+tilt-mode display effect would be a separate, new knob. `jit_contact`
+(sub-liftoff buzz) is unaffected.

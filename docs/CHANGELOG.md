@@ -1310,3 +1310,39 @@ Verified: all 152 `docs/*.md` references resolve, `python twin_core.py` 6/6
 PASS, `python xval_twin.py` PASS, `compileall` clean. Every changed line in the
 10 touched `.py`/`.yaml` files is a comment or docstring — no executable code
 changed.
+
+---
+
+## WP-SHIMMER-OFF (2026-07-28, same day as WP-SHIMMER) — sustained vertical shimmer disabled after user review
+
+User drove the freshly-built HTML against the real rig before the planned
+commit/push and reported: at a fixed dial/amps, after the physical liftoff
+bounce rings down, the disc keeps bobbing up and down "incomprehensibly and
+unphysically" — forever. Root-caused (systematic-debugging, reproduced
+numerically): the WP-SHIMMER V2 `jit_lev` term shipped 6–14.6× larger on
+screen than its own bug-register spec of "~1mm". Three stacked multipliers
+were never counted in that claim: the two-sine peak factor
+(`sin+0.5·sin` → 1.5×), the `(I/5)²` current scaling (2.43× at 7.8A), and
+`Z_GAP_EXAG=2.0` applied to `(z+jit)` in `levLiftY()`. Measured displayed
+motion: **6.0mm p2p @5A (25% of the displayed gap) → 14.5mm p2p @7.8A (45%)**
+at 4.3+11.3Hz, with a beat envelope (alternating calm/strong — the "confusing"
+part) and frame-rate aliasing at time-speed ≳3×. The physics state was proven
+clean both ways: `ζ(I)=0.02·(I/5)²>0` always (lev.z provably rings down), and
+the on-screen "Levitation Gap" readout (which shows `lev.z` alone) sat
+rock-steady while the mesh bobbed. `xval_twin.py` could not have caught this —
+Python and JS implemented the same wrong constants identically.
+
+Options offered (reduce to the documented ~1mm / turn off / replace with a
+tilt-mode wobble per physics.md §11). **User decision: turn off.** Consistent
+with physics.md §11's own derivation: the real vertical ripple is 25µm @100Hz
+(invisible), and the rig's visible wobble is the lateral/tilt mode — a
+vertical offset cannot honestly represent it.
+
+Change: `params.yaml levitation.lev_ripple_display_gain` 40.0 → **0.0**
+(params-only; the `jit_lev` machinery stays in `twin_core.py` + the baked JS,
+gated by the gain — a future tilt-mode effect would be a new, separate knob).
+`jit_contact` (sub-liftoff buzz) unaffected. Rebaked
+`outputs/digital_twin_fem.html` (gain=0.0 confirmed in all 5 baked blocks,
+placeholder API key confirmed). Verified: `python twin_core.py` 6/6 PASS,
+`python xval_twin.py` PASS (A: all-zero diffs, B: 0 relative diff).
+docs/physics.md §11 carries the superseding note.

@@ -320,11 +320,21 @@ levitation:
   # modulated at Ω=2ω) only moves the disc ~0.025mm at the default R=80mm/50Hz
   # constants (LevCoeffs.x_ripple_mm / JS xRippleMm, COMPUTED from z_decay_mm +
   # mains frequency, never pasted) -- invisible on screen. This gain multiplies
-  # that traceable physical number up to something visible (~40x0.025=1mm),
+  # that traceable physical number up to something visible,
   # exactly like z_gap_exaggeration above is a named, separate exaggeration of
   # z_gap_5A_mm/z_decay_mm themselves. 0.0 = no sustained shimmer (jit_contact,
   # the existing sub-liftoff-only buzz, is unaffected either way).
-  lev_ripple_display_gain: 40.0   # DISPLAY ONLY
+  # SET TO 0.0 on 2026-07-28 (same day, user review of the built HTML): at 40.0
+  # the DISPLAYED motion was not the promised ~1mm -- three stacked factors were
+  # missed (two-sine peak 1.5x, (I/5)^2 up to 2.43x, and Z_GAP_EXAG 2.0x applied
+  # to (z+jit) in levLiftY), giving 6.0mm p2p @5A (25% of the displayed gap) to
+  # 14.5mm p2p @7.8A (45%) at 4.3+11.3Hz -- read as unphysical vertical bobbing.
+  # Physically the vertical ripple is invisible (25um @100Hz, physics.md §11);
+  # the rig's VISIBLE wobble is the lateral/tilt mode, which a vertical offset
+  # cannot honestly represent. User decision 2026-07-28: no sustained vertical
+  # shimmer. The jit_lev machinery stays in twin_core.py/JS, gated by this 0.0;
+  # a future tilt-mode display effect would be a separate, new knob.
+  lev_ripple_display_gain: 0.0    # DISPLAY ONLY (0.0 = off, see above)
 
 # --- Material properties (lookup by name in plate_library) ---
 material_props:
