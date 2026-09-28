@@ -23,7 +23,7 @@ Diese Anleitung beschreibt, wie der reale Versuchsstand (TEAM 28 Levitator) mit 
    ```
 2. **Druckhinweis:**
    - Drucke das Bild im Druckdialog mit **100% Skalierung** („Tatsächliche Größe“, nicht „Auf Seite einpassen“) aus.
-   - Die Standard-Kantenlänge beträgt **$60 \times 60\,\text{mm}$**. (Auf dem Ausdruck befindet sich ein Kontrollmaßstab zur Überprüfung mit dem Lineal).
+   - Die Standard-Kantenlänge des **QR-Symbols** (nur die schwarz/weißen Module, ohne weißen Rand, Rahmen und Text) beträgt **$60 \times 60\,\text{mm}$**; das ganze Blatt ist ca. 104 mm breit. Mit dem Lineal nachmessen: ist das Symbol kleiner/größer, den Wert in der App unter ⚙️ → „QR-Code Größe“ anpassen. (Ausdrucke vor 2026-09-28 sind nur ca. 29,5 mm groß, weil das PNG mit fester Auflösung gespeichert wurde.)
 3. **Platzierung am Versuchsstand:**
    - **Auf der Schwebescheibe (Standard):** Klebe oder lege den Marker genau in die Mitte der oberen Aluminiumplatte ($r=0$).
    - Da $r=0$ die Symmetrieachse ist, richtet sich das gesamte 3D-Modell ohne seitlichen Versatz exakt an der Spulenachse aus.

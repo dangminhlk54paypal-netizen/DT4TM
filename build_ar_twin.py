@@ -27,6 +27,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FEM_HTML = os.path.join(HERE, "outputs", "digital_twin_fem.html")
 OUT_HTML = os.path.join(HERE, "outputs", "ar_twin.html")
 MARKER_PNG = os.path.join(HERE, "outputs", "ar_marker.png")
+sys.path.insert(0, HERE)
+from gen_ar_marker import MARKER_SYMBOL_MM   # printed QR-symbol width (mm): one constant for print + AR
 
 
 # STL folder lives OUTSIDE the repo (not committed). First existing candidate wins;
@@ -207,7 +209,7 @@ window.twinDebug = {
   --bg: #0b0d19;
   --accent: #00d2ff;
   --accent-glow: rgba(0, 210, 255, 0.4);
-  --panel-bg: rgba(13, 17, 34, 0.88);
+  --panel-bg: rgba(13, 17, 34, 0.93);   /* near-solid: replaces the old CSS blur (GPU-expensive on phones) */
   --panel-border: rgba(54, 72, 120, 0.55);
   --text: #f0f4fc;
   --text-dim: #8ba0c8;
@@ -231,6 +233,7 @@ body, html {
 }
 
 /* Three.js 3D WebGL Canvas */
+#arCanvas canvas { display: block; }
 #arCanvas {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
   z-index: 2; pointer-events: auto;
@@ -268,7 +271,7 @@ body, html {
   position: fixed; top: 52px; left: 10px; right: 10px;
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
   background: var(--panel-bg); border: 1px solid var(--panel-border);
-  border-radius: 10px; padding: 6px; backdrop-filter: blur(10px);
+  border-radius: 10px; padding: 6px;
   z-index: 90; text-align: center;
 }
 
@@ -280,8 +283,8 @@ body, html {
 #thermalScaleBar {
   position: fixed; top: 105px; left: 10px; right: 10px;
   display: flex; align-items: center; gap: 8px;
-  background: rgba(14, 18, 36, 0.88); border: 1px solid var(--panel-border);
-  border-radius: 8px; padding: 4px 10px; backdrop-filter: blur(8px);
+  background: rgba(14, 18, 36, 0.93); border: 1px solid var(--panel-border);
+  border-radius: 8px; padding: 4px 10px;
   z-index: 90;
 }
 .scale-label { font-size: 0.64rem; color: var(--text-dim); font-weight: 700; white-space: nowrap; }
@@ -318,7 +321,7 @@ body, html {
   position: fixed; bottom: 0; left: 0; right: 0;
   background: var(--panel-bg); border-top: 1px solid var(--panel-border);
   border-radius: 18px 18px 0 0; padding: 12px 16px 18px;
-  backdrop-filter: blur(14px); z-index: 100;
+  z-index: 100;
   box-shadow: 0 -8px 30px rgba(0,0,0,0.5);
   max-height: 85vh; overflow-y: auto;
 }
@@ -561,7 +564,7 @@ input[type=range]::-webkit-slider-thumb {
       <span class="calib-title">QR-Code Größe</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnSizeDec">-</button>
-        <span class="calib-val" id="lblMarkerSize">45 mm</span>
+        <span class="calib-val" id="lblMarkerSize">__MARKER_SYMBOL_MM__ mm</span>
         <button class="btn-mini" id="btnSizeInc">+</button>
       </div>
     </div>
@@ -602,7 +605,8 @@ const Je_vtx = new Float32Array(b64Buf("__JE_VTX_B64__"));
 const container = document.getElementById('arCanvas');
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 2000);
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+// No preserveDrawingBuffer (nothing reads the canvas back; it forces a copy each frame on mobile GPUs)
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -789,8 +793,8 @@ function updateModelTransform() {
 }
 updateModelTransform();
 
-const fieldLineMats = [];
 const _flCol = new THREE.Color();
+let fieldLineMat = null;   // ONE shared material: per-frame update is 2 uniforms, not ~430 materials
 
 function flColor(t, out) {
   t = Math.max(0, Math.min(1, t));
@@ -803,7 +807,13 @@ function flColor(t, out) {
   }
 }
 
+// All near-device field lines x N_THETA_FIELD azimuths merged into ONE LineSegments
+// (was ~430 THREE.Line objects = ~385 draw calls).  The per-line amplitude factor that
+// used to be a per-material opacity is baked into the vertex ALPHA, so the final blend
+// (rgb * material.opacity * vertexAlpha, additive) equals the old per-line opacity.
 function buildFieldLines() {
+  const kept = [];
+  let nSeg = 0;
   for (const fl of FIELD_LINES) {
     const n = fl.r.length;
     // Skip massive far-field loops that extend far into the ceiling/ground and cause perspective distortion
@@ -814,39 +824,38 @@ function buildFieldLines() {
       ampSum += fl.amp[i];
     }
     if (maxZ > 120.0 || maxR > 180.0) continue; // Focus on realistic near-device magnetic lines
-
-    const avgAmp = ampSum / n;
-
+    kept.push({ fl, n, alpha: Math.min(1.0, 0.4 + 0.6 * (ampSum / n)) });
+    nSeg += (n - 1) * N_THETA_FIELD;
+  }
+  const pos = new Float32Array(nSeg * 6), col = new Float32Array(nSeg * 8), dist = new Float32Array(nSeg * 2);
+  let s = 0;
+  for (const { fl, n, alpha } of kept) {
     for (let t = 0; t < N_THETA_FIELD; t++) {
       const theta = (t / N_THETA_FIELD) * Math.PI * 2;
       const ct = Math.cos(theta), st = Math.sin(theta);
-      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
-
-      for (let i = 0; i < n; i++) {
-        const r = fl.r[i], z = fl.z[i];
-        pos[i*3]   = r * ct;
-        pos[i*3+1] = r * st;
-        pos[i*3+2] = z; // Z is axial height, matching CAD mesh!
-        flColor(fl.amp[i], _flCol);
-        col[i*3] = _flCol.r; col[i*3+1] = _flCol.g; col[i*3+2] = _flCol.b;
+      let acc = 0.0;   // arc length along this polyline (drives the dash pattern, as computeLineDistances did)
+      for (let i = 0; i < n - 1; i++) {
+        const ax = fl.r[i] * ct, ay = fl.r[i] * st, az = fl.z[i];   // Z is axial height, matching CAD mesh!
+        const bx = fl.r[i + 1] * ct, by = fl.r[i + 1] * st, bz = fl.z[i + 1];
+        const len = Math.hypot(bx - ax, by - ay, bz - az);
+        pos.set([ax, ay, az, bx, by, bz], s * 6);
+        flColor(fl.amp[i], _flCol);      col.set([_flCol.r, _flCol.g, _flCol.b, alpha], s * 8);
+        flColor(fl.amp[i + 1], _flCol);  col.set([_flCol.r, _flCol.g, _flCol.b, alpha], s * 8 + 4);
+        dist[s * 2] = acc; dist[s * 2 + 1] = acc + len;
+        acc += len; s++;
       }
-
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-
-      const mat = new THREE.LineDashedMaterial({
-        vertexColors: true, transparent: true, opacity: 0.95,
-        depthTest: false, dashSize: 8.0, gapSize: 3.0,
-        blending: THREE.AdditiveBlending
-      });
-
-      const line = new THREE.Line(geo, mat);
-      line.computeLineDistances();
-      fieldLineGroup.add(line);
-      fieldLineMats.push({ mat, line, amp: avgAmp });
     }
   }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 4));        // RGBA
+  geo.setAttribute('lineDistance', new THREE.BufferAttribute(dist, 1));
+  fieldLineMat = new THREE.LineDashedMaterial({
+    vertexColors: true, transparent: true, opacity: 0.95,
+    depthTest: false, dashSize: 8.0, gapSize: 3.0,
+    blending: THREE.AdditiveBlending
+  });
+  fieldLineGroup.add(new THREE.LineSegments(geo, fieldLineMat));
 }
 buildFieldLines();
 
@@ -923,7 +932,9 @@ function writeRampMetal(col, idx, tnorm) {
 // AR runs the SAME romStep()/levStep() as digital_twin_fem.html; this section only
 // paints engine state (sim.T.*, discVtxT(), lev.z/lev.jit) onto the meshes.
 let curI = 0.0;
-let markerSizeMm = 45.0;
+// Printed width of the QR SYMBOL (module area, no quiet zone) in mm.  Single source of
+// truth = MARKER_SYMBOL_MM in gen_ar_marker.py (imported by build_ar_twin.py).
+let markerSizeMm = __MARKER_SYMBOL_MM__;
 // Display choice (NOT physics): when off, the virtual plate stays firmly seated on the
 // physical mockup. The engine's levitation state (lev.*) evolves regardless.
 let enableLevitation = false;
@@ -1004,10 +1015,8 @@ function updateFieldLines(dt) {
   flDashOffset -= speed * dt;
   // Dynamic opacity proportional to excitation current
   const baseOp = curI > 0.05 ? Math.min(0.95, 0.50 + 0.45 * normI) : 0.15;
-  for (const o of fieldLineMats) {
-    o.mat.dashOffset = flDashOffset;
-    o.mat.opacity = baseOp * Math.min(1.0, 0.4 + 0.6 * o.amp);
-  }
+  fieldLineMat.dashOffset = flDashOffset;
+  fieldLineMat.opacity = baseOp;      // per-line amplitude factor is baked into the vertex alpha
 }
 
 // ── Telemetry Refresh ─────────────────────────────────────────────────────────
@@ -1041,7 +1050,68 @@ function updateTelemetry(time) {
   }
 }
 
-// ── 6-DoF Pose Solver from 4 Quadrilateral Points ──────────────────────────────
+// ── QR marker tracking (WP-AR-TRACK) ───────────────────────────────────────────────
+// Pipeline per NEW video frame:  scan (ROI crop while tracked, else 640px full frame)
+//   -> jsQR -> sub-pixel finder-edge refinement -> normalised-DLT homography over ALL
+//   correspondences (reprojection RMS = confidence) -> gates (residual / convexity /
+//   payload lock) -> planar pose -> jump hysteresis -> time-based One Euro filter
+//   (position mm + quaternion) -> twinRoot.  Rendering stays on setAnimationLoop; this
+//   only updates the pose target.  Exposed as window.twinDebug.tracking for testing.
+const TRK = {
+  // ---- scan ------------------------------------------------------------------------
+  SCAN_LONG_SIDE_PX: 640,   // full-frame search scan: long side of the downscaled frame
+  SEARCH_HI_LONG_SIDE_PX: 1024,  // extra, sharper search scan (range: 640px loses a 60mm marker > ~30cm) ...
+  SEARCH_HI_EVERY: 2,       // ... run on every Nth failed search frame
+  ROI_TRACKING: true,       // while tracked, scan a native-res crop around the last quad
+  ROI_MARGIN: 0.40,         // crop = quad bbox grown by this fraction of its size per side ...
+  ROI_MOTION_GAIN: 2.5,     // ... plus this x the quad's last frame-to-frame shift (fast moves need a wider crop)
+  ROI_MAX_PX: 512,          // crop canvas side (crops larger than this are downscaled)
+  ROI_PX_PER_MODULE: 4.5,   // crop is downscaled so the symbol keeps ~this many px per module (jsQR cost ~ crop area)
+  ROI_MISS_FALLBACK: 3,     // consecutive ROI misses before a full-frame search is attempted (transient blur/occlusion)
+  // ---- geometry --------------------------------------------------------------------
+  FOCAL_PER_VIDEO_H: 1.05,  // f[px] = 1.05*videoHeight (phone wide camera guess; the
+                            // overlay camera in syncCanvasToVideo uses the SAME f)
+  REFINE_EDGES: true,       // sub-pixel finder-edge lines -> 12 extra correspondences
+  EDGE_SAMPLES: [1.5, 2.5, 3.5, 4.5, 5.5],  // sample positions along a 7-module finder edge
+  EDGE_WINDOW_MOD: 0.65,    // edge search half-window (modules) around the predicted edge
+  EDGE_MIN_CONTRAST: 45,    // min luminance step (0..255) to accept an edge sample
+  ALIGN_TOL_MOD: 0.45,      // jsQR alignment centre used only if within this many modules of
+                            // the finder-only prediction (rejects jsQR's parallelogram guess)
+  // ---- gates -----------------------------------------------------------------------
+  MAX_RESIDUAL_PX: 1.5,     // reject detection if reprojection RMS (video px) exceeds this
+  GOOD_RESIDUAL_PX: 0.40,   // residual at/below which a measurement is fully trusted
+  MIN_QUAD_AREA_PX: 900,    // projected symbol area (video px^2)
+  // ---- One Euro (time based: dt from real timestamps) --------------------------------
+  POS_MIN_CUTOFF_HZ: 0.5,   // lateral (x,y) position: jitter cutoff when (almost) still
+  POS_BETA: 0.040,          // lateral: extra cutoff Hz per mm/s of lateral speed (lag on fast moves)
+  POS_Z_MIN_CUTOFF_HZ: 0.4, // depth (z): scale cue only -> 3-5x noisier than x,y -> heavier smoothing ...
+  POS_Z_BETA: 0.004,        // ... and a small beta (noise in z must not fake "speed")
+  ROT_MIN_CUTOFF_HZ: 0.4,   // rotation: idem
+  ROT_BETA: 0.80,           // rotation: extra cutoff Hz per rad/s of angular speed
+  D_CUTOFF_HZ: 6.0,         // derivative low-pass (low values lag the start of a fast move)
+  UNREFINED_GRACE_MS: 400,  // while tracking, skip 4-corner-only fits (noisy) for this long after a refined one
+  CONF_MIN_SCALE: 0.5,      // minCutoff is scaled 0.5..1 by confidence (worse residual = heavier smoothing)
+  DT_MIN_S: 1 / 120, DT_MAX_S: 0.5,
+  // ---- outlier hysteresis ------------------------------------------------------------
+  JUMP_MM: 25.0,            // a measurement this far from the filtered pose is held back ...
+  JUMP_DEG: 12.0,           // ... (or this many degrees away)
+  ACCEPT_N: 3,              // ... until this many consecutive mutually-consistent ones arrive
+  HOLD_MS: 800,             // keep the last pose this long with no usable detection
+};
+
+const TRK_S = {             // tracker state (reset() clears everything)
+  payload: null, filt: null, pending: [], lastMeasT: 0, lastRefinedT: -1e9, quad: null, dim: 0, shift: 0, searchTick: 0, roiMissRun: 0,
+  stats: null,
+};
+function trkNewStats() {
+  return { frames: 0, detections: 0, accepted: 0, held: 0, jumpsAccepted: 0, roiHits: 0, roiMiss: 0, hiHits: 0,
+           refined: 0, unrefined: 0, alignUsed: 0, misses: 0,
+           rejected: { residual: 0, convex: 0, payload: 0, fit: 0, pose: 0, unrefined: 0 },
+           scanMs: 0, procMs: 0 };
+}
+TRK_S.stats = trkNewStats();
+
+// ── small math ───────────────────────────────────────────────────────────────────────
 function solve8x8(A, b) {
   for (let i = 0; i < 8; i++) {
     let maxRow = i;
@@ -1068,223 +1138,612 @@ function solve8x8(A, b) {
   return x;
 }
 
-function estimatePoseFromCorners(pts, viewW, viewH, markerSize, f) {
-  const halfS = markerSize / 2.0;
-  // pts: TL, TR, BR, BL
-  const objPts = [
-    [-halfS,  halfS],
-    [ halfS,  halfS],
-    [ halfS, -halfS],
-    [-halfS, -halfS]
-  ];
+// Hartley normalisation: similarity T (x' = s*(x-c)) so points have centroid 0, mean dist sqrt2
+function hartleyT(pts) {
+  let cx = 0, cy = 0;
+  for (const p of pts) { cx += p[0]; cy += p[1]; }
+  cx /= pts.length; cy /= pts.length;
+  let d = 0;
+  for (const p of pts) d += Math.hypot(p[0] - cx, p[1] - cy);
+  d /= pts.length;
+  const s = d > 1e-9 ? Math.SQRT2 / d : 1.0;
+  return { s, cx, cy };
+}
 
-  const A = [], b = [];
-  for (let i = 0; i < 4; i++) {
-    const x = objPts[i][0], y = objPts[i][1];
-    const u = pts[i].x, v = pts[i].y;
-    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
-    b.push(u);
-    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
-    b.push(v);
+// Weighted normalised DLT: dst ~ H * src.  src/dst: arrays of [x,y].  Returns row-major
+// [h0..h8] (h8 = 1 in normalised space, denormalised on return) or null.
+function dltHomography(src, dst, wts) {
+  const n = src.length;
+  if (n < 4) return null;
+  const Ts = hartleyT(src), Td = hartleyT(dst);
+  const N = Array.from({ length: 8 }, () => new Array(8).fill(0));
+  const rhs = new Array(8).fill(0);
+  const acc = (row, bb, w) => {
+    for (let i = 0; i < 8; i++) {
+      const ri = row[i] * w;
+      rhs[i] += ri * bb;
+      for (let j = i; j < 8; j++) N[i][j] += ri * row[j];
+    }
+  };
+  for (let i = 0; i < n; i++) {
+    const x = (src[i][0] - Ts.cx) * Ts.s, y = (src[i][1] - Ts.cy) * Ts.s;
+    const u = (dst[i][0] - Td.cx) * Td.s, v = (dst[i][1] - Td.cy) * Td.s;
+    const w = wts ? wts[i] : 1.0;
+    acc([x, y, 1, 0, 0, 0, -u * x, -u * y], u, w);
+    acc([0, 0, 0, x, y, 1, -v * x, -v * y], v, w);
   }
-
-  const sol = solve8x8(A, b);
-  if (!sol) return null;
-
-  const cx = viewW / 2.0, cy = viewH / 2.0;
-
-  // H matrix
+  for (let i = 0; i < 8; i++) for (let j = 0; j < i; j++) N[i][j] = N[j][i];
+  const h = solve8x8(N, rhs);
+  if (!h) return null;
+  // Hn = [h0 h1 h2; h3 h4 h5; h6 h7 1];  H = Td^-1 * Hn * Ts
+  const Hn = [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1.0];
+  // A = Hn * Ts, Ts: x' = s*x - s*cx
+  const a = [], sT = Ts.s, tx = -Ts.s * Ts.cx, ty = -Ts.s * Ts.cy;
+  for (let r = 0; r < 3; r++) {
+    a.push(Hn[r * 3] * sT, Hn[r * 3 + 1] * sT, Hn[r * 3] * tx + Hn[r * 3 + 1] * ty + Hn[r * 3 + 2]);
+  }
+  // Td^-1: u = u'/sd + cxd
+  const sd = 1.0 / Td.s;
   const H = [
-    [sol[0], sol[1], sol[2]],
-    [sol[3], sol[4], sol[5]],
-    [sol[6], sol[7], 1.0]
+    a[0] * sd + Td.cx * a[6], a[1] * sd + Td.cx * a[7], a[2] * sd + Td.cx * a[8],
+    a[3] * sd + Td.cy * a[6], a[4] * sd + Td.cy * a[7], a[5] * sd + Td.cy * a[8],
+    a[6], a[7], a[8]
   ];
+  for (const v of H) if (!isFinite(v)) return null;
+  return H;
+}
+function applyH(H, x, y) {
+  const w = H[6] * x + H[7] * y + H[8];
+  return [(H[0] * x + H[1] * y + H[2]) / w, (H[3] * x + H[4] * y + H[5]) / w];
+}
+function rmsResidual(H, src, dst) {
+  let s = 0;
+  for (let i = 0; i < src.length; i++) {
+    const p = applyH(H, src[i][0], src[i][1]);
+    s += (p[0] - dst[i][0]) * (p[0] - dst[i][0]) + (p[1] - dst[i][1]) * (p[1] - dst[i][1]);
+  }
+  return Math.sqrt(s / src.length);
+}
 
+// ── sub-pixel finder-pattern edge refinement ─────────────────────────────────────────
+// A QR finder is a 7x7-module black square ring on white.  jsQR gives its CENTRE only;
+// here we fit its 4 outer edge lines from the luminance profile across the edge (max
+// gradient, parabolic sub-sample) and intersect them -> 4 corners per finder, i.e. 12
+// independent correspondences instead of jsQR's 3 centres + one extrapolated corner.
+function lumaAt(img, x, y) {           // bilinear, green channel of RGBA
+  const w = img.w, h = img.h, d = img.data;
+  if (x < 0) x = 0; else if (x > w - 1.001) x = w - 1.001;
+  if (y < 0) y = 0; else if (y > h - 1.001) y = h - 1.001;
+  const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0;
+  const i = (y0 * w + x0) * 4;
+  const a = d[i + 1], b = d[i + 5], c = d[i + w * 4 + 1], e = d[i + w * 4 + 5];
+  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + e * fx) * fy;
+}
+// Edge point across module-plane normal (nx,ny) at module point (mx,my); dark inside,
+// light outside.  H maps module coords -> scan-canvas px.  Returns [x,y] in scan px or null.
+function edgeProbe(H, img, mx, my, nx, ny) {
+  const p0 = applyH(H, mx, my), p1 = applyH(H, mx + nx, my + ny);
+  let ux = p1[0] - p0[0], uy = p1[1] - p0[1];
+  const ppm = Math.hypot(ux, uy);       // scan px per module along the normal
+  if (!(ppm > 1.3)) return null;
+  ux /= ppm; uy /= ppm;
+  const W = TRK.EDGE_WINDOW_MOD * ppm, step = Math.max(0.4, ppm / 14);
+  const K = Math.floor(2 * W / step) + 1;
+  if (K < 7) return null;
+  const prof = new Array(K);
+  let lo = 1e9, hi = -1e9;
+  for (let k = 0; k < K; k++) {
+    const d = -W + k * step;
+    const v = lumaAt(img, p0[0] + ux * d - 0.5, p0[1] + uy * d - 0.5);   // pixel j spans [j,j+1): centre j+0.5
+    prof[k] = v; if (v < lo) lo = v; if (v > hi) hi = v;
+  }
+  if (hi - lo < TRK.EDGE_MIN_CONTRAST) return null;
+  let best = -1e9, bi = -1;
+  for (let k = 1; k < K - 1; k++) {
+    const g = prof[k + 1] - prof[k - 1];        // >0: brighter going outward
+    if (g > best) { best = g; bi = k; }
+  }
+  if (bi < 2 || bi > K - 3 || best < 0.5 * (hi - lo) * 0.5) return null;
+  const gm = prof[bi] - prof[bi - 2], g0 = best, gp = prof[bi + 2] - prof[bi];
+  const den = gm - 2 * g0 + gp;
+  const dl = Math.abs(den) > 1e-6 ? 0.5 * (gm - gp) / den : 0;
+  const dpos = -W + (bi + Math.max(-1, Math.min(1, dl))) * step;
+  return [p0[0] + ux * dpos, p0[1] + uy * dpos];
+}
+function fitLineTLS(pts) {              // total least squares: {c, d(unit)} or null
+  const n = pts.length;
+  let cx = 0, cy = 0;
+  for (const p of pts) { cx += p[0]; cy += p[1]; }
+  cx /= n; cy /= n;
+  let sxx = 0, sxy = 0, syy = 0;
+  for (const p of pts) {
+    const dx = p[0] - cx, dy = p[1] - cy;
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+  }
+  const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  return { c: [cx, cy], d: [Math.cos(th), Math.sin(th)] };
+}
+function lineDist(L, p) { return Math.abs((p[0] - L.c[0]) * -L.d[1] + (p[1] - L.c[1]) * L.d[0]); }
+function intersectLines(A, B) {
+  const cr = A.d[0] * B.d[1] - A.d[1] * B.d[0];
+  if (Math.abs(cr) < 0.25) return null;
+  const t = ((B.c[0] - A.c[0]) * B.d[1] - (B.c[1] - A.c[1]) * B.d[0]) / cr;
+  return [A.c[0] + A.d[0] * t, A.c[1] + A.d[1] * t];
+}
+function fitEdgeLine(H, img, edge) {    // edge = {pts:[[mx,my]..], n:[nx,ny]}
+  let pts = [];
+  for (const m of edge.pts) {
+    const p = edgeProbe(H, img, m[0], m[1], edge.n[0], edge.n[1]);
+    if (p) pts.push(p);
+  }
+  if (pts.length < 4) return null;
+  let L = fitLineTLS(pts);
+  for (let it = 0; it < 2; it++) {      // drop gross outliers once, refit
+    const keep = pts.filter(p => lineDist(L, p) < 0.9);
+    if (keep.length < 4) return null;
+    if (keep.length === pts.length) break;
+    pts = keep; L = fitLineTLS(pts);
+  }
+  return L;
+}
+// Returns [{m:[mx,my], p:[x,y]}] (p in scan px) for every finder whose 4 edges fit.
+function refineFinderCorners(Hjs, dim, img) {
+  const out = [];
+  const origins = [[0, 0], [dim - 7, 0], [0, dim - 7]];
+  for (const o of origins) {
+    const S = TRK.EDGE_SAMPLES;
+    const top = { pts: S.map(s => [o[0] + s, o[1]]), n: [0, -1] };
+    const bot = { pts: S.map(s => [o[0] + s, o[1] + 7]), n: [0, 1] };
+    const lef = { pts: S.map(s => [o[0], o[1] + s]), n: [-1, 0] };
+    const rig = { pts: S.map(s => [o[0] + 7, o[1] + s]), n: [1, 0] };
+    const Lt = fitEdgeLine(Hjs, img, top), Lb = fitEdgeLine(Hjs, img, bot);
+    const Ll = fitEdgeLine(Hjs, img, lef), Lr = fitEdgeLine(Hjs, img, rig);
+    if (!Lt || !Lb || !Ll || !Lr) continue;
+    const c = [intersectLines(Lt, Ll), intersectLines(Lt, Lr), intersectLines(Lb, Lr), intersectLines(Lb, Ll)];
+    if (c.some(v => !v)) continue;
+    const mods = [[o[0], o[1]], [o[0] + 7, o[1]], [o[0] + 7, o[1] + 7], [o[0], o[1] + 7]];
+    let ok = true;                       // corner must lie near where the jsQR mapping says
+    for (let i = 0; i < 4; i++) {
+      const q = applyH(Hjs, mods[i][0], mods[i][1]);
+      const ppm = Math.hypot(applyH(Hjs, mods[i][0] + 1, mods[i][1])[0] - q[0], applyH(Hjs, mods[i][0] + 1, mods[i][1])[1] - q[1]);
+      if (Math.hypot(c[i][0] - q[0], c[i][1] - q[1]) > 1.0 * Math.max(ppm, 1.5)) ok = false;
+    }
+    if (!ok) continue;
+    for (let i = 0; i < 4; i++) out.push({ m: mods[i], p: c[i] });
+  }
+  return out;
+}
+
+// ── planar pose from a module->video homography ────────────────────────────────────
+function polyArea(q) {
+  let a = 0;
+  for (let i = 0; i < q.length; i++) { const j = (i + 1) % q.length; a += q[i][0] * q[j][1] - q[j][0] * q[i][1]; }
+  return 0.5 * a;
+}
+function isConvex(q) {
+  let sign = 0;
+  for (let i = 0; i < q.length; i++) {
+    const a = q[i], b = q[(i + 1) % q.length], c = q[(i + 2) % q.length];
+    const cr = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+    if (cr === 0) return false;
+    const s = cr > 0 ? 1 : -1;
+    if (sign === 0) sign = s; else if (s !== sign) return false;
+  }
+  return true;
+}
+// Module coords -> mm on the marker plane (x right, y UP, origin = symbol centre)
+// matches the old 4-corner solver exactly: TL corner = (-S/2,+S/2).
+function poseFromHomography(Hmod, dim, sizeMm, vw, vh) {
+  const f = vh * TRK.FOCAL_PER_VIDEO_H, cx = vw / 2.0, cy = vh / 2.0;
+  const p = sizeMm / dim;                // mm per module
+  // module = A * mm :  mx = dim/2 + x/p ; my = dim/2 - y/p
+  const A = [1 / p, 0, dim / 2, 0, -1 / p, dim / 2, 0, 0, 1];
+  const H = new Array(9);
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+    H[r * 3 + c] = Hmod[r * 3] * A[c] + Hmod[r * 3 + 1] * A[3 + c] + Hmod[r * 3 + 2] * A[6 + c];
+  }
+  const s0 = H[8];
+  if (!(Math.abs(s0) > 1e-12)) return null;
+  for (let i = 0; i < 9; i++) H[i] /= s0;
   // H' = K^-1 * H
-  const h1 = [(H[0][0] - cx * H[2][0]) / f, (H[1][0] - cy * H[2][0]) / f, H[2][0]];
-  const h2 = [(H[0][1] - cx * H[2][1]) / f, (H[1][1] - cy * H[2][1]) / f, H[2][1]];
-  const h3 = [(H[0][2] - cx * 1.0) / f,     (H[1][2] - cy * 1.0) / f,     1.0];
-
+  const h1 = [(H[0] - cx * H[6]) / f, (H[3] - cy * H[6]) / f, H[6]];
+  const h2 = [(H[1] - cx * H[7]) / f, (H[4] - cy * H[7]) / f, H[7]];
+  const h3 = [(H[2] - cx * H[8]) / f, (H[5] - cy * H[8]) / f, H[8]];
   const norm1 = Math.hypot(h1[0], h1[1], h1[2]);
   const norm2 = Math.hypot(h2[0], h2[1], h2[2]);
   let scale = 1.0 / Math.sqrt(norm1 * norm2);
   if (h3[2] < 0) scale = -scale;
-
-  // Symmetric Gram-Schmidt orthonormalization to eliminate single-axis tilt bias
   let r1 = [h1[0] * scale, h1[1] * scale, h1[2] * scale];
   let r2 = [h2[0] * scale, h2[1] * scale, h2[2] * scale];
-
+  // Symmetric Gram-Schmidt orthonormalisation (no single-axis tilt bias)
   const dot = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2];
-  const r1_s = [r1[0] - 0.5 * dot * r2[0], r1[1] - 0.5 * dot * r2[1], r1[2] - 0.5 * dot * r2[2]];
-  const r2_s = [r2[0] - 0.5 * dot * r1[0], r2[1] - 0.5 * dot * r1[1], r2[2] - 0.5 * dot * r1[2]];
-
-  const l1 = Math.hypot(r1_s[0], r1_s[1], r1_s[2]);
-  const l2 = Math.hypot(r2_s[0], r2_s[1], r2_s[2]);
-  r1 = [r1_s[0] / l1, r1_s[1] / l1, r1_s[2] / l1];
-  r2 = [r2_s[0] / l2, r2_s[1] / l2, r2_s[2] / l2];
-
-  // r3 = r1 x r2
-  const r3 = [
-    r1[1] * r2[2] - r1[2] * r2[1],
-    r1[2] * r2[0] - r1[0] * r2[2],
-    r1[0] * r2[1] - r1[1] * r2[0]
-  ];
-
+  const r1s = [r1[0] - 0.5 * dot * r2[0], r1[1] - 0.5 * dot * r2[1], r1[2] - 0.5 * dot * r2[2]];
+  const r2s = [r2[0] - 0.5 * dot * r1[0], r2[1] - 0.5 * dot * r1[1], r2[2] - 0.5 * dot * r1[2]];
+  const l1 = Math.hypot(r1s[0], r1s[1], r1s[2]), l2 = Math.hypot(r2s[0], r2s[1], r2s[2]);
+  r1 = [r1s[0] / l1, r1s[1] / l1, r1s[2] / l1];
+  r2 = [r2s[0] / l2, r2s[1] / l2, r2s[2] / l2];
+  const r3 = [r1[1] * r2[2] - r1[2] * r2[1], r1[2] * r2[0] - r1[0] * r2[2], r1[0] * r2[1] - r1[1] * r2[0]];
   const t = [h3[0] * scale, h3[1] * scale, h3[2] * scale];
-
-  return { r1, r2, r3, t };
+  if (!(t[2] > 0)) return null;
+  // OpenCV camera frame -> three.js (X, -Y, -Z); rotation matrix rows m[row][col]
+  const m = [
+    [ r1[0],  r2[0],  r3[0]],
+    [-r1[1], -r2[1], -r3[1]],
+    [-r1[2], -r2[2], -r3[2]]
+  ];
+  return { pos: [t[0], -t[1], -t[2]], quat: quatFromMat(m) };
 }
-
-// ── QR Scanner & Tracking Loop ────────────────────────────────────────────────
-const video = document.getElementById('webcam');
-const scanCanvas = document.createElement('canvas');
-const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
-
-let isArActive = false;
-let isTracking = false;
-let trackingLostCount = 0;
-let trackedCorners = null;
-
-// Smoothed target matrix & quaternion
-const targetMatrix = new THREE.Matrix4();
-const targetPos = new THREE.Vector3();
-const targetQuat = new THREE.Quaternion();
-
-let lastVw = 0, lastVh = 0;
-function syncCanvasToVideo(vw, vh) {
-  if (vw === lastVw && vh === lastVh) return;
-  lastVw = vw; lastVh = vh;
-  const winW = window.innerWidth, winH = window.innerHeight;
-  const scale = Math.max(winW / vw, winH / vh);
-  const dispW = Math.round(vw * scale);
-  const dispH = Math.round(vh * scale);
-  const offX = Math.round((winW - dispW) / 2);
-  const offY = Math.round((winH - dispH) / 2);
-
-  renderer.setSize(dispW, dispH, false);
-  const el = renderer.domElement;
-  el.style.position = 'fixed';
-  el.style.width = dispW + 'px';
-  el.style.height = dispH + 'px';
-  el.style.left = offX + 'px';
-  el.style.top = offY + 'px';
-
-  // Synchronize Three.js camera projection to video intrinsics (f ~ 1.05 * vh for phone wide cameras)
-  const f = vh * 1.05;
-  camera.fov = 2.0 * Math.atan((vh / 2.0) / f) * (180.0 / Math.PI);
-  camera.aspect = vw / vh;
-  camera.updateProjectionMatrix();
-}
-
-function updateCameraTracking() {
-  if (!isArActive || video.readyState !== video.HAVE_ENOUGH_DATA) return;
-
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (vw === 0 || vh === 0) return;
-
-  syncCanvasToVideo(vw, vh);
-  const f = vh * 1.05;
-
-  // Higher scan resolution (768px) minimizes corner quantization noise
-  const sw = Math.min(768, vw);
-  const scale = sw / vw;
-  const sh = Math.round(vh * scale);
-
-  scanCanvas.width = sw;
-  scanCanvas.height = sh;
-  scanCtx.drawImage(video, 0, 0, sw, sh);
-
-  const imgData = scanCtx.getImageData(0, 0, sw, sh);
-  const code = (window.jsQR) ? jsQR(imgData.data, sw, sh, { inversionAttempts: "dontInvert" }) : null;
-
-  if (code && code.location) {
-    const loc = code.location;
-    // Rescale corners to video coordinates
-    const rawCorners = [
-      { x: loc.topLeftCorner.x / scale,     y: loc.topLeftCorner.y / scale },
-      { x: loc.topRightCorner.x / scale,    y: loc.topRightCorner.y / scale },
-      { x: loc.bottomRightCorner.x / scale, y: loc.bottomRightCorner.y / scale },
-      { x: loc.bottomLeftCorner.x / scale,  y: loc.bottomLeftCorner.y / scale }
-    ];
-
-    // Temporal corner low-pass filter: kills discrete pixel quantization noise
-    if (!trackedCorners) {
-      trackedCorners = rawCorners.map(p => ({ x: p.x, y: p.y }));
-    } else {
-      let maxDelta = 0;
-      for (let i = 0; i < 4; i++) {
-        const d = Math.hypot(rawCorners[i].x - trackedCorners[i].x, rawCorners[i].y - trackedCorners[i].y);
-        if (d > maxDelta) maxDelta = d;
-      }
-      // If motion is fast (> 35px), adapt quickly (0.80) to follow hand movements without lag
-      // If motion is small (< 10px), smooth aggressively (0.22) to filter out camera noise
-      const cornerAlpha = maxDelta > 35 ? 0.80 : (maxDelta > 10 ? 0.45 : 0.22);
-      for (let i = 0; i < 4; i++) {
-        trackedCorners[i].x += (rawCorners[i].x - trackedCorners[i].x) * cornerAlpha;
-        trackedCorners[i].y += (rawCorners[i].y - trackedCorners[i].y) * cornerAlpha;
-      }
-    }
-
-    const pose = estimatePoseFromCorners(trackedCorners, vw, vh, markerSizeMm, f);
-    if (pose) {
-      isTracking = true;
-      trackingLostCount = 0;
-      trackingBadge.textContent = "🟢 Prüfstand getrackt";
-      trackingBadge.className = "tracked";
-      targetGuide.style.display = "none";
-
-      // Build 4x4 matrix
-      // In Three.js: X_th = X_cv, Y_th = -Y_cv, Z_th = -Z_cv
-      const mat = new THREE.Matrix4();
-      mat.set(
-         pose.r1[0],  pose.r2[0],  pose.r3[0],  pose.t[0],
-        -pose.r1[1], -pose.r2[1], -pose.r3[1], -pose.t[1],
-        -pose.r1[2], -pose.r2[2], -pose.r3[2], -pose.t[2],
-         0,           0,           0,           1
-      );
-
-      targetPos.setFromMatrixPosition(mat);
-      targetQuat.setFromRotationMatrix(mat);
-
-      if (twinRoot.position.lengthSq() < 1e-3) {
-        // Initial snap on first detection
-        twinRoot.position.copy(targetPos);
-        twinRoot.quaternion.copy(targetQuat);
-      } else {
-        const posDist = twinRoot.position.distanceTo(targetPos);
-        const rotAngle = twinRoot.quaternion.angleTo(targetQuat);
-
-        // Adaptive filtering with deadband:
-        // When stationary, alpha is tiny (0.035) to eliminate jitter/wobble completely.
-        // When camera is moving, alpha increases up to 0.40 for zero-lag tracking.
-        let posAlpha = 0.10;
-        if (posDist < 3.0) posAlpha = 0.035;
-        else if (posDist > 25.0) posAlpha = 0.40;
-
-        let rotAlpha = 0.10;
-        if (rotAngle < 0.03) rotAlpha = 0.035;
-        else if (rotAngle > 0.20) rotAlpha = 0.40;
-
-        twinRoot.position.lerp(targetPos, posAlpha);
-        twinRoot.quaternion.slerp(targetQuat, rotAlpha);
-      }
-      twinRoot.visible = true;
-    }
+function quatFromMat(m) {              // -> [x,y,z,w], unit
+  const tr = m[0][0] + m[1][1] + m[2][2];
+  let x, y, z, w;
+  if (tr > 0) {
+    const s = 0.5 / Math.sqrt(tr + 1.0);
+    w = 0.25 / s; x = (m[2][1] - m[1][2]) * s; y = (m[0][2] - m[2][0]) * s; z = (m[1][0] - m[0][1]) * s;
+  } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
+    const s = 2.0 * Math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]);
+    w = (m[2][1] - m[1][2]) / s; x = 0.25 * s; y = (m[0][1] + m[1][0]) / s; z = (m[0][2] + m[2][0]) / s;
+  } else if (m[1][1] > m[2][2]) {
+    const s = 2.0 * Math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]);
+    w = (m[0][2] - m[2][0]) / s; x = (m[0][1] + m[1][0]) / s; y = 0.25 * s; z = (m[1][2] + m[2][1]) / s;
   } else {
-    if (isTracking) {
-      trackingLostCount++;
-      if (trackingLostCount > 25) { // Keep steady for ~0.8s during brief occlusions
-        isTracking = false;
-        trackedCorners = null;
-        trackingBadge.textContent = "🟡 Suche Marker...";
-        trackingBadge.className = "camera-on";
-        targetGuide.style.display = "block";
+    const s = 2.0 * Math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]);
+    w = (m[1][0] - m[0][1]) / s; x = (m[0][2] + m[2][0]) / s; y = (m[1][2] + m[2][1]) / s; z = 0.25 * s;
+  }
+  const n = Math.hypot(x, y, z, w);
+  return [x / n, y / n, z / n, w / n];
+}
+function quatDot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; }
+function quatAngle(a, b) { return 2.0 * Math.acos(Math.min(1.0, Math.abs(quatDot(a, b)))); }
+function quatSlerp(a, b, t) {          // shortest path; a,b unit; returns unit
+  let d = quatDot(a, b), bb = b;
+  if (d < 0) { d = -d; bb = [-b[0], -b[1], -b[2], -b[3]]; }
+  let ka, kb;
+  if (d > 0.9995) { ka = 1 - t; kb = t; }
+  else {
+    const th = Math.acos(d), sn = Math.sin(th);
+    ka = Math.sin((1 - t) * th) / sn; kb = Math.sin(t * th) / sn;
+  }
+  const q = [ka * a[0] + kb * bb[0], ka * a[1] + kb * bb[1], ka * a[2] + kb * bb[2], ka * a[3] + kb * bb[3]];
+  const n = Math.hypot(q[0], q[1], q[2], q[3]);
+  return [q[0] / n, q[1] / n, q[2] / n, q[3] / n];
+}
+
+// ── homography fit over all correspondences ────────────────────────────────────────
+// loc: jsQR location IN VIDEO PX (+ .version).  img: {data,w,h,sx,sy,ox,oy} scan image
+// (scan px = (video - o) * s) or null.  Returns {H (module->video px), residual (video px,
+// null if only 4 exact points), npts, refined, alignUsed, quad} or null.
+function fitMarkerHomography(loc, img) {
+  const dim = 17 + 4 * loc.version;
+  const corners = [loc.topLeftCorner, loc.topRightCorner, loc.bottomRightCorner, loc.bottomLeftCorner];
+  const cornerMods = [[0, 0], [dim, 0], [dim, dim], [0, dim]];
+  const c4 = corners.map(c => [c.x, c.y]);
+  let src = null, dst = null, refined = 0, alignUsed = false, residual = null;
+  let H = null;
+  if (TRK.REFINE_EDGES && img) {
+    // predictor: jsQR's own mapping (module -> scan px) through its 4 corners
+    const toScan = c => [(c[0] - img.ox) * img.sx, (c[1] - img.oy) * img.sy];
+    const Hjs = dltHomography(cornerMods, c4.map(toScan), null);
+    if (Hjs) {
+      const ref = refineFinderCorners(Hjs, dim, img);
+      if (ref.length >= 8) {          // >= 2 finders fully refined
+        refined = ref.length / 4;
+        src = []; dst = [];
+        for (const r of ref) { src.push(r.m); dst.push([r.p[0] / img.sx + img.ox, r.p[1] / img.sy + img.oy]); }
+        const cen = [[loc.topLeftFinderPattern, 3.5, 3.5], [loc.topRightFinderPattern, dim - 3.5, 3.5],
+                     [loc.bottomLeftFinderPattern, 3.5, dim - 3.5]];
+        for (const c of cen) { if (c[0]) { src.push([c[1], c[2]]); dst.push([c[0].x, c[0].y]); } }
+        H = dltHomography(src, dst, null);
+        // jsQR alignment centre: only when the finder-only fit agrees (else it is a guess)
+        const al = loc.bottomRightAlignmentPattern;
+        if (H && al && dim >= 25) {
+          const pr = applyH(H, dim - 6.5, dim - 6.5);
+          const ppm = Math.hypot(applyH(H, dim - 5.5, dim - 6.5)[0] - pr[0], applyH(H, dim - 5.5, dim - 6.5)[1] - pr[1]);
+          if (Math.hypot(pr[0] - al.x, pr[1] - al.y) < TRK.ALIGN_TOL_MOD * ppm) {
+            src.push([dim - 6.5, dim - 6.5]); dst.push([al.x, al.y]);
+            H = dltHomography(src, dst, null) || H;
+            alignUsed = true;
+          }
+        }
+        if (H) residual = rmsResidual(H, src, dst);
       }
     }
   }
+  if (!H) {                           // fallback: jsQR's 4 corners (== old behaviour, exact fit)
+    src = cornerMods; dst = c4;
+    H = dltHomography(src, dst, null);
+    if (!H) return null;
+  }
+  const quad = cornerMods.map(m => applyH(H, m[0], m[1]));
+  return { H, dim, residual, npts: src.length, refined, alignUsed, quad };
 }
 
-// ── Main Render Loop ──────────────────────────────────────────────────────────
+// ── One Euro filter (position mm, quaternion) ───────────────────────────────────────
+function lpAlpha(cutoffHz, dt) { const tau = 1.0 / (2.0 * Math.PI * cutoffHz); return 1.0 / (1.0 + tau / dt); }
+function filtInit(pos, quat, t) {
+  return { pos: pos.slice(), quat: quat.slice(), vel: 0.0, velz: 0.0, wvel: 0.0, t };
+}
+function filtUpdate(F, pos, quat, t, conf) {
+  const dt = Math.min(TRK.DT_MAX_S, Math.max(TRK.DT_MIN_S, (t - F.t) / 1000.0));
+  const cs = TRK.CONF_MIN_SCALE + (1.0 - TRK.CONF_MIN_SCALE) * conf;
+  // lateral position: vector One Euro (one cutoff from the lateral speed norm)
+  const spL = Math.hypot(pos[0] - F.pos[0], pos[1] - F.pos[1]) / dt;
+  F.vel += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (spL - F.vel);
+  const aP = lpAlpha(TRK.POS_MIN_CUTOFF_HZ * cs + TRK.POS_BETA * F.vel, dt);
+  F.pos[0] += aP * (pos[0] - F.pos[0]);
+  F.pos[1] += aP * (pos[1] - F.pos[1]);
+  // depth: its own One Euro (own speed, heavier smoothing)
+  const spZ = Math.abs(pos[2] - F.pos[2]) / dt;
+  F.velz += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (spZ - F.velz);
+  F.pos[2] += lpAlpha(TRK.POS_Z_MIN_CUTOFF_HZ * cs + TRK.POS_Z_BETA * F.velz, dt) * (pos[2] - F.pos[2]);
+  // rotation: same on the geodesic
+  const ang = quatAngle(F.quat, quat), w = ang / dt;
+  F.wvel += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (w - F.wvel);
+  const fcR = TRK.ROT_MIN_CUTOFF_HZ * cs + TRK.ROT_BETA * F.wvel;
+  F.quat = quatSlerp(F.quat, quat, lpAlpha(fcR, dt));
+  F.t = t;
+}
+
+// ── tracker core ────────────────────────────────────────────────────────────────────
+function trkReset() {
+  TRK_S.payload = null; TRK_S.filt = null; TRK_S.pending = []; TRK_S.lastMeasT = 0; TRK_S.lastRefinedT = -1e9; TRK_S.quad = null; TRK_S.dim = 0; TRK_S.roiMissRun = 0; TRK_S.shift = 0;
+}
+function trkResult(status, extra) {
+  const F = TRK_S.filt;
+  return Object.assign({
+    status, tracked: !!F,
+    pos: F ? F.pos.slice() : null, quat: F ? F.quat.slice() : null,
+    fresh: status === 'accepted' || status === 'jump-accepted'
+  }, extra || {});
+}
+// Called when a frame gave no usable detection.  Returns true once tracking is LOST.
+function trkMiss(tMs) {
+  TRK_S.stats.misses++;
+  if (TRK_S.filt && tMs - TRK_S.lastMeasT > TRK.HOLD_MS) { trkReset(); return true; }
+  return !TRK_S.filt;
+}
+function trkReject(reason, tMs, extra) {
+  TRK_S.stats.rejected[reason]++;
+  const lost = trkMiss(tMs);
+  return trkResult('rejected:' + reason, Object.assign({ lost }, extra || {}));
+}
+// location: jsQR location object in VIDEO px with .version;  payload: decoded string;
+// tMs: timestamp of the frame;  vw,vh: video size;  img: optional scan image (see above).
+function trkProcessDetection(location, payload, tMs, vw, vh, img) {
+  const st = TRK_S.stats, t0 = performance.now();
+  st.detections++;
+  const fit = fitMarkerHomography(location, img || null);
+  if (!fit) { const r = trkReject('fit', tMs); st.procMs += performance.now() - t0; return r; }
+  if (fit.residual === null) st.unrefined++; else st.refined++;
+  if (fit.alignUsed) st.alignUsed++;
+  const ex = { residualPx: fit.residual, npts: fit.npts };
+  if (fit.residual !== null && fit.residual > TRK.MAX_RESIDUAL_PX) { const r = trkReject('residual', tMs, ex); st.procMs += performance.now() - t0; return r; }
+  if (!isConvex(fit.quad) || Math.abs(polyArea(fit.quad)) < TRK.MIN_QUAD_AREA_PX) { const r = trkReject('convex', tMs, ex); st.procMs += performance.now() - t0; return r; }
+  if (fit.residual === null && TRK_S.filt && tMs - TRK_S.lastRefinedT < TRK.UNREFINED_GRACE_MS) { const r = trkReject('unrefined', tMs, ex); st.procMs += performance.now() - t0; return r; }
+  if (TRK_S.payload !== null && payload !== TRK_S.payload) { const r = trkReject('payload', tMs, ex); st.procMs += performance.now() - t0; return r; }
+  const pose = poseFromHomography(fit.H, fit.dim, markerSizeMm, vw, vh);
+  if (!pose) { const r = trkReject('pose', tMs, ex); st.procMs += performance.now() - t0; return r; }
+
+  if (TRK_S.payload === null) TRK_S.payload = payload;      // lock on first good detection
+  if (TRK_S.quad) {                                          // frame-to-frame quad-centre shift (video px)
+    const c0 = TRK_S.quad, c1 = fit.quad;
+    let sx = 0, sy = 0;
+    for (let i = 0; i < 4; i++) { sx += c1[i][0] - c0[i][0]; sy += c1[i][1] - c0[i][1]; }
+    TRK_S.shift = 0.5 * TRK_S.shift + 0.5 * Math.hypot(sx, sy) / 4;
+  }
+  TRK_S.quad = fit.quad; TRK_S.dim = fit.dim;
+  const conf = fit.residual === null ? 0.5
+    : Math.max(0, Math.min(1, 1 - (fit.residual - TRK.GOOD_RESIDUAL_PX) / (TRK.MAX_RESIDUAL_PX - TRK.GOOD_RESIDUAL_PX)));
+  ex.conf = conf;
+  // stale filter (long gap): start over instead of blending with an old pose
+  if (TRK_S.filt && tMs - TRK_S.lastMeasT > TRK.HOLD_MS) { TRK_S.filt = null; TRK_S.pending = []; }
+  TRK_S.lastMeasT = tMs;
+  if (fit.residual !== null) TRK_S.lastRefinedT = tMs;
+  let status = 'accepted';
+  if (!TRK_S.filt) {                                        // initial snap
+    TRK_S.filt = filtInit(pose.pos, pose.quat, tMs);
+    st.accepted++;
+  } else {
+    const F = TRK_S.filt;
+    const dP = Math.hypot(pose.pos[0] - F.pos[0], pose.pos[1] - F.pos[1], pose.pos[2] - F.pos[2]);
+    const dR = quatAngle(F.quat, pose.quat) * 180.0 / Math.PI;
+    if (dP > TRK.JUMP_MM || dR > TRK.JUMP_DEG) {
+      const pend = TRK_S.pending, prev = pend.length ? pend[pend.length - 1] : null;
+      const cons = prev &&
+        Math.hypot(pose.pos[0] - prev.pos[0], pose.pos[1] - prev.pos[1], pose.pos[2] - prev.pos[2]) < TRK.JUMP_MM &&
+        quatAngle(prev.quat, pose.quat) * 180.0 / Math.PI < TRK.JUMP_DEG;
+      if (cons) pend.push({ pos: pose.pos, quat: pose.quat }); else TRK_S.pending = [{ pos: pose.pos, quat: pose.quat }];
+      if (TRK_S.pending.length >= TRK.ACCEPT_N) {           // persistent -> real move: re-converge
+        TRK_S.filt = filtInit(pose.pos, pose.quat, tMs);
+        TRK_S.pending = [];
+        st.jumpsAccepted++; status = 'jump-accepted';
+      } else {
+        st.held++; status = 'held';
+        F.t = tMs;                                          // keep dt sane for the next update
+      }
+    } else {
+      TRK_S.pending = [];
+      filtUpdate(F, pose.pos, pose.quat, tMs, conf);
+      st.accepted++;
+    }
+  }
+  st.procMs += performance.now() - t0;
+  return trkResult(status, ex);
+}
+
+// ── Video scan (only NEW frames) ────────────────────────────────────────────────────
+const video = document.getElementById('webcam');
+// Full-frame scanners: canvas dims are set only when they change.  `scan640` is the cheap
+// search scan; `scanHi` (1024) is tried on every 2nd failed search frame because at 640 px
+// a 60 mm marker is lost beyond ~30 cm (measured, WP-AR-TRACK) -- the ROI scan is native
+// resolution, so this only matters for ACQUISITION.
+function makeScanner(longSide) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  return function scan(src, vw, vh) {
+    const k = Math.min(1.0, longSide / Math.max(vw, vh));
+    const sw = Math.max(1, Math.round(vw * k)), sh = Math.max(1, Math.round(vh * k));
+    if (canvas.width !== sw || canvas.height !== sh) { canvas.width = sw; canvas.height = sh; }
+    ctx.drawImage(src, 0, 0, sw, sh);
+    const id = ctx.getImageData(0, 0, sw, sh);
+    return { data: id.data, w: sw, h: sh, sx: sw / vw, sy: sh / vh, ox: 0, oy: 0 };
+  };
+}
+const scanFull = makeScanner(TRK.SCAN_LONG_SIDE_PX);
+const scanHi = makeScanner(TRK.SEARCH_HI_LONG_SIDE_PX);
+const roiCanvas = document.createElement('canvas');    // fixed-size crop canvas for the tracked-ROI scan
+roiCanvas.width = TRK.ROI_MAX_PX; roiCanvas.height = TRK.ROI_MAX_PX;
+const roiCtx = roiCanvas.getContext('2d', { willReadFrequently: true });
+const JSQR_OPTS = { inversionAttempts: "dontInvert" };
+
+let isArActive = false;
+let isTracking = false;
+
+// Native-resolution crop around the last tracked quad (more px per module AND cheaper).
+function trkScanRoi(src, vw, vh, quad) {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const q of quad) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
+  const side = Math.max(x1 - x0, y1 - y0) * (1.0 + 2.0 * TRK.ROI_MARGIN) + 2.0 * TRK.ROI_MOTION_GAIN * TRK_S.shift;
+  const cx = 0.5 * (x0 + x1), cy = 0.5 * (y0 + y1);
+  const rw = Math.max(32, Math.min(vw, Math.round(side))), rh = Math.max(32, Math.min(vh, Math.round(side)));
+  const rx = Math.round(Math.max(0, Math.min(vw - rw, cx - rw / 2)));
+  const ry = Math.round(Math.max(0, Math.min(vh - rh, cy - rh / 2)));
+  const symSide = Math.sqrt(Math.abs(polyArea(quad)));
+  const kMod = TRK_S.dim > 0 && symSide > 1 ? TRK.ROI_PX_PER_MODULE * TRK_S.dim / symSide : 1.0;
+  const k = Math.max(0.3, Math.min(1.0, kMod, TRK.ROI_MAX_PX / Math.max(rw, rh)));
+  const dw = Math.max(1, Math.round(rw * k)), dh = Math.max(1, Math.round(rh * k));
+  roiCtx.drawImage(src, rx, ry, rw, rh, 0, 0, dw, dh);
+  const id = roiCtx.getImageData(0, 0, dw, dh);
+  return { data: id.data, w: dw, h: dh, sx: dw / rw, sy: dh / rh, ox: rx, oy: ry };
+}
+function trkLocToVideo(loc, version, img) {
+  const cv = p => p ? { x: p.x / img.sx + img.ox, y: p.y / img.sy + img.oy } : null;
+  return {
+    version,
+    topLeftCorner: cv(loc.topLeftCorner), topRightCorner: cv(loc.topRightCorner),
+    bottomRightCorner: cv(loc.bottomRightCorner), bottomLeftCorner: cv(loc.bottomLeftCorner),
+    topLeftFinderPattern: cv(loc.topLeftFinderPattern), topRightFinderPattern: cv(loc.topRightFinderPattern),
+    bottomLeftFinderPattern: cv(loc.bottomLeftFinderPattern),
+    bottomRightAlignmentPattern: cv(loc.bottomRightAlignmentPattern)
+  };
+}
+// One video frame: scan -> jsQR -> processDetection.  `src` = any CanvasImageSource.
+function trkProcessFrame(src, tMs, vw, vh) {
+  const st = TRK_S.stats;
+  st.frames++;
+  if (!window.jsQR) return trkResult('nolib');
+  const t0 = performance.now();
+  let img = null, code = null;
+  if (TRK.ROI_TRACKING && TRK_S.filt && TRK_S.quad) {
+    img = trkScanRoi(src, vw, vh, TRK_S.quad);
+    code = jsQR(img.data, img.w, img.h, JSQR_OPTS);
+    if (code) { st.roiHits++; TRK_S.roiMissRun = 0; } else { st.roiMiss++; TRK_S.roiMissRun++; }
+  }
+  // A failed ROI decode while tracking is usually transient (blur / occlusion / noise): do NOT
+  // pay a second, full-frame jsQR pass for it -- only search the whole frame after a few in a row.
+  const roiRetry = !code && TRK_S.filt && TRK_S.roiMissRun > 0 && TRK_S.roiMissRun < TRK.ROI_MISS_FALLBACK;
+  if (!code && !roiRetry) {
+    img = scanFull(src, vw, vh);
+    code = jsQR(img.data, img.w, img.h, JSQR_OPTS);
+    if (!code && Math.min(1, TRK.SEARCH_HI_LONG_SIDE_PX / Math.max(vw, vh)) > img.sx * 1.05 &&
+        (++TRK_S.searchTick % TRK.SEARCH_HI_EVERY) === 0) {
+      img = scanHi(src, vw, vh);
+      code = jsQR(img.data, img.w, img.h, JSQR_OPTS);
+      if (code) st.hiHits++;
+    }
+  }
+  st.scanMs += performance.now() - t0;
+  if (!code || !code.location) {
+    const lost = trkMiss(tMs);
+    return trkResult('nodetect', { lost });
+  }
+  return trkProcessDetection(trkLocToVideo(code.location, code.version, img), code.data, tMs, vw, vh, img);
+}
+
+// Apply a tracker result to the scene + badge
+function trkApply(res) {
+  if (res.tracked) {
+    if (res.fresh) {
+      twinRoot.position.set(res.pos[0], res.pos[1], res.pos[2]);
+      twinRoot.quaternion.set(res.quat[0], res.quat[1], res.quat[2], res.quat[3]);
+    }
+    twinRoot.visible = true;
+    if (!isTracking) {
+      isTracking = true;
+      trackingBadge.textContent = "🟢 Prüfstand getrackt";
+      trackingBadge.className = "tracked";
+      targetGuide.style.display = "none";
+    }
+  } else if (isTracking) {
+    isTracking = false;
+    trackingBadge.textContent = "🟡 Suche Marker...";
+    trackingBadge.className = "camera-on";
+    targetGuide.style.display = "block";
+  }
+}
+
+// ── Canvas = viewport; cover-crop of the video reproduced with a camera view offset ───
+// Old scheme: canvas sized/placed to the cover-scaled VIDEO (up to 5.7 MP backbuffer,
+// mostly off-screen).  Now: canvas = viewport, and camera.setViewOffset() selects the
+// same sub-rectangle of the full-video frustum, so the projection of every 3D point to
+// a CSS pixel is identical (verified numerically in WP-AR-TRACK, < 0.5 px).
+let lastVw = 0, lastVh = 0, lastWinW = 0, lastWinH = 0;
+function syncCanvasToVideo(vw, vh) {
+  const winW = window.innerWidth, winH = window.innerHeight;
+  if (vw === lastVw && vh === lastVh && winW === lastWinW && winH === lastWinH) return;
+  lastVw = vw; lastVh = vh; lastWinW = winW; lastWinH = winH;
+  const scale = Math.max(winW / vw, winH / vh);       // object-fit: cover
+  const dispW = vw * scale, dispH = vh * scale;       // cover-scaled video, CSS px
+  const offX = (winW - dispW) / 2, offY = (winH - dispH) / 2;
+
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(winW, winH);
+
+  // Camera projection = video intrinsics (f = 1.05*vh px); frustum of the FULL video ...
+  const f = vh * TRK.FOCAL_PER_VIDEO_H;
+  camera.fov = 2.0 * Math.atan((vh / 2.0) / f) * (180.0 / Math.PI);
+  camera.aspect = dispW / dispH;                      // == vw/vh
+  // ... of which only the visible viewport rectangle is rendered
+  camera.setViewOffset(dispW, dispH, -offX, -offY, winW, winH);
+}
+function syncCanvasToWindow() {                        // preview mode (no video)
+  lastVw = 0; lastVh = 0;
+  camera.clearViewOffset();
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// Run tracking for one new video frame (requestVideoFrameCallback, else frame-counter poll)
+function trkRunOnce(tMs) {
+  if (!isArActive || video.readyState < 2) return;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+  syncCanvasToVideo(vw, vh);
+  trkApply(trkProcessFrame(video, tMs, vw, vh));
+}
+let rvfcOn = false, lastFrameKey = -1;
+function onVideoFrame(now) {
+  if (!isArActive) { rvfcOn = false; return; }
+  trkRunOnce(now);
+  video.requestVideoFrameCallback(onVideoFrame);
+}
+function startTrackingLoop() {
+  lastFrameKey = -1;
+  if (!rvfcOn && typeof video.requestVideoFrameCallback === 'function') {
+    rvfcOn = true;
+    video.requestVideoFrameCallback(onVideoFrame);
+  }
+}
+function pollNewFrame(tMs) {                           // fallback without requestVideoFrameCallback
+  const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+  const key = q && q.totalVideoFrames ? q.totalVideoFrames : video.currentTime;
+  if (key === lastFrameKey) return;
+  lastFrameKey = key;
+  trkRunOnce(tMs);
+}
+
+// ── Main Render Loop ──────────────────────────────────────────────────────────────
 let lastTime = performance.now();
 
 function animate(time) {
@@ -1296,7 +1755,7 @@ function animate(time) {
   updateTelemetry(time);
 
   if (isArActive) {
-    updateCameraTracking();
+    if (!rvfcOn) pollNewFrame(time);      // pose target is updated by tracking, not per render frame
   } else {
     if (controls) controls.update();
     twinRoot.rotation.y += 0.004;
@@ -1305,7 +1764,18 @@ function animate(time) {
   renderer.render(scene, camera);
 }
 renderer.setAnimationLoop(animate);
-Object.assign(window.twinDebug, { plateM, coilInnerM, coilOuterM, camera, scene });
+Object.assign(window.twinDebug, { plateM, coilInnerM, coilOuterM, camera, scene, renderer });
+window.twinDebug.tracking = {
+  processDetection: trkProcessDetection,   // (location, payload, tMs, vw, vh[, scanImg]) -> {status,pos,quat,...}
+  processFrame: trkProcessFrame,           // (canvasImageSource, tMs, vw, vh): scan + track
+  onMiss: trkMiss,
+  reset: trkReset,
+  config: TRK,
+  get state() { return TRK_S; },
+  get stats() { return TRK_S.stats; },
+  resetStats() { TRK_S.stats = trkNewStats(); },
+  setMarkerSizeMm(v) { markerSizeMm = v; trkReset(); },
+};
 
 // ── Start Camera Button & Dialogs ─────────────────────────────────────────────
 const btnStartAR = document.getElementById('btnStartAR');
@@ -1366,6 +1836,7 @@ btnStartAR.addEventListener('click', async () => {
     video.style.display = 'block';
     if (controls) controls.enabled = false;
     isArActive = true;
+    startTrackingLoop();
     startBanner.style.display = 'none';
     targetGuide.style.display = 'block';
     trackingBadge.textContent = "🟡 Suche Marker...";
@@ -1637,10 +2108,12 @@ if (btnYInc) {
 const lblMarkerSize = document.getElementById('lblMarkerSize');
 document.getElementById('btnSizeDec').addEventListener('click', () => {
   markerSizeMm = Math.max(25, markerSizeMm - 2);
+  trkReset();
   lblMarkerSize.textContent = `${markerSizeMm} mm`;
 });
 document.getElementById('btnSizeInc').addEventListener('click', () => {
   markerSizeMm = Math.min(80, markerSizeMm + 2);
+  trkReset();
   lblMarkerSize.textContent = `${markerSizeMm} mm`;
 });
 
@@ -1662,12 +2135,9 @@ btnToggleLev.addEventListener('click', () => {
 
 window.addEventListener('resize', () => {
   if (isArActive && video.videoWidth && video.videoHeight) {
-    lastVw = 0; lastVh = 0;
-    syncCanvasToVideo(video.videoWidth, video.videoHeight);
+    syncCanvasToVideo(video.videoWidth, video.videoHeight);   // re-syncs on window-size change
   } else {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    syncCanvasToWindow();
   }
 });
 </script>
@@ -1677,6 +2147,7 @@ window.addEventListener('resize', () => {
     # Replace template placeholders
     html = html_template.replace("__TWIN_ENGINE__", data["engine_js"])
     html = html.replace("__T_AMB_FALLBACK_C__", data["t_amb_fallback"])
+    html = html.replace("__MARKER_SYMBOL_MM__", f"{MARKER_SYMBOL_MM:g}")
     html = html.replace("__PARAMS_JSON__", data["params_json"])
     html = html.replace("__POSITIONS_B64__", data["positions_b64"])
     html = html.replace("__REGIONS_B64__", data["regions_b64"])

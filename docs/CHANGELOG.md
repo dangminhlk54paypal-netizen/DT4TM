@@ -1435,3 +1435,64 @@ Fix (single source of truth, no third copy of the physics):
 Verified: `python twin_core.py` 6/6, `python xval_twin.py` PASS (FEM + AR, all diffs ≤1.3e-15).
 AR @7.8 A, T_amb 29: inner coil 50.26 °C at t=450 s, 79.000 / 74.000 °C steady;
 gap 0 mm @3 A, 11.94 mm @5 A, 22.43 mm @7.8 A.
+
+## WP-AR-TRACK (2026-09-28) — AR tracking smoothing + performance pass (`build_ar_twin.py`)
+
+User complaint: slight hops in the AR overlay. Audit: hand-rolled jsQR tracker on the main
+thread every rAF (60 Hz on a 30 fps stream), 4-corner homography where jsQR's bottom-right
+corner is an extrapolation, corner EMA + pose lerp/slerp with STEPPED alphas (the 0.40 step
+on >25 mm jumps made the overlay chase outliers), canvas sized to the cover-scaled video
+(5.7 MP), 385 draw calls, blur backdrops. Engine block / `build_twin_html_fem.py` untouched
+(`xval_twin.py` PASS, `twin_core.py` 6/6).
+
+- **Scan**: only NEW video frames (`requestVideoFrameCallback`; fallback = frame counter
+  poll). Search scan long side 640 px, canvas dims set only on change; every 2nd failed search
+  frame also a 1024 px scan (measured: at 640 px a 60 mm marker is lost beyond ~30 cm, 768 →
+  ~40, 1024 → ~45 cm). While tracked: native-res ROI crop around the last quad, downscaled to
+  ~4.5 px/module (jsQR cost ~ area), margin 0.4 + 2.5x last frame shift; a failed ROI decode is
+  retried on the next frames (no second full-frame pass until 3 misses in a row).
+- **Canvas = viewport** (pixelRatio ≤ 2) + `camera.setViewOffset()` reproduces the cover crop:
+  backbuffer 5.71 → 1.48 MP on 414x896 @2x. Projected overlay coords equal the analytic
+  pinhole+cover mapping to 0.000 px; the OLD code was up to 0.87 px off it (integer rounding of
+  canvas size/offset), so old-vs-new differs by ≤0.87 px, never the other way round.
+- **Field lines**: 432 `THREE.Line` → ONE `LineSegments` (37 104 segments), per-line amplitude
+  factor baked into vertex ALPHA (rgb * material.opacity * vertexAlpha == old per-line opacity),
+  `lineDistance` written per polyline as before. Draw calls 385 → 14 (whole scene).
+- **Renderer**: `preserveDrawingBuffer:false`, `powerPreference:'high-performance'`;
+  `backdrop-filter` removed (panel alpha 0.88 → 0.93).
+- **Pose**: jsQR finder-pattern edges are re-fitted to sub-pixel lines in the scan luminance
+  (12 outer-corner correspondences + 3 finder centres + jsQR's alignment centre only when it
+  agrees with the finder-only fit, i.e. is not jsQR's parallelogram guess) → normalised-DLT
+  homography → reprojection RMS (video px) = confidence. NOTE jsQR's 4 corners are *derived*
+  from 4 measured points (3 finder centres + alignment), so adding them to a DLT adds nothing
+  (residual 0); the edge fit is what actually adds information. Pixel-centre convention: jsQR
+  coordinates are top-left based; sampling uses `p - 0.5` (mixing the two cost ~1° of bias).
+- **Gates**: residual > `MAX_RESIDUAL_PX`, non-convex / tiny quad, payload ≠ payload locked on
+  the first good detection, 4-corner-only fit while a refined one is < 400 ms old.
+- **Filter**: time-based One Euro (dt from timestamps) replaces both EMA layers: lateral (x,y),
+  depth (z, own cutoffs: 3–5x noisier) and quaternion (geodesic, sign-continuous); `minCutoff`
+  scaled 0.5..1 by confidence. Jump hysteresis: > `JUMP_MM`/`JUMP_DEG` from the filtered pose
+  held back until `ACCEPT_N`=3 consecutive mutually-consistent measurements, then re-init.
+  0.8 s brief-occlusion hold and initial snap kept (time based now).
+- **Marker size**: `gen_ar_marker.py` saved the PNG at a FIXED 300 dpi, so the printed QR
+  symbol was ~29.5 mm (whole image 51 mm) for the default URL while the annotation and
+  docs/WEBAR_GUIDE.md claimed 60 mm and the AR default was 45 mm — three different numbers.
+  Now `--size` / `MARKER_SYMBOL_MM = 60.0` is the SYMBOL width (modules only, no quiet zone;
+  what jsQR's corners bound), DPI metadata is derived from it (any QR version prints exactly
+  that size at 100 %), and `build_ar_twin.py` imports the same constant as the AR default.
+  ⚠️ An already printed old marker is NOT 60 mm: measure its black module area with a ruler
+  and set that value with the −/+ buttons (Anpassen → QR-Code Größe).
+- **Test hooks**: `window.twinDebug.tracking = {processDetection(location,payload,tMs,vw,vh[,scanImg]),
+  processFrame(src,tMs,vw,vh), onMiss, reset, config (= TRK, all tuning constants), stats}`.
+- **Not done**: planar-pose ambiguity (IPPE second solution) — pose still comes from the
+  symmetric-Gram-Schmidt homography decomposition; flips are only caught by the jump gate.
+  Focal guess `f = 1.05*videoHeight` (portrait streams: long side) unchanged — overlay and pose
+  use the same f, so it only biases depth/tilt.
+
+Evidence (synthetic 30 fps 1280x720 sequences, real printed marker rendered with OpenCV +
+blur + noise + JPEG + ~7 % corrupted frames; known pose; OLD = e47ec9a logic run at 60 Hz
+(as shipped) / 30 Hz): at 300 mm static err vs truth 0.99 mm/0.49° (old 6.2 mm/2.8°), handheld
+err 2.0 mm/0.9° (5.1/1.8), fast-move settle ≈1 frame = 33 ms (old 300–530 ms), scan+track 10.6 ms per
+video frame (old 42 @60 Hz / 23 @30 Hz), worst frame 91 ms (old 280). At 400 mm old is smoother
+when still (0.10 vs 0.33 mm) but 13 mm/6.8° biased and 1.5 s laggy. 10 % injected corner
+outliers: new jitter 0.19 mm (old 0.72). 450 mm: old/640px-only never acquire, new tracks.

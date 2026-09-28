@@ -7,36 +7,50 @@ The generated marker serves two functions simultaneously:
 
 Usage:
     python gen_ar_marker.py [URL] [--out outputs/ar_marker.png] [--size 60]
+
+SIZE CONVENTION (single source of truth, read by build_ar_twin.py):
+    `--size` / MARKER_SYMBOL_MM is the width of the QR SYMBOL itself -- the black/white
+    module area, WITHOUT the 3-module quiet zone, the decorative frame or the text. That
+    is exactly what the AR page's pose solver uses (jsQR corners = outer module edges).
+    The PNG's DPI metadata is derived from it, so printing at 100 % ("actual size", not
+    "fit to page") gives a symbol of exactly MARKER_SYMBOL_MM whatever URL/QR version.
+    (Before 2026-09-28 the DPI was fixed at 300, so the printed symbol was ~29.5 mm for
+    the default URL while the annotation claimed 60 mm.)
 """
 from __future__ import annotations
 import argparse
 import os
 import sys
 
-try:
-    import qrcode
-    from PIL import Image, ImageDraw, ImageFont
-except ImportError:
-    print("[gen_ar_marker] Error: 'qrcode' and 'pillow' are required.")
-    print("Install with: pip install qrcode pillow")
-    sys.exit(1)
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_URL = "https://example.com/ar_twin.html"
+# Printed width of the QR SYMBOL (module area only) in mm -- see SIZE CONVENTION above.
+# build_ar_twin.py imports this as the AR page's default markerSizeMm.
+MARKER_SYMBOL_MM = 60.0
 
 
 def generate_ar_marker(
     url: str,
     out_path: str,
-    target_width_mm: float = 60.0,
-    dpi: int = 300,
+    target_width_mm: float = MARKER_SYMBOL_MM,
 ) -> str:
     """Generate a printable marker containing:
     - Central QR code encoding the URL
     - Distinctive geometric border with corner identification targets
     - Center alignment crosshairs
     - Real-world scale annotation (in mm)
+
+    `target_width_mm` is the width of the QR symbol (module area, no quiet zone) when
+    printed at 100 %; the PNG's DPI is chosen to make that true for any QR version.
     """
+    try:
+        import qrcode
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        print("[gen_ar_marker] Error: 'qrcode' and 'pillow' are required.")
+        print("Install with: pip install qrcode pillow")
+        sys.exit(1)
+
     # 1. Generate core QR code
     qr = qrcode.QRCode(
         version=None,
@@ -48,6 +62,9 @@ def generate_ar_marker(
     qr.make(fit=True)
     qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
     qw, qh = qr_img.size
+    # Symbol = modules only (qrcode adds `border` quiet-zone modules around it).
+    symbol_px = qr.modules_count * qr.box_size
+    dpi = symbol_px / (target_width_mm / 25.4)   # px per inch so symbol == target_width_mm
 
     # 2. Outer border layout
     border_px = int(qw * 0.22)
@@ -101,7 +118,7 @@ def generate_ar_marker(
         small_font = font
 
     title_text = "DT4TM — TEAM 28 THERMAL DIGITAL TWIN"
-    scale_text = f"Target Size: {target_width_mm:.0f} x {target_width_mm:.0f} mm · Center = Disc Origin (r=0)"
+    scale_text = f"QR symbol (black modules only): {target_width_mm:.0f} x {target_width_mm:.0f} mm · Center = Disc Origin (r=0)"
 
     text_y = qh + 2 * border_px + 10
     draw.text((mid_x, text_y), title_text, fill="black", font=font, anchor="mt")
@@ -111,7 +128,8 @@ def generate_ar_marker(
     img.save(out_path, dpi=(dpi, dpi))
     print(f"[gen_ar_marker] Marker generated -> {out_path}")
     print(f"[gen_ar_marker] Encoded URL: {url}")
-    print(f"[gen_ar_marker] Suggested print size: {target_width_mm} mm x {target_width_mm} mm")
+    print(f"[gen_ar_marker] Print at 100 % (actual size): QR symbol = {target_width_mm} mm x {target_width_mm} mm; "
+          f"whole image = {canvas_w / dpi * 25.4:.1f} mm wide ({dpi:.1f} dpi metadata)")
     return out_path
 
 
@@ -119,7 +137,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate printable WebAR marker for TEAM 28 Digital Twin")
     parser.add_argument("url", nargs="?", default=DEFAULT_URL, help=f"URL encoded in the QR code (default: {DEFAULT_URL})")
     parser.add_argument("--out", default=os.path.join(HERE, "outputs", "ar_marker.png"), help="Output path (default: outputs/ar_marker.png)")
-    parser.add_argument("--size", type=float, default=60.0, help="Target physical width in mm (default: 60.0)")
+    parser.add_argument("--size", type=float, default=MARKER_SYMBOL_MM,
+                        help=f"Printed width of the QR symbol (modules only, no quiet zone) in mm (default: {MARKER_SYMBOL_MM})")
     args = parser.parse_args()
 
     generate_ar_marker(args.url, args.out, target_width_mm=args.size)
