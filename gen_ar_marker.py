@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_URL = "https://example.com/ar_twin.html"
 # Printed width of the QR SYMBOL (module area only) in mm -- see SIZE CONVENTION above.
 # build_ar_twin.py imports this as the AR page's default markerSizeMm.
-MARKER_SYMBOL_MM = 60.0
+MARKER_SYMBOL_MM = 45.0   # = the AR page's historic default; keeps on-screen model size unchanged
 
 
 def generate_ar_marker(

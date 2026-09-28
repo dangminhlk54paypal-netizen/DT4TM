@@ -23,7 +23,7 @@ Diese Anleitung beschreibt, wie der reale Versuchsstand (TEAM 28 Levitator) mit 
    ```
 2. **Druckhinweis:**
    - Drucke das Bild im Druckdialog mit **100% Skalierung** („Tatsächliche Größe“, nicht „Auf Seite einpassen“) aus.
-   - Die Standard-Kantenlänge des **QR-Symbols** (nur die schwarz/weißen Module, ohne weißen Rand, Rahmen und Text) beträgt **$60 \times 60\,\text{mm}$**; das ganze Blatt ist ca. 104 mm breit. Mit dem Lineal nachmessen: ist das Symbol kleiner/größer, den Wert in der App unter ⚙️ → „QR-Code Größe“ anpassen. (Ausdrucke vor 2026-09-28 sind nur ca. 29,5 mm groß, weil das PNG mit fester Auflösung gespeichert wurde.)
+   - Die Standard-Kantenlänge des **QR-Symbols** (nur die schwarz/weißen Module, ohne weißen Rand, Rahmen und Text) beträgt **$45 \times 45\,\text{mm}$**; das ganze Blatt ist ca. 78 mm breit. Mit dem Lineal nachmessen: ist das Symbol kleiner/größer, den Wert in der App unter ⚙️ → „QR-Code Größe“ anpassen. (Ausdrucke vor 2026-09-28 sind nur ca. 29,5 mm groß, weil das PNG mit fester Auflösung gespeichert wurde.)
 3. **Platzierung am Versuchsstand:**
    - **Auf der Schwebescheibe (Standard):** Klebe oder lege den Marker genau in die Mitte der oberen Aluminiumplatte ($r=0$).
    - Da $r=0$ die Symmetrieachse ist, richtet sich das gesamte 3D-Modell ohne seitlichen Versatz exakt an der Spulenachse aus.
@@ -31,7 +31,7 @@ Diese Anleitung beschreibt, wie der reale Versuchsstand (TEAM 28 Levitator) mit 
 > [!TIP]
 > **Neu-Generieren des Markers mit eigener URL:**
 > ```bash
-> python gen_ar_marker.py https://meine-domain.de/ar_twin.html --size 60
+> python gen_ar_marker.py https://meine-domain.de/ar_twin.html --size 45
 > ```
 
 ---

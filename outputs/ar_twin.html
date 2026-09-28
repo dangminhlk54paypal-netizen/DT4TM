@@ -768,7 +768,7 @@ input[type=range]::-webkit-slider-thumb {
       <span class="calib-title">QR-Code Größe</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnSizeDec">-</button>
-        <span class="calib-val" id="lblMarkerSize">60 mm</span>
+        <span class="calib-val" id="lblMarkerSize">45 mm</span>
         <button class="btn-mini" id="btnSizeInc">+</button>
       </div>
     </div>
@@ -1138,7 +1138,7 @@ function writeRampMetal(col, idx, tnorm) {
 let curI = 0.0;
 // Printed width of the QR SYMBOL (module area, no quiet zone) in mm.  Single source of
 // truth = MARKER_SYMBOL_MM in gen_ar_marker.py (imported by build_ar_twin.py).
-let markerSizeMm = 60;
+let markerSizeMm = 45;
 // Display choice (NOT physics): when off, the virtual plate stays firmly seated on the
 // physical mockup. The engine's levitation state (lev.*) evolves regardless.
 let enableLevitation = false;

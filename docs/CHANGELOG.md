@@ -1482,6 +1482,10 @@ on >25 mm jumps made the overlay chase outliers), canvas sized to the cover-scal
   that size at 100 %), and `build_ar_twin.py` imports the same constant as the AR default.
   ⚠️ An already printed old marker is NOT 60 mm: measure its black module area with a ruler
   and set that value with the −/+ buttons (Anpassen → QR-Code Größe).
+  **Follow-up same day:** `MARKER_SYMBOL_MM` 60.0 → **45.0** (user request). The 60 mm default
+  made the rendered model 25 % smaller on screen than before (pose depth ∝ assumed marker
+  size); 45 mm restores the historic AR default, and new prints now come out at 45 mm so
+  print and AR still agree. Tracking logic unchanged.
 - **Test hooks**: `window.twinDebug.tracking = {processDetection(location,payload,tMs,vw,vh[,scanImg]),
   processFrame(src,tMs,vw,vh), onMiss, reset, config (= TRK, all tuning constants), stats}`.
 - **Not done**: planar-pose ambiguity (IPPE second solution) — pose still comes from the
