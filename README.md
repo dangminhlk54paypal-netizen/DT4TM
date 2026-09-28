@@ -42,7 +42,8 @@ python xval_twin.py                      # pin twin_core.py against the baked JS
 python refit_hA.py                       # WP-COOL T4: refit lumped_thermal.hA_inner/outer through the
                                           # actual nonlinear TwinState integrator (params.yaml stays SSOT)
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
-python gen_ar_marker.py <hosted-url>     # Generate printable WebAR tracking marker -> outputs/ar_marker.png
+python gen_ar_marker.py                  # Printable AprilTag (tag36h11) 2x2 board -> outputs/ar_marker.pdf (+ .png preview); print at 100 %
+python build_apriltag_wasm.py            # OPTIONAL, needs Docker: rebuild apriltag_wasm.js from the pinned AprilTag C sources (committed artifact, bit-reproducible)
 python build_ar_twin.py                  # Generate mobile WebAR twin -> outputs/ar_twin.html
 
 # Optional extension: PyVista desktop 3D twin (~400MB VTK dep, see extensions/README.md)
@@ -75,7 +76,8 @@ refit_hA.py          # WP-COOL T4: solve lumped_thermal.hA_inner/outer through t
                      # TwinState integrator instead of a hand-derived linear formula
 data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA()
 gen_qr.py           # QR code for the hosted digital_twin_fem.html (URL via CLI arg)
-gen_ar_marker.py    # Printable WebAR tracking marker with embedded QR code
+gen_ar_marker.py    # Printable AprilTag board PDF (vector, A4) + board-geometry constants shared with the AR page
+build_apriltag_wasm.py + apriltag_glue.c  # Docker build -> apriltag_wasm.js + tag36h11_codes.json (committed; inline in ar_twin.html)
 build_ar_twin.py    # Mobile WebAR app builder -> outputs/ar_twin.html
 extensions/         # OPTIONAL add-ons — heavy deps the core avoids; nothing in the root
                     #   imports them, so the pipeline runs with this folder deleted.

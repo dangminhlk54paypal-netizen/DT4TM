@@ -7,7 +7,7 @@ Diese Anleitung beschreibt, wie der reale Versuchsstand (TEAM 28 Levitator) mit 
 ## 1. Übersicht
 
 * **Keine App-Installation notwendig:** Funktioniert direkt im Webbrowser (Safari auf iOS, Chrome auf Android).
-* **Ausrichtung über Marker:** Ein ausgedruckter QR-Marker wird zentriert auf die Aluminiumplatte gelegt oder geklebt ($r = 0$).
+* **Ausrichtung über Marker:** Ein ausgedruckter **AprilTag-Marker** (2×2-Board aus vier tag36h11-Tags, 120 × 120 mm) wird mit seiner Mitte auf die Aluminiumplatte gelegt oder geklebt ($r = 0$). Die Kamera muss nicht alle Tags sehen: ab 2 sichtbaren Tags wird getrackt, ein teilweise verdecktes Board bleibt stabil.
 * **Was im Kamerabild sichtbar ist:**
   - **Thermische Heatmap:** Echtzeit-Temperaturverteilung auf der Platte und den Spulen mit einstellbarer Transparenz (X-Ray-Modus), damit die echte Maschine sichtbar bleibt.
   - **Elektromagnetische Flusslinien:** Die realen 3D-Feldlinienschlaufen ($\psi = \text{const}$) mit dynamischer Fluss-Animation bei Stromfluss.
@@ -17,22 +17,24 @@ Diese Anleitung beschreibt, wie der reale Versuchsstand (TEAM 28 Levitator) mit 
 
 ## 2. Marker ausdrucken und vorbereiten
 
-1. Die Druckvorlage liegt im Ordner:
+1. Die Druckvorlage ist ein **Vektor-PDF** (A4):
    ```
-   outputs/ar_marker.png
+   outputs/ar_marker.pdf        (Vorschau: outputs/ar_marker.png)
    ```
+   Neu erzeugen: `python gen_ar_marker.py` (braucht `reportlab` und `pillow`, keine URL nötig).
 2. **Druckhinweis:**
-   - Drucke das Bild im Druckdialog mit **100% Skalierung** („Tatsächliche Größe“, nicht „Auf Seite einpassen“) aus.
-   - Die Standard-Kantenlänge des **QR-Symbols** (nur die schwarz/weißen Module, ohne weißen Rand, Rahmen und Text) beträgt **$45 \times 45\,\text{mm}$**; das ganze Blatt ist ca. 78 mm breit. Mit dem Lineal nachmessen: ist das Symbol kleiner/größer, den Wert in der App unter ⚙️ → „QR-Code Größe“ anpassen. (Ausdrucke vor 2026-09-28 sind nur ca. 29,5 mm groß, weil das PNG mit fester Auflösung gespeichert wurde.)
-3. **Platzierung am Versuchsstand:**
-   - **Auf der Schwebescheibe (Standard):** Klebe oder lege den Marker genau in die Mitte der oberen Aluminiumplatte ($r=0$).
-   - Da $r=0$ die Symmetrieachse ist, richtet sich das gesamte 3D-Modell ohne seitlichen Versatz exakt an der Spulenachse aus.
+   - Im Druckdialog **100 % / „Tatsächliche Größe“** wählen, **nicht** „An Seite anpassen“ (die Seite trägt diesen Hinweis auch selbst).
+   - **Maßstab prüfen:** Der Balken unten auf der Seite muss mit dem Lineal **genau 100 mm** messen. Die vier schwarzen Quadrate (Tags) sind **48 mm** groß, das ganze Board (inkl. weißem Rand, Schnittmarken an den Ecken) ist **120 × 120 mm**.
+   - Ist der Ausdruck doch skaliert: Kantenlänge eines schwarzen Tag-Quadrats nachmessen und den Wert in der App unter ⚙️ → „Marker-Größe (Tag)“ einstellen.
+   - Matt drucken (kein Hochglanzpapier, keine Spiegelungen); das Board am besten auf eine ebene Fläche kleben.
+3. **Aufbau des Boards:** Tags mit den IDs **0 1 / 2 3** (0 = oben links). Der Pfeil „OBEN / TOP“ zeigt die Marker-Oberseite (Tags 0 + 1); die Achsen sind wie beim früheren QR-Marker: Ursprung = Board-Mitte, x nach rechts, y nach oben. Die bisherigen Kalibrierwerte (Versatz X/Y, Drehung, Marker-auf-Scheibe/Tisch) behalten deshalb ihre Bedeutung, wenn die **Board-Mitte** dort liegt, wo vorher die QR-Mitte lag.
+4. **Platzierung am Versuchsstand:**
+   - **Auf der Schwebescheibe (Standard):** Board-Mitte genau auf die Mitte der Aluminiumplatte ($r=0$). Die Platte hat nur Ø160 mm: das 120-mm-Board passt darauf, ragt aber weit über die Mitte hinaus – bei Bedarf stattdessen neben dem Aufbau auf den Tisch legen und den Versatz im Menü einstellen.
+   - Da $r=0$ die Symmetrieachse ist, richtet sich das gesamte 3D-Modell ohne seitlichen Versatz an der Spulenachse aus.
+5. **Reichweite:** In der Simulation (1280×720-Video) wird das Board zuverlässig von ca. 25 cm bis über 1 m erkannt (der alte 45-mm-QR-Code nur bis ca. 30 cm). Reale Kameras rauschen/verwackeln mehr: bei Zittern des Overlays zuerst `POS_MIN_CUTOFF_HZ`, `POS_Z_MIN_CUTOFF_HZ`, `ROT_MIN_CUTOFF_HZ` in `build_ar_twin.py` (Block `TRK`) senken.
 
-> [!TIP]
-> **Neu-Generieren des Markers mit eigener URL:**
-> ```bash
-> python gen_ar_marker.py https://meine-domain.de/ar_twin.html --size 45
-> ```
+> [!NOTE]
+> **Erkennung:** Der offizielle AprilTag-3-Detektor (C-Bibliothek) läuft als WebAssembly direkt in der Seite (`apriltag_wasm.js`, in `ar_twin.html` eingebettet, kein Netz nötig; Neubau: `python build_apriltag_wasm.py`, braucht Docker). Ein QR-Code mit der URL ist nicht mehr Teil des Markers – dafür bei Bedarf `python gen_qr.py <URL>` verwenden.
 
 ---
 
@@ -46,7 +48,7 @@ Aufgrund von Sicherheitsrichtlinien der Mobilbrowser (iOS Safari & Android Chrom
    ```
    https://<dein-github-username>.github.io/DT4TM/outputs/ar_twin.html
    ```
-3. Der QR-Code auf dem Marker kann genau auf diese URL programmiert werden, sodass Besucher nur den QR-Code mit der normalen Kamera-App scannen müssen!
+3. Für Besucher kann mit `python gen_qr.py <URL>` ein separater QR-Code (nur die URL) erzeugt werden – der AR-Marker selbst enthält keine URL mehr.
 
 ### Methode B: Lokales Testen im WLAN (z. B. via ngrok)
 1. Starte im Projektverzeichnis einen lokalen Webserver:
@@ -77,4 +79,4 @@ Aufgrund von Sicherheitsrichtlinien der Mobilbrowser (iOS Safari & Android Chrom
   - `👁️ X-Ray`: Macht das 3D-Modell halbtransparent, damit die realen Spulen darunter durchscheinen.
   - `🚀 7.8A`: Springt direkt auf den maximalen Betriebspunkt (270V Stelltrafo-Endanschlag).
 * **Zahnrad-Menü (⚙️):**
-  Ermöglicht das Umschalten der Marker-Position (auf der Scheibe vs. auf dem festen Tisch) und die Auswahl alternativer Marker-Druckgrößen (50, 60, 70, 80 mm).
+  Ermöglicht das Umschalten der Marker-Position (auf der Scheibe vs. auf dem festen Tisch) und die Einstellung der Marker-Größe (Kantenlänge eines Tags in mm, Standard 48; das Board skaliert mit).

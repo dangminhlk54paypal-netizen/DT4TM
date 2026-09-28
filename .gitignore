@@ -17,6 +17,8 @@ outputs/*
 
 # Local-only source PDFs (problem brief / Aufgabenstellung)
 *.pdf
+# ...except the printable AR marker (shippable, like ar_marker.png)
+!outputs/ar_marker.pdf
 
 # Local secrets (API keys) — entire folder never committed. build_twin_html_fem.py
 # reads GOOGLE_WEATHER_API_KEY from local/.env.local at build time; falls back

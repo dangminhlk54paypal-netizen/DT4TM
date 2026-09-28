@@ -1500,3 +1500,61 @@ err 2.0 mm/0.9° (5.1/1.8), fast-move settle ≈1 frame = 33 ms (old 300–530 m
 video frame (old 42 @60 Hz / 23 @30 Hz), worst frame 91 ms (old 280). At 400 mm old is smoother
 when still (0.10 vs 0.33 mm) but 13 mm/6.8° biased and 1.5 s laggy. 10 % injected corner
 outliers: new jitter 0.19 mm (old 0.72). 450 mm: old/640px-only never acquire, new tracks.
+
+## WP-AR-APRILTAG (2026-09-28) — QR tracker replaced by an AprilTag 36h11 board (official C library as WASM)
+
+Why: a 45 mm QR symbol was only acquired up to ~30 cm (60 mm: ~45 cm), pose noise was dominated by
+jsQR's derived corners (static 0.17 mm / 0.15 deg @300 mm), and the QR payload lock / finder refit
+were QR-specific. Engine block / `build_twin_html_fem.py` untouched (`xval_twin.py` PASS, `twin_core.py` 6/6).
+
+- **Marker**: 2x2 board, tag36h11 IDs 0 1 / 2 3, tag black-square edge 48 mm (module 6 mm), gap 12 mm
+  (2 modules), white margin 6 mm (1 module) => board exactly 120.0 mm; >= 1 module white round every tag.
+  Origin = board centre, x right / y up, "top" = tags 0+1 (same convention as the QR symbol, so the placement
+  calibration keeps its meaning). All geometry lives in ONE constant block in `gen_ar_marker.py`
+  (`TAG_EDGE_MM`, `GAP_RATIO`, `MARGIN_RATIO`, `TAG_CENTERS_UNIT`, `CORNER_UNIT`, `MARKER_JS_CONFIG`) and is
+  baked into the page; the UI "Marker-Größe" = tag edge in mm (board scales with it), default 48.
+- **Print**: `gen_ar_marker.py` (no args, URL arg ignored with a notice) -> `outputs/ar_marker.pdf`, A4, VECTOR
+  (tags = filled squares from `tag36h11_codes.json`, which `build_apriltag_wasm.py` extracts from the pinned
+  tag36h11.c -- nothing hand-typed), 100 mm scale bar with ticks, DE+EN "print at 100 %" text, ID labels and a
+  TOP arrow outside the board, cut marks at the 120 mm outline; PNG preview at 150 dpi.
+  `.gitignore` now re-includes `outputs/ar_marker.pdf`.
+- **Detector**: AprilRobotics/apriltag v3.4.5 (94be783), emsdk 4.0.10 in a `docker run --rm` container
+  (`build_apriltag_wasm.py`, glue `apriltag_glue.c`; pose module not linked), `-O3 -flto --closure`,
+  single-file output `apriltag_wasm.js` = 158 KB (wasm inlined as base64), rebuild verified bit-identical.
+  Inlined in `ar_twin.html` as `<script type="text/plain" id="apriltag-src">` (page is offline-capable except
+  Three.js; HTML 1.20 -> 1.37 MB, jsQR CDN script removed). Corner convention verified against the PDF's exact
+  vector geometry: reported corners are corner-origin (pixel i covers [i,i+1)); wasm-vs-truth RMS 0.02-0.05 px,
+  wasm-vs-pupil-apriltags 0.21 px max (pupil's older bundled apriltag is the less exact one, 0.17 px RMS).
+- **Pose**: hamming <= 1 (36h11 min distance 11), decision margin >= 20, on-board IDs, area, convexity ->
+  ONE normalised DLT over all corners of all visible tags in board mm (reprojection RMS = confidence; >= 3 tags
+  with a poor fit: leave-one-tag-out outlier search; 2 inconsistent tags: retry each alone against the filter) ->
+  IPPE two-solution plane pose (y-flip handled; verified exact to 1e-14 on 400 random poses) + 3 Gauss-Newton
+  iterations -> choose by reprojection error, or by closeness to the filtered pose when the two errors are
+  within 1.6x+0.25 px (planar ambiguity). Unit test: single tag @1000 mm flips 18-25 % of the time without a
+  prior, 0 % with it; 4 tags 0 %; therefore tracking never STARTS on 1 tag (`MIN_TAGS_ACQUIRE=2`) and 1-tag
+  frames are ignored for 400 ms after a multi-tag one. One Euro filter / jump hysteresis / 0.8 s hold kept; the
+  cutoffs were RETUNED for the much cleaner measurement (0.5/0.4/0.4 Hz -> 2.0/1.5/1.5, betas 0.15/0.02/3.0):
+  raw jitter is 0.03 mm / 0.01 deg @450 mm, the old cutoffs only added lag (handheld err 2.1 -> 0.83 mm).
+- **Performance**: gray = green channel into the wasm heap (no per-frame Uint8Array; `getImageData` still
+  allocates one ImageData per scan -- 2D-canvas API limit). Search passes cycle 960 px/decimate 2 and 1280 px/
+  decimate 1.5; while tracked a ROI crop (tag ~64 px, decimate 1.5; decimate 1.0 cost 2.5x with no accuracy gain).
+  Detection runs in a Web Worker (inline Blob, wasm instance inside; fallback = main thread); the worker path
+  drops frames while busy, the main thread only does scan + pose (~0.5 + 0.4 ms at 1x). Measured (headless
+  Chromium): tracked frame scan+detect+track 5.1 ms @450 mm / 1.9 ms @1000 mm (1x), 12.2 / 5.0 ms at 4x CPU
+  throttle -> > 8 ms, hence the worker; search passes 8 ms (960/2) and 20 ms (1280/1.5) at 1x, 38 / 100 ms at 4x.
+- **Hooks**: `twinDebug.tracking = {processDetection(dets,tMs,vw,vh), processFrame (SYNC main-thread
+  detector; `await initMainDetector()` first), config (= TRK), stats, worker, detect, ippe, board, ...}`.
+
+Evidence (synthetic 30 fps 1280x720, real board geometry rendered 2x-supersampled + blur + noise + JPEG +
+~7 % corrupted frames + one/two/three tags covered; QR = committed tracker 0d0fa49):
+static jitter / err vs truth / max hop (static+pan) / handheld err / peak err in fast move --
+QR45 @300 mm 0.17 mm 0.16 deg / 0.71 mm 1.56 deg / 1.1 mm 1.2 deg / 1.95 mm 0.90 deg / 6.5 mm, acquires ONLY
+at 300 mm (QR60: 450 mm ok, 700+ never); AprilTag @300/450/700/1000 mm: 0.008/0.008/0.028/0.085 mm
+(0.004-0.015 deg), 0.13/0.20/0.35/0.48 mm (0.03 deg), 0.30/0.30/1.25/0.94 mm (0.07-0.44 deg),
+0.83-0.94 mm (0.40 deg), 3.1-3.3 mm. Acquisition (each frame forced through a search pass) 99.8/99.8/98.6/98.2 %;
+0 frames with rot err > 15 deg or pos err > 30 mm at every distance and at 3x noise; fast-move settle 1 frame
+(33 ms); tag cover: 1 tag off 0.6-0.9 mm, 2 off 0.4-1.5 mm, 3 off (1 tag left) 1-6 mm.
+PDF round trip: `ar_marker.pdf` rasterised at 300 dpi -> pupil-apriltags finds IDs 0-3 (hamming 0, margin 216-239),
+tag edge 48.02 +- 0.03 mm, PDF vector squares exactly 48.000 mm, cut marks 120.000 mm apart, scale bar 100.000 mm.
+- **Needs on-device testing**: real camera noise/rolling shutter (filter cutoffs), focal guess (f = 1.05*vh
+  unchanged), Web Worker + Blob under iOS Safari, print scale, glare on the printed board.
