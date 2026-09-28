@@ -1395,3 +1395,43 @@ to the pre-move baseline), `--screenshot outputs/twin_pv.png --no-show` renders
 the device correctly from the new location, `python twin_core.py` 6/6 PASS,
 `python xval_twin.py` PASS, 192 doc/extension path references all resolve,
 `compileall` clean.
+
+## WP-AR-SSOT (2026-09-28) — the AR twin now runs the FEM page's engine, not its own
+
+Divergence found: `build_ar_twin.py` copied PARAMS out of `outputs/digital_twin_fem.html`
+(so the coefficients matched) but drove them with a private ~60-line display model,
+`stepPhysics()`: `T_AMB_DISP=29`, a 2.5 s first-order lag to `T_amb + dT_cal·(I/5)²` per
+node, no deep winding nodes / air node / iron conduction / nonlinear `hAEff` / σ(T) /
+f_eddy-f_air gating, a heuristic plate field `0.35·dT_mean + 0.65·dT_max·Je^1.25`, and
+levitation `z = z5A·sqrt(I/5)` with no lift-off. Net effect: AR heated/cooled in ~10 s
+instead of minutes, plate ~+25 % too hot at 7.8 A, wrong gap at every current but 5 A. It
+was also outside `xval_twin.py`, so nothing could catch it.
+
+Fix (single source of truth, no third copy of the physics):
+- `build_twin_html_fem.py` JS template: the pure engine (sim state, AIR consts,
+  `coilAirDrive`, `hAEff`, `romStep`, `resetSim`, lev constants + `levGapEqMm/levZeta/
+  levStep`, plus new pure helpers `discVtxT`, `discTempRange`, `discMeanT`, `resetLev`,
+  `engineTrace`) now sits between `// ==== TWIN_ENGINE_BEGIN ====` / `_END ====` markers.
+  Its only external names are `PARAMS`, `ROM`, `LUMPED`, `T_AMB_JS` (stated in the block
+  header). SCENARIOS/getI and the colour-ramp block moved outside (below) the markers; no
+  behaviour change (xval A/B PASS unchanged). `traceRom` now delegates to `engineTrace`.
+- `build_ar_twin.py` extracts that block VERBATIM (raises if markers are missing) plus
+  `T_AMB_FALLBACK_C`, and injects it in a first `<script>` that runs before Three.js, so
+  `window.twinDebug` exists at load without camera/CDN. `stepPhysics` now only substeps
+  `romStep`/`levStep` exactly like the FEM `loop()` (`nSub=ceil(dt_sim/(tau*0.05))`,
+  I clamp 20 A for romStep) and paints engine state. Plate vertex T = `discVtxT`.
+  Levitation renders `lev.z + lev.jit` in true mm (no `Z_GAP_EXAG`: overlay on a real
+  mockup); `enableLevitation` stays a render-only toggle (default off), engine always runs.
+  New UI: sim-speed slider (same log range/default 1× as the FEM page — real τ is minutes,
+  so heating is only visible with the multiplier) and a Reset pill. Iron meshes now glow
+  from `sim.T.iron`. No API key/live weather in AR (ambient = the FEM fallback constant).
+- `build_ar_twin.py` also gains `--stl-dir` / `$AR_STL_DIR` and a
+  `maria-dt4tm-stl_export_separate_files` sibling candidate. `build_twin_html_fem.py`: fixed
+  an argparse `100%` help string that crashes on Python 3.14 (`100%%`).
+- `xval_twin.py` now opens BOTH pages: assertion A (abs 1e-9, 7 schedules) on each, plus
+  AR-1 (AR PARAMS/T_AMB_JS == FEM's) and AR-2 (engine block text identical). jsdelivr
+  added to the local CDN cache; CDN/camera load errors tolerated on the AR page only.
+
+Verified: `python twin_core.py` 6/6, `python xval_twin.py` PASS (FEM + AR, all diffs ≤1.3e-15).
+AR @7.8 A, T_amb 29: inner coil 50.26 °C at t=450 s, 79.000 / 74.000 °C steady;
+gap 0 mm @3 A, 11.94 mm @5 A, 22.43 mm @7.8 A.

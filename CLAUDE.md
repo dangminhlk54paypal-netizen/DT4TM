@@ -138,7 +138,8 @@ All of these are done, verified, and have no open issues. Details → docs/CHANG
 | `rom.py` | ThermalROM. I²-scaling exact (4.000000), τ=4.07min @R=80mm. |
 | `twin_core.py` | **SSOT time integrator** — dual-β disc, lumped coil/iron/air RC network, levitation spring-mass-damper + jitter. **numpy+stdlib only** (no config/em_solver/rom/matplotlib). `python twin_core.py` → 6/6 self-checks PASS. |
 | `twin_model.py` | Heavy bridge: `resolve_active_plate`/`PlateCache`/`i_max_for`/`coeffs_from_live`/`build_plate_variant`. |
-| `xval_twin.py` | Pins `twin_core.py` against the baked JS in `outputs/digital_twin_fem.html` (Playwright). **A** integrator match (abs 1e-9, 7 schedules); **B** bake freshness (rel 1e-6) — catches the "coefficient fixed but never rebaked" bug class that A structurally cannot. `python xval_twin.py` → PASS. |
+| `xval_twin.py` | Pins `twin_core.py` against the baked JS in `outputs/digital_twin_fem.html` AND `outputs/ar_twin.html` (Playwright). **A** integrator match per page (abs 1e-9, 7 schedules); **AR-1/2** AR PARAMS + engine text == FEM page; **B** bake freshness (rel 1e-6) — catches the "coefficient fixed but never rebaked" bug class that A structurally cannot. `python xval_twin.py` → PASS. |
+| `build_ar_twin.py` | Mobile WebAR twin → `outputs/ar_twin.html` (Three.js + jsQR marker). NO physics of its own: extracts the `TWIN_ENGINE` block verbatim from `digital_twin_fem.html` (build that first), renders `sim.T.*`/`discVtxT`/`lev.z` (true mm, no ×2 exaggeration), sim-speed slider (real τ = minutes). STLs from a sibling folder (`--stl-dir`). Pinned by `xval_twin.py`. |
 | `digital_twin.py` | Interactive matplotlib twin. Imports `TwinState`/`SCENARIOS` from twin_core, the rest from twin_model — no second copy of the physics. |
 | `extensions/digital_twin_pyvista.py` | Desktop 3D twin (PyVista/VTK, OPTIONAL ~400MB dep — hence `extensions/`, see layout rule). Same `TwinState`; geometry reuses `build_twin_html_fem.py`'s mesh builders verbatim. `--self-check` runs with no VTK installed. Run from repo root. |
 | `build_twin_html_fem.py` | The FEM-accurate standalone AR twin (only active HTML builder). 100% procedural geometry, two-node coil thermal model, closed-form levitation, 4 live-swappable disc radii, Amps/dial dual input, live T_amb from Google Weather API. `--bake-key` gates the real key (default: placeholder). |
@@ -147,8 +148,11 @@ All of these are done, verified, and have no open issues. Details → docs/CHANG
 | `data_io.py` + `arduino/thermal_sensor.ino` | SensorReader (serial/mock) → `calibrate_from_file()` → `rom.calibrate_UA()`. Tested vs `mock_sensor_data.csv`. |
 | `gen_qr.py` | QR → `outputs/qr_digital_twin.png`. Hosting URL still undecided. |
 
-**Cross-cutting invariant:** `twin_core.py` and the HTML's baked JS implement the same
-physics twice. Change one → change the other → `python xval_twin.py` must stay PASS.
+**Cross-cutting invariant:** `twin_core.py`, the FEM HTML's baked JS and the AR page all
+run the same physics. The browser engine lives ONCE, between `TWIN_ENGINE_BEGIN/END` in
+`build_twin_html_fem.py`; `build_ar_twin.py` copies that block verbatim. Change the
+engine → change `twin_core.py` → rebuild in order `build_twin_html_fem.py` →
+`build_ar_twin.py` → `python xval_twin.py` must stay PASS (both pages).
 
 ## ⚠️ OPEN QUESTIONS
 - **LIFT FORCE / z_eq mismatch** (since 2026-07-10, was VALIDATED before it).
