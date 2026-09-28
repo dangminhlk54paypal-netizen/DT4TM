@@ -41,8 +41,9 @@ python build_twin_html_fem.py --plate-radius 75   # same, but Ø150mm disc → o
 python xval_twin.py                      # pin twin_core.py against the baked JS engine (Playwright)
 python refit_hA.py                       # WP-COOL T4: refit lumped_thermal.hA_inner/outer through the
                                           # actual nonlinear TwinState integrator (params.yaml stays SSOT)
-python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
+python gen_ar_marker.py <hosted-url>     # Generate printable WebAR tracking marker -> outputs/ar_marker.png
+python build_ar_twin.py                  # Generate mobile WebAR twin -> outputs/ar_twin.html
 
 # Optional extension: PyVista desktop 3D twin (~400MB VTK dep, see extensions/README.md)
 python extensions/digital_twin_pyvista.py --self-check          # sanity check, no VTK needed
@@ -74,6 +75,8 @@ refit_hA.py          # WP-COOL T4: solve lumped_thermal.hA_inner/outer through t
                      # TwinState integrator instead of a hand-derived linear formula
 data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA()
 gen_qr.py           # QR code for the hosted digital_twin_fem.html (URL via CLI arg)
+gen_ar_marker.py    # Printable WebAR tracking marker with embedded QR code
+build_ar_twin.py    # Mobile WebAR app builder -> outputs/ar_twin.html
 extensions/         # OPTIONAL add-ons — heavy deps the core avoids; nothing in the root
                     #   imports them, so the pipeline runs with this folder deleted.
                     #   digital_twin_pyvista.py (PyVista/VTK 3D twin). See its README.md.

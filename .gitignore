@@ -12,6 +12,8 @@ venv/
 # NB: use "outputs/*" (not "outputs/") so the negation below can re-include a file.
 outputs/*
 !outputs/digital_twin_fem.html
+!outputs/ar_twin.html
+!outputs/ar_marker.png
 
 # Local-only source PDFs (problem brief / Aufgabenstellung)
 *.pdf
