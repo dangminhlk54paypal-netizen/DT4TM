@@ -1395,3 +1395,176 @@ to the pre-move baseline), `--screenshot outputs/twin_pv.png --no-show` renders
 the device correctly from the new location, `python twin_core.py` 6/6 PASS,
 `python xval_twin.py` PASS, 192 doc/extension path references all resolve,
 `compileall` clean.
+
+---
+
+## WP-ACS (2026-08-31) — ACS712-only firmware path + two real bugs found in the current-sensing chain
+
+User is building the sensor rig on an **Arduino UNO R4 WiFi** (Renesas RA4M1,
+not the AVR the firmware was written for) and only needs the **AC current**
+channel first — the two MAX31855 thermocouples come later. Auditing that path
+against the R4 turned up two genuine defects plus one architectural limit worth
+recording.
+
+**(1) `data_io.py` dropped valid current samples — FIXED.** `SensorReader.read_stream()`
+skipped the WHOLE CSV line when either thermocouple reported NaN (`continue` on
+`isnan(T_core) or isnan(T_disc)`). `I_rms_A` is measured by a completely separate
+sensor (ACS712 on A0) and is still valid when no MAX31855 is wired, so an
+ACS712-only rig logged **zero samples**. Now the fault is warned about but the
+sample is passed through with `T=nan`. `save_csv`/`load_csv` already round-trip
+NaN correctly (`f"{nan:.2f}"` → `"nan"` → `float("nan")`), and `live_compare()`
+already falls back per-sample (`data_io.py:291`), so nothing downstream changed.
+
+**(2) The RMS burst length was silently board-dependent — FIXED.** `readCurrentRMS()`
+sampled a fixed **count** (`I_SAMPLE_N = 1000`), with the comment "~120ms @
+~8.3kHz analogRead() -> 6 full 50Hz cycles". That 8.3 kHz is the **AVR's** ~112 µs
+`analogRead()`. True RMS is only exact over an INTEGER number of mains periods,
+so tying the window to a sample count ties the accuracy to the board's ADC speed.
+The R4's ADC is several times faster, which shortens the window to a non-integer
+number of cycles. Simulated (10-bit quantisation, 5.000 A rms @ 50 Hz, error band
+over 12 sampling phases):
+
+| ADC period | old: 1000 samples | new: fixed 100 ms |
+|---|---|---|
+| 112 µs (UNO R3/AVR) | 5.60 cyc → 4.989 A, ±0.97 % | 892 samples → 5.000 A, ±0.05 % |
+| 25 µs (R4, typical) | 1.25 cyc → 4.915 A, ±4.78 % | 4000 samples → 5.000 A, ±0.02 % |
+| 7 µs (R4, fast) | 0.35 cyc → **2.710 A, ±27.4 %** | 14285 samples → 5.000 A, ±0.00 % |
+
+Fix: the burst is now bounded by **time** (`micros()`, `I_WINDOW_CYCLES=5` →
+exactly 100 ms at `MAINS_FREQ_HZ=50`), which holds the integer-period property on
+any board whatever its ADC speed, and the achieved sample count is printed once at
+startup as a `#` diagnostic line (skipped by the parser). Accumulators moved
+`float`→`double` (true 64-bit on the R4's ARM core): `sumSq/n − mean²` subtracts
+two nearly-equal numbers around the 2.5 V bias and loses precision at low current.
+
+**(3) The firmware is now a current logger, and nothing else.** The rig has no
+temperature sensor and will not get one: current is the twin's INPUT, temperature
+is the model's OUTPUT (user, 2026-08-31 — "đừng code những dòng code vô nghĩa").
+All MAX31855 code is gone, including the `ENABLE_THERMOCOUPLES` switch briefly
+added earlier in this same session — a compile-time toggle for hardware that does
+not exist is dead weight, and git history holds the two-thermocouple version if
+the rig ever grows them. Consequences: the sketch has **zero** external
+dependencies (removing the only R4 unknown in the build — `Adafruit_MAX31855` is
+absent from Arduino's official `uno-r4-library-compatibility` list), and the wire
+format drops to 2 columns, `millis,I_rms_A`.
+
+`data_io.py` accepts **both** formats (`_LINE_RE_I` / `_LINE_RE_TI`): the rig's
+2-column current-only stream, and the legacy 4-column
+`millis,T_core,T_disc,I_rms` that `mock_sensor_data.csv` and any thermocouple-era
+log still use. `read_stream()` yields the same 4-tuple either way (NaN
+temperatures for the 2-column form), so `save_csv`/`load_csv`/`live_compare` are
+unchanged. A sample whose *current* is unparsable is now the only one dropped.
+Startup diagnostics (`#` lines, skipped by the parser) report the achieved sample
+count, the measured DC bias — near 2.5 V proves the ACS712 is actually wired and
+powered, a floating A0 does not — and the noise floor.
+
+**(4) Architectural limit, recorded not fixed.** Measured current is an INPUT to
+the model; measured temperature is what VALIDATES it. Verified end-to-end that
+`I_rms_A` correctly reaches the physics — `TwinState.step(I)` → `_rom_step` scales
+by `(I/rom.I_ref)²` with `I_ref = 5.0` = `params.yaml excitation.current_A`, which
+CLAUDE.md defines as the **RMS-measured** multimeter value, and `_lev_step`
+normalises to the same literal 5.0 rig point (`twin_core.py:312,318`). The ACS712
+firmware returns true RMS, so it feeds this interface with **no √2 conversion** —
+CLAUDE.md's RMS/peak warning applies to `compute_lift_force`'s `I_peak`, not here.
+But `calibrate_from_file()` averages the T column to get `dT_meas`: with T all NaN
+it returned **NaN UA silently** (verified). It now raises a `ValueError` naming the
+reason instead, so a current-only log cannot quietly produce a meaningless UA. So
+this rig drives the twin from real current but cannot calibrate its thermal
+coefficients — that needs measured temperature, which remains the standing "log a
+real cooldown curve" open item and is now a documented hardware limit, not a bug.
+
+---
+
+## 2026-09-27 — WP-LIVE: optional live-sensor mode (`digital_twin_live.py`)
+
+New, SEPARATE entry point for when the ACS712 current sensor is installed; the normal
+run (digital_twin.py, the HTML twin, twin_core.py) is untouched. The measured I_rms
+(thermal_sensor.ino "millis,I_rms_A") replaces the slider as the twin's input; the
+physics is the shared `TwinState` (no second copy, so xval_twin.py is unaffected).
+Temperatures remain MODEL predictions (the rig has no temperature sensor); measured
+T is overlaid only if a source actually carries it (thermocouple log / --replay).
+
+- `LiveDriver`: zero-order hold (interval driven by the previous sample's I), dead-band
+  `live_sensor.deadband_A` (PLACEHOLDER 0.2A — set from the firmware's startup noise
+  floor), clamp to `i_max_for(cfg)`, dt > `max_gap_s` bridged with the last I and
+  flagged, backwards time (Arduino reset) → resync without stepping.
+- Serial read on a daemon thread → queue, so a blocking readline never freezes the GUI;
+  status line shows LIVE / STALE (> `stale_after_s`) / DISCONNECTED / ENDED.
+- Buttons: Reset model, Export CSV (→ `outputs/live_session_*.csv`).
+- Sources: `--port <serial>` | `mock` (params default) | `--replay <data_io log>`.
+- `--self-check`: 11/11 PASS, incl. a bit-identical match of a constant-5A stream
+  against direct `TwinState.step(5, 1)` calls.
+
+---
+
+## 2026-09-27 — Weather-API ambient: default 20 °C, live reading recorded in real measurements
+
+- HTML twin: ambient fallback 29 °C → `ROM.T_amb` (= params.yaml `thermal_bc.T_ambient_degC`,
+  20 °C), so the page and the offline FEM/ROM agree when there is no live reading.
+  Header badge shows `(live HH:MM)`; the Export CSV rows now carry `T_amb_C`,
+  `T_amb_source`, `T_amb_recorded_at`. lat/lon baked from params.yaml `weather_api`.
+- Key expiry: `weather_api.key_valid_until: "2026-10-15"` (inclusive). After it the
+  builder refuses `--bake-key`, the baked JS stops calling the API, and RUN.py deletes
+  the gitignored `outputs/digital_twin_fem_live.html`.
+- New `weather_api.py` (stdlib): single key loader (build_twin_html_fem.py imports it),
+  `ambient_now(fallback)` with fallback on no key / expired / offline / HTTP error.
+- `data_io.py --mode log`: columns `T_amb_degC,T_amb_source` (live on a real port, fetched
+  at start + every `log_refresh_s`=600 s; fallback for mock). `calibrate_from_file()`
+  measures dT above the LOGGED ambient if present, else the params.yaml ambient
+  (old 4-column logs unchanged). `--mode live` seeds the twin with the reading.
+- `digital_twin_live.py`: twin T_amb = live reading (serial), logged value (--replay) or
+  20 °C (mock); a background thread refreshes it; CSV export gets `T_amb_degC,T_amb_source`.
+- Verified: xval_twin.py PASS (A+B), twin_core 6/6, digital_twin_live --self-check 11/11;
+  headless check public page T_amb=20 (fallback) / live page 19.8 °C (google_weather).
+
+---
+
+## 2026-09-27 — WP-UI: HTML twin layout/typography pass + new title
+
+`build_twin_html_fem.py` TEMPLATE only (CSS, panel markup, two small JS blocks) — no
+physics/baked-data change; `xval_twin.py` PASS against the rebuilt HTML.
+
+- **Title** → "Digital Twin for Thermal Management — TEMF Levitator" (`<title>` + header).
+- **Collapsed panels stayed full-height (bug, reproduced):** `#ui` was a flex ROW with the
+  default `align-items:stretch`, so a collapsed panel was stretched to the tallest open
+  sibling — an empty box over the model. Now two columns (`#uiLeft` = Physics Controls,
+  `#uiRight` = Telemetry + Time History, `align-items:flex-start/end`), model free in the
+  middle; a collapsed panel is header-only (36px). Columns scroll (thin scrollbar) if taller
+  than the viewport. The old "pulled-up" row logic is removed.
+- **Pointer guard simplified:** the `pointerenter/leave → controls.enabled` toggle is gone.
+  OrbitControls only listens on the canvas and the panels are its siblings, so the guard was
+  never needed, and it goes stale when a panel collapses under a still cursor. Only `wheel`
+  is still stopped on panels. NOTE: the user-reported "model rotates when clicking the
+  controls / sliders can't be dragged" did NOT reproduce under Playwright (Chromium + WebKit,
+  mouse): sliders drag, no stray orbit events. Likely contributors removed here: the tall
+  empty collapsed boxes and the 14px gaps between them that passed clicks to the canvas.
+- **Typography/colour:** system UI font, 12.5px base, tabular numerals, uppercase small
+  section labels, muted/faint text tiers, italic secondary hints, softer semantic value
+  colours as CSS tokens (dark + light), long explanatory note moved into a `<details>`.
+  Mobile (≤760px): stacked, page scrolls vertically, no horizontal overflow.
+
+---
+
+## 2026-09-27 — WP-AMB/WP-SENSOR-HTML: T_amb selector + Sensor excitation mode in the HTML twin
+
+`build_twin_html_fem.py` only; `xval_twin.py` PASS (integrator + bake freshness).
+
+- **T_amb selector** (Physics Controls → Ambient): `20 °C` = `thermal_bc.T_ambient_degC`,
+  `29 °C` = `validation_data.thermal_at_7p8A.ambient_C` (both baked via new
+  `ambient_presets(cfg)`, not literals), `Live` = Google Weather (disabled with a tooltip
+  in a placeholder/expired-key build). `T_AMB_JS`/`T_COLOR_LO`/`TRANGE` became `let`;
+  `setAmbient()` resets the sim to equilibrium at the new ambient (the disc field is
+  ambient-relative, the coil/iron/air nodes absolute — switching mid-run would mix
+  frames) and repaints badge, scale ticks, coil T_ss arrows. `twinDebug.T_AMB_JS` is now a
+  getter.
+- **Sensor excitation mode** (Excitation → `Sensor`): Web Serial reads the Arduino's
+  `millis,I_rms_A` (parser accepts the 2- and 4-column forms, skips `#` lines — same as
+  data_io.py); `Demo signal` = 5 A ± 0.03 A at 1 Hz for testing without hardware.
+  Conditioning mirrors `digital_twin_live.py`'s LiveDriver via the baked
+  `live_sensor_params(cfg)` (dead-band, clamp to `i_max_for`, ZOH, STALE after
+  `stale_after_s`). While a source runs: speed locked to 1× and allowed to catch up after
+  a throttled background tab, scenarios + hotkeys disabled; serial loss → sim paused.
+  Web Serial exists only in Chrome/Edge desktop — the Connect button is disabled elsewhere.
+- Verified with Playwright in Chromium + WebKit: 28/28 checks (ambient switch/reset,
+  demo drive, locks, dead-band/clamp, parser, STALE, mode switch). Real Arduino over Web
+  Serial NOT yet tested (no hardware attached).

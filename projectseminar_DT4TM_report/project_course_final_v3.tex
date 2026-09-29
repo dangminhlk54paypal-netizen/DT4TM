@@ -1,0 +1,1013 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% DT4TM -- Endabgabe, Version 3
+% Stand: 27.09.2026. Lesefassung: project_course_final_v3.md
+% Version 2 (project_course_final_v2.tex) bleibt unverändert erhalten.
+% Änderungen gegenüber V2: Hauptteil auf etwa 7 Seiten gekürzt;
+% Zusatzrechnungen und Code-Details in die Anhänge verschoben; Überschriften
+% als Stichworte; Angaben zu Smartphone/AR, Temperatursensoren, PyVista und
+% xval_twin.py entfernt, da nicht Teil des aktuellen Projektstands.
+%
+% ZWEI DATEIEN GENÜGEN: dieses .tex + project_course_final_v3.bib.
+% Alle Abbildungen sind mit TikZ/pgfplots direkt hier gezeichnet (keine
+% Bilddateien). Die Daten von Abb. C1/C2 stammen aus
+% report_numbers.py (Kennungen R5/R6), Kurven alle 5 s bzw. 30 s abgetastet.
+% Übersetzen: pdflatex -> bibtex -> pdflatex -> pdflatex (Overleaf: automatisch).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[a4paper, 10pt, conference]{ieeeconf}
+\IEEEoverridecommandlockouts
+\overrideIEEEmargins
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[ngerman]{babel}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[left=1.57cm,right=1.57cm,top=2.54cm,bottom=2.54cm]{geometry}
+% ieeeconf.cls definiert \labelindent bereits -> sonst Fehler in enumitem
+\let\labelindent\relax
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, fit, backgrounds, shapes.geometric}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\usepackage{url}
+
+% ieeeconf.cls definiert ein UNECHTES \NAT@parse, damit hyperref natbib
+% vermutet -- dadurch werden Zitatnummern NICHT verlinkt. Entfernen, damit
+% \cite{...} in der PDF zum Literaturverzeichnis springt.
+\makeatletter
+\let\NAT@parse\undefined
+\makeatother
+\usepackage[hidelinks]{hyperref}
+
+% Nummerierung 1 / 2.1 / 2.2.1 statt IEEE-Stil I / A / 1).
+\renewcommand{\thesection}{\arabic{section}}
+\renewcommand{\thesectiondis}{\arabic{section}.}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+\renewcommand{\thesubsectiondis}{\thesection.\arabic{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\arabic{subsubsection}}
+\renewcommand{\thesubsubsectiondis}{\thesubsection.\arabic{subsubsection}}
+
+% ieeeconf.cls schreibt fest "Appendix"; für den deutschen Text "Anhang".
+\makeatletter
+\def\@IEEEprocessthesectionargument#1{%
+\@ifmtarg{#1}{%
+\@IEEEappendixsavesection*{Anhang \thesectiondis}%
+\addcontentsline{toc}{section}{Anhang \thesection}}{%
+\@IEEEappendixsavesection*{Anhang \thesectiondis \\* #1}%
+\addcontentsline{toc}{section}{Anhang \thesection: #1}}}
+\makeatother
+
+% "-> Python: ..." unter jeder Gleichung
+\newcommand{\py}[1]{\par{\raggedright\noindent$\rightarrow$~\textit{Python:}~#1\par}\smallskip}
+% Kasten für die Analogie
+\newcommand{\merke}[2]{\par\smallskip\noindent
+  \fbox{\parbox{\dimexpr\columnwidth-2\fboxsep-2\fboxrule\relax}{%
+  \small\textbf{#1.}~#2}}\par\smallskip}
+% Verweis auf eine Zeile von report_numbers.py
+\newcommand{\src}[1]{\,[#1]}
+% Absatz-Überschrift in den Anhängen (A.1, B.1, ...)
+\newcommand{\anh}[1]{\par\medskip\noindent\textbf{#1}\quad}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\title{\LARGE \bf
+Vom Feldmodell zum Echtzeit-Zwilling:\\
+Modellordnungsreduktion für die thermische Simulation\\
+eines elektrodynamischen Levitators
+}
+\author{Dang Minh Hoang, Marina Borchert, Mohamed Aziz El Majid
+\thanks{Project Course Digital Twin, Summer Term 2026. Betreuung: Prof.\ Dr.\ rer.\ nat.\ Dirk Hartmann, Dr.-Ing.\ Melina Merkel. Stand: 27.09.2026, Version~3 (Version~2 bleibt unverändert erhalten).}%
+}
+
+\begin{document}
+\maketitle
+\thispagestyle{plain}
+\pagestyle{plain}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+Ziel ist ein Modell, das die Temperatur von Aluminiumscheibe, Spulen und
+Eisen eines TEAM-28-ähnlichen Levitators aus dem Spulenstrom berechnet, und
+zwar schnell genug für eine laufende Darstellung. Die Physik wird als
+Feldgleichungen formuliert und mit der Finite-Elemente-Methode (FEM)
+gelöst. Dieses genaue, aber langsame Modell wird anschließend durch
+Modellordnungsreduktion (MOR) auf acht Zustandsgrößen verkleinert. Das
+Ergebnis läuft als Python-Simulation und wird als interaktive HTML-Seite im
+Browser dargestellt. Im stationären Zustand trifft das Modell die gemessenen
+Spulentemperaturen, auf die es kalibriert ist. Den zeitlichen Verlauf trifft
+es noch nicht; die Ursachen werden benannt.
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Einleitung}
+\label{sec:intro}
+
+Der Versuchsstand ist ein elektrodynamischer Levitator nach dem
+TEAM-Benchmark~28~\cite{team28}. Zwei Spulen mit 50-Hz-Wechselstrom erzeugen
+ein Magnetfeld. Es induziert in einer Aluminiumscheibe Ströme, die die
+Scheibe anheben. Dieselben Ströme erzeugen Wärme in Scheibe, Spulen und
+Eisen.
+
+Diese Temperaturen sind schwer zu messen: Ein Fühler an der schwebenden
+Scheibe würde die Levitation stören, und das Innere der Wicklung ist nicht
+zugänglich. Der Spulenstrom dagegen ist leicht messbar. Ein Modell, das aus
+dem Strom die Temperatur berechnet, wirkt daher als \textbf{virtueller
+Sensor}~\cite{hartmann2025golden}. Es muss drei Anforderungen erfüllen:
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{schnell:} Ergebnisse in Echtzeit, ohne Wartezeit;
+  \item \textbf{physikalisch begründet:} aus den Grundgleichungen
+        abgeleitet, nicht nur an Messkurven angepasst;
+  \item \textbf{kalibrierbar:} wenige unsichere Parameter, die sich an
+        Messungen nachstellen lassen.
+\end{enumerate}
+Genaue Modelle sind aber groß und langsam. Das Bindeglied ist die
+\textbf{Modellordnungsreduktion}~\cite{hartmann2018mor}. Dieser Bericht zeigt
+sie am konkreten Beispiel.
+
+\textbf{Aufbau.} Kap.~\ref{sec:problem} beschreibt das Problem,
+Kap.~\ref{sec:method} die Methodik (FEM und Reduktion),
+Kap.~\ref{sec:code} den Code, Kap.~\ref{sec:results} die Ergebnisse,
+Kap.~\ref{sec:outlook} den Ausblick. Zusatzrechnungen und Code-Details
+stehen in den Anhängen.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Problemstellung}
+\label{sec:problem}
+
+Gesucht ist die \textbf{Temperaturverteilung im Gerät und ihr zeitlicher
+Verlauf}, wenn ein Wechselstrom durch die Spulen fließt. Dazu wird das Gerät
+zuerst \textbf{physikalisch} beschrieben: Welche Bauteile gibt es, wo
+entsteht Wärme, wie wird sie abgegeben (\ref{sec:phys})? Danach wird jeder
+physikalische Vorgang in eine \textbf{Gleichung} übersetzt
+(\ref{sec:math}). Diese Gleichungen löst Kap.~\ref{sec:method}.
+
+\subsection{Physikalisches Modell}
+\label{sec:phys}
+
+\textbf{Aufbau.} Von innen nach außen: Eisenkern, Innenspule, Eisenring,
+Außenspule (Abb.~\ref{fig:geom}). Darüber schwebt die Aluminiumscheibe. Die
+Anordnung ist drehsymmetrisch um die senkrechte Achse.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=0.07cm, y=0.07cm, font=\scriptsize,
+    cu/.style={draw, fill=orange!30}, fe/.style={draw, fill=gray!35},
+    al/.style={draw, fill=cyan!25}]
+  % Bauteile (Radien in mm aus params.yaml, Höhe 53 mm)
+  \draw[fe] (0,0)    rectangle (25.9,53)  node[pos=.5, align=center] {Eisen-\\kern};
+  \draw[cu] (27.9,0) rectangle (61.9,53)  node[pos=.5, align=center] {Innenspule\\ca.\ 1000 Wdg.\\Kupfer};
+  \draw[fe] (64.9,0) rectangle (79.9,53)  node[pos=.5, align=center] {Eisen-\\ring};
+  \draw[cu] (82.9,0) rectangle (102.9,53) node[pos=.5, align=center] {Außen-\\spule\\ca.\ 500\\Wdg.};
+  % Scheibe (Luftspalt schematisch)
+  \draw[al] (0,62) rectangle (80,65);
+  \node[anchor=south] at (40,65) {Al-Scheibe, $R=80$, $d=3$};
+  \draw[<->] (90,53) -- (90,62) node[midway, right] {Luftspalt};
+  % Achse und r-Achse
+  \draw[dashed] (0,-4) -- (0,75) node[above] {$r=0$};
+  \draw[->] (0,-4) -- (112,-4) node[right] {$r$};
+  \foreach \x/\l in {25.9/{25,9}, 61.9/{61,9}, 79.9/{79,9}, 102.9/{102,9}}
+    \draw (\x,-3) -- (\x,-5) node[below] {\l};
+  \draw[<->] (107,0) -- (107,53) node[midway, right] {53};
+\end{tikzpicture}
+\caption{Halber Querschnitt (Maße in mm, aus \texttt{params.yaml}).}
+\label{fig:geom}
+\end{figure}
+
+\textbf{Wirkprinzip.} Der Wechselstrom erzeugt ein Magnetfeld, das sich
+50-mal pro Sekunde umpolt. Das Eisen bündelt das Feld. Das wechselnde Feld
+induziert in Scheibe und Eisen Kreisströme (Wirbelströme). Alle Ströme
+erzeugen Wärme: in den Spulen der Spulenstrom, in Scheibe und Eisen die
+Wirbelströme. Die Wärme verteilt sich im Material und geht an der Oberfläche
+an die Luft.
+
+\textbf{Vereinfachungen.}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Drehsymmetrie:} Es genügt, eine Halbebene $(r,z)$ zu rechnen.
+  \item \textbf{Konstante Umgebung:} 20\,°C, wie mit den Betreuern vereinbart.
+  \item \textbf{Konstanter Strom} als Standardfall (5\,A). Im Modell ist der
+        Strom frei einstellbar.
+  \item \textbf{Feste Scheibenhöhe} in der Feldrechnung (Folgen:
+        Kap.~\ref{sec:causes}).
+\end{itemize}
+
+\textbf{Eingangsdaten.} Tabelle~\ref{tab:inputs} zeigt die wichtigsten
+Eingangswerte und woher sie stammen. Die vollständige Liste steht in
+Anhang~A.
+
+\begin{table}[t]
+\caption{Eingangsdaten des Modells}
+\label{tab:inputs}
+\centering\footnotesize
+\begin{tabularx}{\columnwidth}{@{}Y>{\raggedright\arraybackslash}p{2.3cm}Y@{}}
+\toprule
+Größe & Wert & Herkunft \\
+\midrule
+Radien von Kern, Spulen, Ring & 0--102,9\,mm (Abb.~\ref{fig:geom}) & gemessen (Lineal) \\
+Höhe Kern/Spulen/Ring & 53\,mm & gemessen \\
+Windungszahl innen / außen & ca.\ 1000 / 500 & Angabe zum Aufbau \\
+Scheibe: Radius / Dicke / Masse & 80\,mm / 3\,mm / 159\,g & gemessen \\
+Spulenstrom (Effektivwert) & 5,0\,A (Betrieb), 7,8\,A (Kalibrierung) & gemessen (Multimeter PeakTech 2005) \\
+Frequenz & 50\,Hz & Netz \\
+Leitfähigkeit, Wärmedaten Al/Cu & Standardwerte & Literatur \\
+Permeabilität Eisen $\mu_r$ & 1000 & \textbf{angenommen} \\
+Wärmeübergänge an Scheibe und Luft & Schätzwerte & \textbf{angenommen} \\
+Wärmeübergang der Spulen $hA$ & 2,47 / 2,89\,W/K & \textbf{kalibriert} (Kap.~\ref{sec:calib}) \\
+Spulentemperatur bei 7,8\,A (innen / außen) & 79 / 74\,°C & gemessen (IR-Kamera, einmalig) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Das Gerät hat \textbf{keine fest eingebauten Temperatursensoren}. Alle
+Temperaturmesswerte stammen aus einzelnen Aufnahmen mit einer IR-Kamera
+(23.06.2026).
+
+\subsection{Mathematisches Modell}
+\label{sec:math}
+
+Jeder Vorgang aus \ref{sec:phys} wird durch eine Gleichung beschrieben.
+Tabelle~\ref{tab:model} am Ende fasst sie zusammen.
+
+\subsubsection{Magnetfeld}
+Berechnet wird das \textbf{magnetische Vektorpotential} $A_\varphi(r,z)$, aus
+dem sich das Feld ableitet. Da der Strom sinusförmig ist, genügen Amplitude
+und Phase, zusammengefasst in einer komplexen Zahl, dem
+\textbf{Phasor}~\cite{biro1989vectorpotential}:
+\begin{equation}
+-\nabla\cdot(\nu\nabla A_\varphi) + \frac{\nu}{r^2}A_\varphi + j\omega\sigma A_\varphi = J_s
+\label{eq:em}
+\end{equation}
+mit $\nu=1/(\mu_r\mu_0)$ und $\omega = 2\pi f$.
+\textit{In Worten:} Term~1 beschreibt die Ausbreitung des Felds (im Eisen
+besonders leicht). Term~2 folgt aus den Zylinderkoordinaten. Term~3 ist die
+Gegenwirkung der Wirbelströme. Rechts steht die Quelle, die Stromdichte in
+den Spulen.
+\py{\texttt{em\_solver.py}, Anhang~B, B.2}
+
+\subsubsection{Wärmequelle}
+Aus dem Feld folgt die Wirbelstromdichte $J = -j\omega\sigma A_\varphi$ und
+daraus die mittlere Wärmeleistung pro Volumen:
+\begin{equation}
+q(r,z) = \tfrac12\,\sigma\,\omega^2\,|A_\varphi|^2 \quad[\mathrm{W/m^3}].
+\label{eq:q}
+\end{equation}
+In den Spulen gilt $P_{\mathrm{Cu}}=\tfrac12 I^2R$.
+\py{\texttt{em\_solver.py}, Funktion \texttt{compute\_losses}, Anhang~B, B.2}
+
+\subsubsection{Wärmeleitung}
+Die Wärme verteilt sich im Material und wird an der Oberfläche abgegeben:
+\begin{equation}
+\begin{gathered}
+\rho c_p\frac{\partial T}{\partial t}=\nabla\cdot(k\nabla T)+q,\\
+-k\frac{\partial T}{\partial n}=h\,(T-T_\infty)\quad\text{am Rand.}
+\end{gathered}
+\label{eq:heat}
+\end{equation}
+\textit{In Worten:} Ein Volumenelement erwärmt sich (links), wenn Wärme von
+Nachbarn zufließt oder vor Ort entsteht (rechts). Am Rand gibt es umso mehr
+Wärme ab, je wärmer es als die Luft ist.
+\py{\texttt{thermal\_solver.py}, Anhang~B, B.3}
+
+\subsubsection{Temperaturabhängigkeit}
+Warme Metalle leiten schlechter:
+\begin{equation}
+\sigma(T) = \frac{\sigma_0}{1+\alpha (T-T_0)},\qquad
+\alpha \approx 3{,}9\cdot10^{-3}\ \mathrm{K^{-1}}.
+\label{eq:sigma}
+\end{equation}
+Die Wirkung ist gegenläufig: Die Wirbelstromverluste der Scheibe sinken, die
+Spulenverluste steigen.
+
+\begin{table}[t]
+\caption{Das Modell auf einen Blick}
+\label{tab:model}
+\centering\footnotesize
+\begin{tabularx}{\columnwidth}{@{}lYYY@{}}
+\toprule
+Gl. & liefert & braucht & Kopplung \\
+\midrule
+(\ref{eq:em}) Magnetfeld & $A_\varphi(r,z)$ & Geometrie, Material, Strom & $\rightarrow$ (\ref{eq:q}) \\
+(\ref{eq:q}) Wärmequelle & $q(r,z)$, Leistung je Bauteil & $A_\varphi$ & $\rightarrow$ (\ref{eq:heat}) \\
+(\ref{eq:heat}) Wärmeleitung & $T(r,z,t)$ & $q$, Wärmedaten, $h$ & $\rightarrow$ (\ref{eq:sigma}) \\
+(\ref{eq:sigma}) Leitfähigkeit & Korrekturfaktor & Temperatur & $\rightarrow$ (\ref{eq:em}), langsam \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Methodik}
+\label{sec:method}
+
+\subsection{Überblick}
+
+Die Gleichungen aus Kap.~\ref{sec:problem} werden in \textbf{zwei Stufen}
+gelöst (Abb.~\ref{fig:stages}):
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Offline (einmal):} Die FEM löst
+        Gl.~(\ref{eq:em})--(\ref{eq:heat}) genau. Das dauert etwa eine
+        Sekunde und braucht Löserbibliotheken.
+  \item \textbf{Online (laufend):} Ein daraus abgeleitetes, kleines Modell
+        rechnet jeden Zeitschritt in Mikrosekunden, nur mit Grundrechenarten.
+\end{itemize}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize, node distance=2.5mm,
+    box/.style={draw, rounded corners=2pt, align=center, text width=12.5mm,
+                minimum height=11mm, inner sep=1.5pt},
+    >={Stealth[length=1.6mm]}]
+  \node[box] (A) {Gleichungen (\ref{eq:em})--(\ref{eq:sigma})};
+  \node[box, right=of A, fill=blue!8] (B) {FEM\\genau, langsam\\einmal};
+  \node[box, right=of B] (C) {Reduktion\\A, B, C};
+  \node[box, right=of C, fill=green!10] (D) {kleines Modell\\8 Zustände\\jeder Schritt};
+  \node[box, right=of D] (E) {Temperatur, Schwebe\-höhe\\HTML};
+  \draw[->] (A) -- (B); \draw[->] (B) -- (C); \draw[->] (C) -- (D); \draw[->] (D) -- (E);
+\end{tikzpicture}
+\caption{Zwei Stufen: offline einmal genau rechnen, online klein und schnell.}
+\label{fig:stages}
+\end{figure}
+
+Kap.~\ref{sec:fem} erklärt die FEM, Kap.~\ref{sec:mor} die Reduktion.
+
+\subsection{Finite-Elemente-Methode}
+\label{sec:fem}
+
+\subsubsection{Numerisches Verfahren}
+Für ein Gerät mit fünf Materialbereichen gibt es keine Formellösung. Man
+zerlegt deshalb das Gebiet in kleine Stücke und löst die Gleichung
+stückweise näherungsweise. Die FEM ist dafür das Standardwerkzeug der
+TEAM-Benchmarks~\cite{team28,biro1989vectorpotential}: Jedes Stück trägt
+seinen eigenen Materialwert, und Feld- und Wärmeproblem lassen sich mit
+demselben Programmgerüst lösen. Ein Vergleich mit anderen Verfahren steht in
+Anhang~C, C.1.
+
+\subsubsection{Diskretisierung}
+Die Ebene $(r,z)$ wird in kleine \textbf{Dreiecke} zerlegt (Netz). In jedem
+Dreieck ändert sich die gesuchte Größe linear. Sie ist dann durch ihre Werte
+an den Ecken (\textbf{Knoten}) festgelegt. Aus einer unbekannten Funktion
+werden so endlich viele unbekannte Zahlen.
+
+Die Gleichung wird nicht in jedem Punkt, sondern \textbf{im Mittel um jeden
+Knoten} erfüllt. Physikalisch ist das eine Wärmebilanz um jeden Knoten
+(\textit{schwache Form}):
+\begin{multline}
+\int_\Omega k\nabla T\cdot\nabla v_i\,2\pi r\,dA + \oint_\Gamma hTv_i\,2\pi r\,ds \\
+= \int_\Omega q\,v_i\,2\pi r\,dA+\oint_\Gamma hT_\infty v_i\,2\pi r\,ds .
+\label{eq:weak}
+\end{multline}
+\textit{In Worten:} Wärmeleitung + Abgabe am Rand = erzeugte Wärme. Der
+Faktor $2\pi r$ berücksichtigt die Drehung um die Achse. $v_i$ ist eine
+\glqq Zeltfunktion\grqq{}, die am Knoten $i$ gleich 1 ist und zu den
+Nachbarn auf 0 abfällt.
+\py{Elementformeln in Anhang~D}
+
+\subsubsection{Gleichungssystem}
+Schreibt man Gl.~(\ref{eq:weak}) für alle Knoten auf, entsteht ein lineares
+Gleichungssystem:
+\begin{equation}
+\mathbf K\,\mathbf T=\mathbf f,\qquad\text{zeitabhängig:}\quad
+\mathbf M\,\dot{\mathbf T}+\mathbf K\,\mathbf T=\mathbf f .
+\label{eq:lin}
+\end{equation}
+$\mathbf T$ enthält alle Knotentemperaturen, $\mathbf K$ die Leitung,
+$\mathbf M$ die Wärmekapazität, $\mathbf f$ die Quellen. Fast alle Einträge
+von $\mathbf K$ sind null, weil nur Nachbarknoten gekoppelt sind. Für
+Gl.~(\ref{eq:em}) läuft alles gleich, nur mit komplexen Zahlen.
+\py{\texttt{scipy.sparse.linalg.spsolve}~\cite{virtanen2020scipy}, Anhang~B, B.2/B.3}
+
+\subsubsection{Modellgröße}
+Zwei physikalische Vereinfachungen halten das Problem klein:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Phasor statt Zeitschritt:} Das Feld schwingt 50-mal pro
+        Sekunde, die Temperatur ändert sich über Minuten. Die Wärme spürt nur
+        den Mittelwert, und genau den liefert Gl.~(\ref{eq:q}).
+  \item \textbf{Grobes Netz in Dickenrichtung:} Das Feld dringt in Aluminium
+        bei 50\,Hz etwa 12\,mm tief ein, die Scheibe ist nur 3\,mm dick. Der
+        Wirbelstrom ist über die Dicke fast gleich.
+\end{itemize}
+Damit hat das Feldmodell rund 8700, das Wärmemodell der Scheibe rund 700
+Unbekannte.
+
+\subsubsection{Plausibilitätsprüfung}
+Eine FEM liefert immer Zahlen, auch bei Fehlern. Deshalb prüft der Code bei
+jedem Lauf Größen, deren richtiges Ergebnis bekannt ist:
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Energiebilanz:} Erzeugte Wärme = abgegebene Wärme. Ergebnis:
+        Übereinstimmung auf Rundungsgenauigkeit.
+  \item \textbf{Gebietsgröße:} Zwei verschiedene Randbedingungen am
+        Außenrand ergeben nahezu dieselben Verluste (Abweichung $<1\,\%$). Das
+        Rechengebiet ist also groß genug.
+  \item \textbf{Linearität:} Doppelter Strom ergibt vierfache Verluste.
+\end{enumerate}
+
+\subsection{Modellordnungsreduktion}
+\label{sec:mor}
+
+\subsubsection{Grundidee}
+Die FEM ist genau, aber für jeden neuen Strom und jeden Zeitschritt müsste
+sie neu gelöst werden. Die Reduktion nutzt aus, dass die Tausenden
+Unbekannten \textbf{nicht unabhängig} sind: Beim Aufheizen ändert sich vor
+allem, \textit{wie warm} die Scheibe ist, kaum aber, \textit{wo} sie wärmer
+ist.
+
+\merke{Analogie}{Ein Foto, das nur heller oder dunkler wird. Man speichert
+das Bild einmal und merkt sich pro Moment nur einen Helligkeitsfaktor.}
+
+Mathematisch wird das Feld als Summe weniger fester \glqq Bilder\grqq{}
+$\mathbf v_k$ mit zeitabhängigen Gewichten $\beta_k(t)$
+geschrieben~\cite{benner2015survey}:
+\begin{equation}
+\mathbf T(t)\approx T_\infty+\sum_{k=1}^{r}\beta_k(t)\,\mathbf v_k,\qquad r \ll N .
+\label{eq:rb}
+\end{equation}
+Drei Reduktionen setzen diese Idee um (Tabelle~\ref{tab:mor}).
+
+\subsubsection{Reduktion A: Strom-Skalierung}
+Gl.~(\ref{eq:em}) ist \textbf{linear}: Doppelter Strom ergibt doppeltes
+Feld, an jedem Ort gleich. Nach Gl.~(\ref{eq:q}) vervierfacht sich dann die
+Wärmequelle, ebenfalls überall gleich. Die \textit{Form} der
+Verlustverteilung bleibt, nur ihre Höhe ändert sich. Die Feld-FEM wird daher
+nur \textbf{einmal} bei $I_{\mathrm{ref}}=5$\,A gelöst. Für jeden Strom gilt
+dann:
+\begin{equation}
+q(r,z;I,T)=\hat q(r,z)\cdot\Big(\frac{I}{I_{\mathrm{ref}}}\Big)^{2}\cdot
+\frac{\sigma(T)}{\sigma(T_{\mathrm{ref}})} .
+\label{eq:scale}
+\end{equation}
+Gültig ist das, solange das Eisen nicht magnetisch sättigt. Am Betriebspunkt
+ist das erfüllt; bei höheren Strömen wird es knapp (Abschätzung in
+Anhang~C, C.4).
+\py{\texttt{rom.py} und \texttt{twin\_core.py}, Anhang~B, B.4/B.5}
+
+\subsubsection{Reduktion B: eine Temperaturform für die Scheibe}
+Aluminium leitet Wärme sehr gut, die Scheibe ist dünn und gibt Wärme nur
+langsam an die Luft ab. Die Scheibe ist daher fast überall gleich warm. Als
+einziges \glqq Bild\grqq{} dient das stationäre FEM-Temperaturfeld
+$\Delta T_{\mathrm{ref}}(r,z)$. Aus Gl.~(\ref{eq:rb}) wird eine einzige
+Gleichung für das Gewicht $\beta(t)$:
+\begin{equation}
+\tau\,\dot\beta=\Big(\frac{I}{I_{\mathrm{ref}}}\Big)^{2}s-\beta,\qquad
+T(r,z,t)=T_\infty+\beta(t)\,\Delta T_{\mathrm{ref}}(r,z).
+\label{eq:beta}
+\end{equation}
+\textit{In Worten:} $\beta=0$ heißt kalt, $\beta=1$ so warm wie im
+Referenzfall. $\beta$ strebt dem Zielwert $(I/I_{\mathrm{ref}})^2 s$ zu ($s$:
+Leitfähigkeitsfaktor aus Gl.~\ref{eq:sigma}). Die Zeitkonstante $\tau$ (rund
+4 Minuten) gibt das Tempo an. Dass eine einzige Form genügt, ist durch eine
+Eigenwertanalyse und einen Vergleich mit der vollen FEM belegt
+(Anhang~C, C.2, C.3).
+\py{\texttt{rom.py}, Anhang~B, B.4}
+
+\subsubsection{Reduktion C: RC-Netzwerk für Spulen und Eisen}
+Spulen und Eisen werden durch wenige Temperaturknoten beschrieben, wie ein
+elektrischer Schaltkreis: Wärmekapazität $\widehat{=}$ Kondensator,
+Wärmeleitwert $\widehat{=}$ Widerstand~\cite{wallscheid2021thermal}. Für
+jeden Knoten $i$ gilt:
+\begin{equation}
+C_i\,\dot T_i=P_i(I)+\sum_j G_{ij}(T_j-T_i)-hA_i\,(T_i-T_{\mathrm{Luft}}).
+\label{eq:rc}
+\end{equation}
+\textit{In Worten:} Ein Knoten wird wärmer durch Verlustleistung und Wärme
+von wärmeren Nachbarn, er kühlt durch Abgabe an die Luft.
+
+Das Netz hat sechs Knoten (Abb.~\ref{fig:rc}). Jede Spule hat zwei: die
+sichtbare Oberfläche und das träge Wicklungsinnere. Dazu kommen Eisen und
+die Luft im Gerät. Die Zahlenwerte stehen in Anhang~A.
+\py{\texttt{twin\_core.py}, Anhang~B, B.5}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize,
+    nd/.style={circle, draw, fill=white, minimum size=8.5mm, inner sep=0pt},
+    src/.style={draw, rounded corners=5pt, fill=orange!20, inner sep=2pt},
+    amb/.style={draw, fill=gray!15, inner sep=3pt},
+    >={Stealth[length=1.6mm]}]
+  \node[nd] (ID) at (0,2.2)   {iW};
+  \node[nd] (IS) at (1.6,2.2) {iO};
+  \node[nd, fill=gray!25] (FE) at (3.3,2.2) {Fe};
+  \node[nd] (OS) at (5.0,2.2) {aO};
+  \node[nd] (OD) at (6.6,2.2) {aW};
+  \node[src] (Pi) at (1.6,3.5) {$P_{\text{innen}}$};
+  \node[src] (Pf) at (3.3,3.5) {$P_{\text{Eisen}}$};
+  \node[src] (Po) at (5.0,3.5) {$P_{\text{außen}}$};
+  \node[nd, fill=cyan!10] (AIR) at (3.3,0.9) {L};
+  \node[amb] (AMB) at (3.3,-0.35) {Umgebung};
+  \draw[->] (Pi) -- (IS); \draw[->] (Pf) -- (FE); \draw[->] (Po) -- (OS);
+  \draw[<->] (ID) -- (IS); \draw[<->] (OD) -- (OS); \draw[<->] (IS) -- (FE);
+  \draw[->] (IS) -- (AIR); \draw[->] (OS) -- (AIR); \draw[->] (FE) -- (AIR);
+  \draw[->] (AIR) -- (AMB);
+\end{tikzpicture}
+\caption{Thermisches RC-Netzwerk. iO/iW: Innenspule Oberfläche/Wicklung,
+aO/aW: Außenspule Oberfläche/Wicklung, Fe: Eisen, L: Luft im Gerät,
+$P$: Verluste. Pfeile: Wärmefluss.}
+\label{fig:rc}
+\end{figure}
+
+\subsubsection{Kalibrierung}
+\label{sec:calib}
+Die zwei wichtigsten Parameter, die Wärmeübergänge der Spulen
+$hA_{\text{innen}}$ und $hA_{\text{außen}}$, werden so eingestellt, dass
+das Modell die IR-Messung bei 7,8\,A trifft (79 / 74\,°C). Ein
+Suchverfahren variiert beide Werte, bis das \textbf{laufende} Modell genau
+diese Temperaturen erreicht.
+\py{\texttt{refit\_hA.py}, Anhang~B, B.6}
+
+\subsubsection{Ergebnis der Reduktion}
+Aus mehreren Tausend Unbekannten werden \textbf{acht Zustandsgrößen}
+(Tabelle~\ref{tab:mor}). Ein Zeitschritt ist reine Arithmetik und dauert
+Mikrosekunden statt Sekunden.
+
+\begin{table*}[t]
+\caption{Die drei Reduktionen}
+\label{tab:mor}
+\centering\footnotesize
+\begin{tabularx}{\textwidth}{@{}lYYYY@{}}
+\toprule
+ & Grund & vorher & nachher & Grenze \\
+\midrule
+A: Strom-Skalierung & Gl.~(\ref{eq:em}) ist linear & 8700 komplexe Unbekannte & 1 Multiplikation & Sättigung des Eisens \\
+B: eine Form & Scheibe fast gleich warm & ca.\ 700 Unbekannte & 2 Gewichte $\beta$ & Anhang~C, C.3 \\
+C: RC-Netz & Spulen/Eisen kompakt & -- & 6 Knoten & Parameter teils geschätzt \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Berechnungswerkzeug}
+\label{sec:code}
+
+Der Code ist in Python geschrieben (NumPy, SciPy~\cite{virtanen2020scipy}).
+Alle Zahlenwerte stehen in einer einzigen Datei, \texttt{params.yaml}.
+Abb.~\ref{fig:dataflow} zeigt den Datenfluss. Was jedes Modul einliest, wie
+es rechnet und welches Verfahren es nutzt, erklärt Anhang~B in
+einfachen Worten.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize, node distance=3.2mm,
+    mod/.style={draw, rounded corners=2pt, fill=white, align=center,
+                text width=31mm, inner sep=2pt},
+    >={Stealth[length=1.6mm]}]
+  \node[mod, fill=yellow!15] (P) {\texttt{params.yaml}\\Geometrie, Material, Messwerte};
+  \node[mod, below=of P] (C) {\texttt{config.py}\\Werte laden};
+  \node[mod, below=of C] (E) {\texttt{em\_solver.py}\\Feld-FEM, Gl.~(\ref{eq:em})--(\ref{eq:q})};
+  \node[mod, below=of E] (T) {\texttt{thermal\_solver.py}\\Wärme-FEM, Gl.~(\ref{eq:heat})};
+  \node[mod, below=of T] (R) {\texttt{rom.py}\\Reduktion A + B};
+  \node[mod, right=5mm of E] (L) {\texttt{build\_twin\_html\_}\\\texttt{fem.py}\\Reduktion C};
+  \node[mod, right=5mm of C] (K) {\texttt{refit\_hA.py}\\Kalibrierung $hA$};
+  \node[mod, below=7mm of R, fill=green!10] (TC) {\texttt{twin\_core.py}\\Gl.~(\ref{eq:beta}) + (\ref{eq:rc})};
+  \node[mod, below=of TC, fill=cyan!10] (V) {\texttt{digital\_twin\_fem.html}\\Ansicht im Browser};
+  \begin{scope}[on background layer]
+    \node[draw, dashed, fill=blue!4, inner sep=2.5mm, fit=(C)(E)(T)(R)(L)(K),
+          label={[anchor=south east, font=\scriptsize\bfseries]south east:OFFLINE -- einmal}] {};
+    \node[draw, dashed, fill=green!4, inner sep=2mm, fit=(TC),
+          label={[anchor=north west, font=\scriptsize\bfseries]south east:ONLINE -- jeder Zeitschritt}] {};
+  \end{scope}
+  \draw[->] (P) -- (C); \draw[->] (C) -- (E); \draw[->] (E) -- (T);
+  \draw[->] (T) -- (R); \draw[->] (R) -- (TC); \draw[->] (TC) -- (V);
+  \draw[->] (E) -- (L); \draw[->] (L) |- (TC);
+  \draw[->, dashed] (K) |- node[pos=0.25, right, font=\tiny] {schreibt $hA$} (P);
+\end{tikzpicture}
+\caption{Datenfluss durch den Code.}
+\label{fig:dataflow}
+\end{figure}
+
+\textbf{Starten.} \texttt{RUN.py} im Projektordner (bzw.\ Doppelklick auf
+\texttt{RUN.command}) rechnet bei Bedarf neu und öffnet die HTML-Ansicht im
+Browser.
+
+\textbf{Stromeingang.} Standardmäßig ist der Strom fest (5\,A) oder über
+einen Schieberegler einstellbar. Ein Stromsensor (ACS712 am Arduino) ist
+softwareseitig vorbereitet (\texttt{data\_io.py}); der Einbau am
+Versuchsstand ist in Arbeit.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Ergebnisse}
+\label{sec:results}
+
+\subsection{Verlustleistungen}
+
+\begin{table}[t]
+\caption{Verluste aus der Feld-FEM (5\,A, 20\,°C)}
+\label{tab:losses}
+\centering\footnotesize
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Quelle & $P$ [W] & Anteil \\
+\midrule
+Wirbelstrom Scheibe & 25,81 & 19\,\% \\
+Wirbelstrom Eisen & 5,86 & 4\,\% \\
+Innenspule & 52,32 & 38\,\% \\
+Außenspule & 54,12 & 39\,\% \\
+\midrule
+\textbf{Gesamt} & \textbf{138,11} & 100\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Die Spulen erzeugen rund drei Viertel der Wärme
+(Tabelle~\ref{tab:losses}). Das passt dazu, dass sie im Wärmebild die
+heißesten Bauteile sind. (Zur Stromkonvention Effektivwert/Amplitude:
+Anhang~C, C.5.)
+
+\subsection{Vergleich mit der Messung}
+
+\begin{table*}[t]
+\caption{Messwert gegen Modell}
+\label{tab:compare}
+\centering\footnotesize
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+Messgröße & Messung & Modell & Differenz & Bewertung \\
+\midrule
+Innenspule, stationär, 7,8\,A & 79\,°C & 79,0\,°C & 0 & kalibriert, kein Nachweis \\
+Außenspule, stationär, 7,8\,A & 74\,°C & 74,0\,°C & 0 & kalibriert, kein Nachweis \\
+Außenspule, Rampe, $t = 140$\,s & 40,0\,°C & 33,6\,°C & $-6{,}5$\,K & Vorhersage \\
+Außenspule, Rampe, $t = 200$\,s & 43,0\,°C & 34,7\,°C & $-8{,}3$\,K & Vorhersage \\
+Außenspule, Rampe, $t = 300$\,s & 48,5\,°C & 36,2\,°C & $-12{,}3$\,K & Vorhersage \\
+Außenspule, Rampe, $t = 360$\,s & 55,8\,°C & 40,0\,°C & $-15{,}8$\,K & Vorhersage \\
+Außenspule, Rampe, $t = 450$\,s & 56,0\,°C & 43,6\,°C & $-12{,}4$\,K & Vorhersage \\
+Scheibe, stationär, 7,8\,A & 37--40\,°C & 107\,°C & $\approx +68$\,K & IR unzuverlässig \\
+Schwebehöhe (sichtbar), 5\,A & 7--8\,mm & 14,7\,mm & $\approx +7$\,mm & Vorhersage \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\textbf{Kurz zusammengefasst} (Tabelle~\ref{tab:compare}):
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Spulen, stationär:} exakt, aber nur, weil darauf kalibriert
+        wurde.
+  \item \textbf{Spulen, Zeitverlauf:} Das Modell heizt zu langsam auf
+        (mittlerer Fehler 11,5\,K).
+  \item \textbf{Scheibe:} Die IR-Kamera misst auf blankem Aluminium zu tief;
+        ein Urteil ist nicht möglich.
+  \item \textbf{Schwebehöhe:} Das Modell überschätzt den Spalt um etwa 7\,mm.
+\end{itemize}
+
+\subsection{Ursachen der Abweichungen}
+\label{sec:causes}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Zeitverlauf zu langsam:} Die Endtemperatur hängt nur von den
+        kalibrierten Wärmeübergängen ab. Das Tempo hängt dagegen von den
+        Wärmekapazitäten und der Aufteilung Oberfläche/Wicklung ab. Diese
+        lassen sich aus einer Aufheizkurve allein nicht bestimmen; dafür
+        fehlt eine \textbf{Abkühlkurve}.
+  \item \textbf{Scheibe:} Blankes Aluminium strahlt wenig Wärme ab und
+        spiegelt die Umgebung. Die Kamera zeigt daher zu tiefe Werte.
+        Abhilfe: ein mattschwarzer Messfleck.
+  \item \textbf{Schwebehöhe:} Wahrscheinlichste Ursache ist die angenommene
+        Eisenpermeabilität $\mu_r = 1000$. Sie wurde bewusst \textit{nicht}
+        nachträglich an die Beobachtung angepasst. Zudem rechnet das
+        Feldmodell mit fester Scheibenhöhe.
+\end{itemize}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Ausblick}
+\label{sec:outlook}
+
+Fast alle Abweichungen haben dieselbe Ursache: Es fehlen Messdaten. Die
+nächsten Schritte sind daher:
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Abkühlkurve} der Spulen aufnehmen $\rightarrow$ Zeitverlauf
+        kalibrieren;
+  \item \textbf{mattschwarzer Messfleck} auf Scheibe und Eisen
+        $\rightarrow$ verlässliche IR-Werte;
+  \item \textbf{Eisenpermeabilität} messen $\rightarrow$ Schwebehöhe klären;
+  \item \textbf{Stromsensor} einbauen $\rightarrow$ Modell läuft mit dem
+        gemessenen Strom statt mit einem festen Wert;
+  \item \textbf{unabhängiger Messpunkt bei 5\,A} $\rightarrow$ Kalibrierung
+        prüfen, nicht nur anpassen.
+\end{enumerate}
+Das Vorgehen -- FEM einmal lösen, Reduzierbarkeit prüfen, online ein kleines
+Modell rechnen -- lässt sich auf 3D-Modelle
+übertragen~\cite{hartmann2025golden,hartmann2018mor}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% ieeeconf: \appendix ist für EINEN Anhang und verwirft die \section-Titel;
+% mehrere Anhänge mit Titel -> \appendices, Buchstaben statt römischer Zahlen.
+\useRomanappendicesfalse
+\appendices
+
+\section{Mess- und Rechenwerte}
+\label{app:values}
+
+\anh{A.1 Messwerte und Annahmen (Eingang ins Modell)}
+
+\begin{table}[!ht]
+\centering\footnotesize
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}p{2.1cm}Y>{\raggedright\arraybackslash}p{2.0cm}@{}}
+\toprule
+Größe & Wert & Herkunft \\
+\midrule
+Strom Betrieb / Kalibrierung & 5,0 / 7,8\,A eff., 50\,Hz & gemessen (Multimeter) \\
+Variac-Stellung & 220° $\approx$ 195\,V $\rightarrow$ 5\,A; 270° (max.) $\approx$ 240\,V $\rightarrow$ 7,8\,A & gemessen (Stellwinkel) \\
+Radien Kern / Innenspule / Ring / Außenspule & 0--25,9 / 27,9--61,9 / 64,9--79,9 / 82,9--102,9\,mm & gemessen (Lineal, 10.07.2026) \\
+Höhe Kern/Spulen/Ring & 53\,mm & gemessen \\
+Scheibe $R$ / $d$ / Masse & 80\,mm / 3\,mm / 159\,g & gemessen \\
+Windungszahl innen / außen & ca.\ 1000 / 500 & Angabe zum Aufbau \\
+$\sigma$ Al / Cu & 34 / 59,6\,MS/m & Literatur \\
+Al: $k$, $\rho$, $c_p$, $\alpha$ & 237\,W/(m\,K), 2700\,kg/m³, 900\,J/(kg\,K), $3{,}9\cdot10^{-3}$\,1/K & Literatur \\
+Eisen $\mu_r$ / $\sigma$ / $B_{\mathrm{sat}}$ & 1000 / 1\,MS/m / 1,5\,T & angenommen \\
+Draht / Füllfaktor & 1,2\,mm / 0,6 & angenommen \\
+$h$ Scheibe oben / unten & 10 / 25\,W/(m²\,K) & angenommen \\
+Luftknoten $C$ / $hA$ & 3000\,J/K / 40\,W/K & angenommen \\
+$hA$ innen / außen & 2,474 / 2,889\,W/K & kalibriert \\
+IR stationär 7,8\,A, 29\,°C & Innenspule 79, Außenspule 74, Kern 45, Scheibe 37--40\,°C & gemessen (IR, 23.06.2026) \\
+IR Rampe Außenspule & 40 / 43 / 48,5 / 55,75 / 56\,°C bei 140 / 200 / 300 / 360 / 450\,s & gemessen (Zeit $\pm$10\,s) \\
+Schwebehöhe sichtbar, 5\,A & 7--8\,mm & beobachtet \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\anh{A.2 Rechenwerte (Ausgabe des Modells)} Kennung = Zeile in
+\texttt{report\_numbers\_output.txt}.
+
+\begin{table}[!ht]
+\centering\footnotesize
+\begin{tabularx}{\columnwidth}{@{}lYY@{}}
+\toprule
+Kenn. & Größe & Wert \\
+\midrule
+E1 & Feld-FEM: Knoten / Dreiecke / Rechenzeit & 8700 / 17\,028 / 0,40\,s \\
+E2 & Verlustrechnung inkl.\ Eisenkorrektur & 1,3\,s \\
+E3, E4 & Verluste Scheibe / Eisen / Innen / Außen & 25,81 / 5,86 / 52,32 / 54,12\,W \\
+E6 & Verlustverhältnis bei doppeltem Strom & 4,000 (linear), 4,009 mit Eisenkorrektur \\
+E7 & Gebietsgröße, größte Abweichung & 0,77\,\% \\
+T1 & Wärme-FEM: Knoten / Dreiecke / Rechenzeit & 697 / 1280 / 0,03\,s \\
+T2 & Energiebilanz & 25,81388\,W = 25,81388\,W \\
+R1 & Scheibe $C$ / $UA$ / $\tau$ & 146,6\,J/K / 0,600\,W/K / 244\,s \\
+L1 & Wärmekapazitäten Spule Oberfläche / Wicklung & innen 247 / 854, außen 255 / 884\,J/K; Eisen 1676\,J/K \\
+L3 & stationär 7,8\,A / 29\,°C & Spule 79,0 / 74,0; Eisen 83,7; Wicklung 178 / 176; Scheibe 107\,°C \\
+L3 & stationär 5\,A / 20\,°C & Spule 44,0 / 41,5; Eisen 46,3; Wicklung 85 / 84; Scheibe 58\,°C \\
+L4, L5 & Rampe & Tabelle~\ref{tab:compare}; RMS 11,5\,K \\
+L6 & ein Online-Zeitschritt & $\approx 3\,\mu$s \\
+V1 & Schwebehöhe & 11,7\,mm (Unterkante), 14,7\,mm sichtbar \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent Hinweis: Die Wicklungstemperatur von 178\,°C bei 7,8\,A ist nicht
+gemessen und vermutlich zu hoch, weil der innere Wärmeleitwert nur geschätzt
+ist (vgl.\ Kap.~\ref{sec:causes}).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Umsetzung im Code}
+\label{app:code}
+
+\begingroup\raggedright
+Jedes Modul wird nach demselben Schema beschrieben: \textbf{Was kommt rein?
+Was passiert? Mit welchem Verfahren?}
+
+\anh{B.1 \texttt{config.py} -- Werte laden}
+\begin{itemize}[leftmargin=*, nosep]
+  \item \textit{Rein:} die Datei \texttt{params.yaml}.
+  \item \textit{Was passiert:} Alle Zahlen werden gelesen, Millimeter in
+        Meter umgerechnet und abgeleitete Werte gebildet, z.\,B.\
+        Spitzenstrom = Effektivwert $\cdot\sqrt2$.
+  \item \textit{Verfahren:} einfaches Einlesen (Bibliothek PyYAML); keine
+        Rechnung.
+\end{itemize}
+
+\anh{B.2 \texttt{em\_solver.py} -- Magnetfeld und Wärmequelle (Gl.~\ref{eq:em}, \ref{eq:q})}
+\begin{itemize}[leftmargin=*, nosep]
+  \item \textit{Rein:} Geometrie, Materialwerte, Strom.
+  \item \textit{Was passiert:} (1) Das Gebiet (1\,m $\times$ 1\,m) wird in
+        Dreiecke zerlegt, fein am Gerät, grob weiter weg. (2) Jedes Dreieck
+        bekommt seine Materialwerte. (3) Für jedes Dreieck wird ein kleiner
+        Beitrag zur großen Matrix berechnet und eingetragen. (4) Das
+        Gleichungssystem wird gelöst. (5) Das Eisen wird nachkorrigiert,
+        falls das Feld stark ist. (6) Aus dem Feld wird Gl.~(\ref{eq:q})
+        berechnet und über jedes Bauteil aufsummiert.
+  \item \textit{Verfahren:} FEM mit linearen Dreiecken; Lösen mit
+        \texttt{scipy.sparse.linalg.spsolve} (direktes Verfahren, ähnlich dem
+        Gauß-Verfahren aus der Schule, aber für sehr große, fast leere
+        Matrizen).
+  \item \textit{Raus:} Verlustkarte der Scheibe, Leistung je Bauteil,
+        Hubkraft.
+\end{itemize}
+
+\anh{B.3 \texttt{thermal\_solver.py} -- Temperatur der Scheibe (Gl.~\ref{eq:heat}, \ref{eq:weak})}
+\begin{itemize}[leftmargin=*, nosep]
+  \item \textit{Rein:} Verlustkarte aus B.2, Wärmedaten, Wärmeübergänge.
+  \item \textit{Was passiert:} Die Verlustkarte wird auf ein feineres Netz
+        der Scheibe übertragen, Gl.~(\ref{eq:weak}) als Gleichungssystem
+        aufgestellt und gelöst. Danach wird geprüft, ob erzeugte = abgegebene
+        Wärme.
+  \item \textit{Verfahren:} FEM, \texttt{spsolve}, lineare Interpolation.
+  \item \textit{Raus:} stationäres Temperaturfeld der Scheibe.
+\end{itemize}
+
+\anh{B.4 \texttt{rom.py} -- Reduktion A und B (Gl.~\ref{eq:scale}, \ref{eq:beta})}
+\begin{itemize}[leftmargin=*, nosep]
+  \item \textit{Rein:} Temperaturfeld aus B.3.
+  \item \textit{Was passiert:} Das Temperaturfeld wird als \glqq Bild\grqq{}
+        $\Delta T_{\mathrm{ref}}$ gespeichert. Aus Masse und Wärmeabgabe
+        werden Wärmekapazität $C$, Abgabe $UA$ und Zeitkonstante
+        $\tau = C/UA$ berechnet.
+  \item \textit{Verfahren:} Energiebilanz eines einzelnen Körpers; zur
+        Kontrolle numerische Zeitintegration
+        (\texttt{scipy.integrate.solve\_ivp}).
+  \item \textit{Raus:} $\Delta T_{\mathrm{ref}}$, $\tau$.
+\end{itemize}
+
+\anh{B.5 \texttt{twin\_core.py} -- das Online-Modell (Gl.~\ref{eq:beta}, \ref{eq:rc})}
+\begin{itemize}[leftmargin=*, nosep]
+  \item \textit{Rein:} aktueller Strom $I$, Zeitschritt $\Delta t$, alle
+        Koeffizienten aus B.4 und dem RC-Netz.
+  \item \textit{Was passiert pro Zeitschritt:} (1) Verluste mit
+        $(I/I_{\mathrm{ref}})^2$ skalieren. (2) Jede Temperatur um
+        \glqq Änderungsrate $\times$ Zeitschritt\grqq{} weiterschieben. (3) Ist
+        der Zeitschritt zu groß, wird er in kleinere Teilschritte zerlegt,
+        damit die Rechnung stabil bleibt. (4) Schwebehöhe mit einer fertigen
+        Formel für eine gedämpfte Schwingung berechnen.
+  \item \textit{Verfahren:} explizites Euler-Verfahren (\glqq neuer Wert =
+        alter Wert + Steigung $\times$ Schrittweite\grqq{}); nur NumPy und
+        Standardbibliothek.
+  \item \textit{Raus:} Temperaturen aller Knoten, Temperaturfeld der
+        Scheibe, Schwebehöhe.
+\end{itemize}
+
+\anh{B.6 \texttt{refit\_hA.py} -- Kalibrierung}
+\begin{itemize}[leftmargin=*, nosep]
+  \item \textit{Rein:} gemessene Spulentemperaturen (79 / 74\,°C bei
+        7,8\,A).
+  \item \textit{Was passiert:} Das Programm probiert Werte für
+        $hA_{\text{innen}}$ und $hA_{\text{außen}}$, lässt das
+        Online-Modell jeweils bis zum Gleichgewicht laufen und vergleicht mit
+        der Messung, bis die Differenz null ist.
+  \item \textit{Verfahren:} Nullstellensuche
+        (\texttt{scipy.optimize.fsolve}).
+  \item \textit{Raus:} kalibrierte $hA$-Werte in \texttt{params.yaml}.
+\end{itemize}
+
+\anh{B.7 \texttt{build\_twin\_html\_fem.py} -- Reduktion C und HTML-Ansicht}
+\begin{itemize}[leftmargin=*, nosep]
+  \item \textit{Rein:} Ergebnisse aus B.2--B.4, Geometrie.
+  \item \textit{Was passiert:} Die Parameter des RC-Netzes werden berechnet
+        (Kapazitäten aus Volumen und Werkstoff). Alle Koeffizienten und das
+        Online-Modell werden als JavaScript in eine HTML-Datei geschrieben,
+        damit die Ansicht ohne Python im Browser läuft.
+  \item \textit{Raus:} \texttt{outputs/digital\_twin\_fem.html}.
+\end{itemize}
+
+\anh{B.8 \texttt{data\_io.py} -- Stromeingang (vorbereitet)}
+\begin{itemize}[leftmargin=*, nosep]
+  \item \textit{Rein:} Strommesswerte als CSV (vom Arduino oder aus einer
+        Datei).
+  \item \textit{Was passiert:} Jeder Messwert wird an
+        \texttt{twin\_core.py} übergeben.
+  \item \textit{Stand:} mit Testdaten geprüft; Sensor noch nicht am
+        Versuchsstand eingebaut.
+\end{itemize}
+\endgroup
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Zusatzrechnungen}
+\label{app:extra}
+
+\anh{C.1 Vergleich numerischer Verfahren.} Finite Differenzen brauchen an
+jeder Materialgrenze eine Sonderbehandlung; Randelemente führen zu voll
+besetzten Matrizen und sind bei vielen Materialbereichen aufwendig; Finite
+Volumen wären möglich. Die FEM behandelt Materialsprünge, Drehsymmetrie
+($2\pi r$) und Konvektionsränder ohne Zusatzaufwand und ist Standard für
+TEAM-Benchmarks.
+
+\anh{C.2 Eigenwertanalyse.} Ohne Quelle gilt
+$\mathbf M\dot{\mathbf T} = -\mathbf K\mathbf T$. Die Eigenformen aus
+$\mathbf K\boldsymbol\varphi = \lambda\mathbf M\boldsymbol\varphi$ klingen
+mit $\tau_i = 1/\lambda_i$ ab. Ergebnis: $\tau_1 = 204$\,s,
+$\tau_2 = 4{,}4$\,s, Verhältnis 47 (Abb.~\ref{fig:eigen}). Alle Formen außer
+der ersten sind nach wenigen Sekunden abgeklungen; deshalb genügt eine Form.
+
+\begin{figure}[!ht]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=\columnwidth, height=4.2cm, ybar, bar width=9pt,
+    ymode=log, log origin=infty, ymin=0.1, ymax=1000,
+    xtick={1,...,6}, xlabel={Eigenform $i$}, ylabel={$\tau_i$ [s]},
+    ymajorgrids, grid style={gray!25}, font=\footnotesize,
+    nodes near coords={\pgfmathprintnumber[precision=3, use comma]{\pgfplotspointmeta}\,s},
+    point meta=rawy, every node near coord/.append style={font=\tiny},
+    enlarge x limits=0.12]
+  \addplot[fill=blue!60!cyan, draw=none] coordinates {(1,203.931)};
+  \addplot[fill=gray!50, draw=none] coordinates
+    {(2,4.38) (3,1.33) (4,0.637) (5,0.373) (6,0.246)};
+\end{axis}
+\end{tikzpicture}
+\caption{Zeitkonstanten der sechs langsamsten Eigenformen\src{R5}.}
+\label{fig:eigen}
+\end{figure}
+
+\anh{C.3 Reduziertes Modell gegen volle FEM.} Beide heizen die Scheibe bei
+5\,A auf (Abb.~\ref{fig:romfem}). Mit $\tau_1$ aus C.2 beträgt der größte
+Fehler 0,36\,K (0,8\,\%). Mit der im Code verwendeten Zeitkonstante
+$\tau = C/UA = 244$\,s sind es bis zu 3,0\,K während des Aufheizens, beim
+Endwert~0. Grund: $UA$ wird gegen 20\,°C gebildet, die Scheibenunterseite
+sieht aber von den Spulen auf 30\,°C vorgewärmte Luft\src{R4, R6}.
+
+\begin{figure}[!ht]
+\centering
+\begin{tikzpicture}
+\begin{axis}[name=top, width=\columnwidth, height=4.6cm, xmin=0, xmax=20,
+    ymin=0, xticklabels={}, ylabel={$\Delta T_{\max}$ [K]},
+    grid=major, grid style={gray!25}, font=\footnotesize,
+    legend pos=south east, legend style={font=\tiny, draw=none, fill=white, fill opacity=0.8, text opacity=1},
+    legend cell align=left]
+  \addplot[black, line width=1.6pt] coordinates {(0,0) (0.017,0.316) (0.083,1.332) (0.167,2.413) (0.250,3.423) (0.333,4.395) (0.417,5.339) (0.500,6.258) (0.583,7.154) (0.667,8.029) (0.750,8.882) (0.833,9.714) (0.917,10.527) (1.000,11.320) (1.083,12.093) (1.167,12.848) (1.250,13.585) (1.333,14.304) (1.417,15.006) (1.500,15.690) (2.000,19.464) (2.500,22.723) (3.000,25.537) (3.500,27.967) (4.000,30.066) (4.500,31.878) (5.000,33.442) (5.500,34.794) (6.000,35.960) (6.500,36.968) (7.000,37.838) (7.500,38.589) (8.000,39.237) (8.500,39.798) (9.000,40.281) (9.500,40.699) (10.000,41.060) (10.500,41.371) (11.000,41.640) (11.500,41.872) (12.000,42.073) (12.500,42.246) (13.000,42.395) (13.500,42.524) (14.000,42.636) (14.500,42.732) (15.000,42.815) (15.500,42.887) (16.000,42.949) (16.500,43.003) (17.000,43.049) (17.500,43.089) (18.000,43.123) (18.500,43.153) (19.000,43.179) (19.500,43.201) (20.000,43.220)};
+  \addlegendentry{FEM, 697 Unbekannte (Referenz)}
+  \addplot[blue!70!cyan, thick, dashed] coordinates {(0,0) (0.017,0.211) (0.083,1.047) (0.167,2.069) (0.250,3.066) (0.333,4.039) (0.417,4.989) (0.500,5.916) (0.583,6.820) (0.667,7.702) (0.750,8.563) (0.833,9.404) (0.917,10.224) (1.000,11.024) (1.083,11.805) (1.167,12.567) (1.250,13.310) (1.333,14.036) (1.417,14.744) (1.500,15.435) (2.000,19.244) (2.500,22.533) (3.000,25.373) (3.500,27.825) (4.000,29.943) (4.500,31.772) (5.000,33.351) (5.500,34.715) (6.000,35.892) (6.500,36.909) (7.000,37.787) (7.500,38.545) (8.000,39.200) (8.500,39.765) (9.000,40.253) (9.500,40.675) (10.000,41.038) (10.500,41.353) (11.000,41.624) (11.500,41.859) (12.000,42.061) (12.500,42.236) (13.000,42.387) (13.500,42.517) (14.000,42.629) (14.500,42.727) (15.000,42.810) (15.500,42.883) (16.000,42.945) (16.500,43.000) (17.000,43.046) (17.500,43.086) (18.000,43.121) (18.500,43.151) (19.000,43.177) (19.500,43.200) (20.000,43.219)};
+  \addlegendentry{ROM, 1 Mode, $\tau_1$ aus Eigenproblem}
+  \addplot[orange!90!red, thick, dash dot] coordinates {(0,0) (0.017,0.177) (0.083,0.878) (0.167,1.738) (0.250,2.581) (0.333,3.407) (0.417,4.216) (0.500,5.008) (0.583,5.785) (0.667,6.545) (0.750,7.291) (0.833,8.021) (0.917,8.736) (1.000,9.437) (1.083,10.124) (1.167,10.797) (1.250,11.456) (1.333,12.102) (1.417,12.735) (1.500,13.355) (2.000,16.820) (2.500,19.884) (3.000,22.595) (3.500,24.992) (4.000,27.112) (4.500,28.988) (5.000,30.646) (5.500,32.113) (6.000,33.411) (6.500,34.558) (7.000,35.573) (7.500,36.471) (8.000,37.264) (8.500,37.967) (9.000,38.588) (9.500,39.137) (10.000,39.623) (10.500,40.052) (11.000,40.432) (11.500,40.769) (12.000,41.066) (12.500,41.329) (13.000,41.561) (13.500,41.767) (14.000,41.949) (14.500,42.110) (15.000,42.252) (15.500,42.378) (16.000,42.489) (16.500,42.588) (17.000,42.675) (17.500,42.752) (18.000,42.820) (18.500,42.880) (19.000,42.933) (19.500,42.981) (20.000,43.022)};
+  \addlegendentry{ROM im Code, $\tau=C/UA$}
+\end{axis}
+\begin{axis}[at={(top.south west)}, anchor=north west, yshift=-2mm,
+    width=\columnwidth, height=3.0cm, xmin=0, xmax=20, ymin=0, ymax=3.5,
+    xlabel={Zeit [min]}, ylabel={max.\ Fehler [K]},
+    grid=major, grid style={gray!25}, font=\footnotesize]
+  \addplot[blue!70!cyan, thick, dashed] coordinates {(0,0) (0.017,0.120) (0.083,0.296) (0.167,0.347) (0.250,0.358) (0.283,0.359) (0.333,0.357) (0.417,0.351) (0.500,0.344) (0.583,0.336) (0.667,0.328) (0.750,0.320) (0.833,0.312) (0.917,0.305) (1.000,0.297) (1.083,0.290) (1.167,0.283) (1.250,0.276) (1.333,0.270) (1.417,0.263) (1.500,0.257) (2.000,0.222) (2.500,0.191) (3.000,0.165) (3.500,0.143) (4.000,0.123) (4.500,0.106) (5.000,0.092) (5.500,0.079) (6.000,0.069) (6.500,0.059) (7.000,0.051) (7.500,0.044) (8.000,0.038) (8.500,0.033) (9.000,0.028) (9.500,0.025) (10.000,0.021) (10.500,0.018) (11.000,0.016) (11.500,0.014) (12.000,0.012) (12.500,0.010) (13.000,0.009) (13.500,0.008) (14.000,0.007) (14.500,0.006) (15.000,0.005) (15.500,0.004) (16.000,0.004) (16.500,0.003) (17.000,0.003) (17.500,0.002) (18.000,0.002) (18.500,0.002) (19.000,0.002) (19.500,0.001) (20.000,0.001)};
+  \addplot[orange!90!red, thick, dash dot] coordinates {(0,0) (0.017,0.154) (0.083,0.465) (0.167,0.678) (0.250,0.844) (0.333,0.990) (0.417,1.125) (0.500,1.251) (0.583,1.371) (0.667,1.485) (0.750,1.592) (0.833,1.695) (0.917,1.792) (1.000,1.883) (1.083,1.970) (1.167,2.052) (1.250,2.130) (1.333,2.203) (1.417,2.272) (1.500,2.336) (2.000,2.645) (2.500,2.840) (3.000,2.943) (3.500,2.976) (3.533,2.976) (4.000,2.954) (4.500,2.890) (5.000,2.796) (5.500,2.681) (6.000,2.550) (6.500,2.410) (7.000,2.265) (7.500,2.118) (8.000,1.973) (8.500,1.831) (9.000,1.694) (9.500,1.562) (10.000,1.437) (10.500,1.319) (11.000,1.207) (11.500,1.104) (12.000,1.007) (12.500,0.917) (13.000,0.834) (13.500,0.757) (14.000,0.687) (14.500,0.622) (15.000,0.563) (15.500,0.509) (16.000,0.460) (16.500,0.415) (17.000,0.374) (17.500,0.337) (18.000,0.303) (18.500,0.273) (19.000,0.245) (19.500,0.220) (20.000,0.198)};
+  \node[font=\tiny, anchor=west] at (axis cs:4.3,2.95) {3,0\,K};
+  \node[font=\tiny, anchor=south west] at (axis cs:0.5,0.38) {0,36\,K};
+\end{axis}
+\end{tikzpicture}
+\caption{Aufheizen der Scheibe bei 5\,A: Übertemperatur des heißesten Knotens, volle FEM gegen reduziertes Modell (oben), größter Fehler im ganzen Feld (unten)\src{R6}.}
+\label{fig:romfem}
+\end{figure}
+
+\anh{C.4 Magnetische Sättigung.} Bei konstantem $\mu_r$ ist die Flussdichte
+proportional zum Strom. Linear hochgerechnet aus der FEM: Spitzenwert im
+Eisen ca.\ 0,96\,T bei 5\,A eff.\ (64\,\% von 1,5\,T) und ca.\ 1,5\,T bei
+7,8\,A eff. Bei 7,8\,A ist Reduktion A daher nur näherungsweise gültig. Die
+lineare Hochrechnung überschätzt leicht\src{E5}.
+
+\anh{C.5 Stromkonvention.} Gemessen wird der Effektivwert (5\,A). Die
+Verlustrechnung setzt ihn als Amplitude ein; die Wattzahlen in
+Tabelle~\ref{tab:losses} sind daher um den Faktor 2 zu klein. Für die
+Temperatur ist das unschädlich, weil der Faktor bei der Kalibrierung von
+$hA$ aufgefangen wird. Die Kraftrechnung verwendet die echte Amplitude
+$\sqrt2\cdot5 = 7{,}07$\,A.
+
+\anh{C.6 Skintiefe und Biot-Zahl.}
+$\delta = \sqrt{2/(\omega\mu_0\sigma)} = 12{,}2$\,mm $\gg$ 3\,mm.
+$\mathrm{Bi} = h\,(d/2)/k = 25\cdot0{,}0015/237 = 1{,}6\cdot10^{-4} \ll 0{,}1$:
+Die Scheibe ist nahezu gleichmäßig warm.
+
+\anh{C.7 Zeitkonstante.} $C = \rho c_p \pi R^2 d = 146{,}6$\,J/K;
+$UA = P_{\mathrm{ref}}/\overline{\Delta T} = 25{,}81/43{,}03 = 0{,}600$\,W/K;
+$\tau = C/UA = 244$\,s.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{FEM-Details}
+\label{app:fem}
+
+\anh{Elemente.} Lineare Dreiecke. Mit Fläche $A_e$, Schwerpunktradius $r_c$
+und konstanten Gradienten $b_k$, $c_k$ der Ansatzfunktionen:
+\begin{equation*}
+\mathbf K_e = 2\pi k\,(\mathbf b\mathbf b^\top + \mathbf c\mathbf c^\top)\,A_e\,r_c .
+\end{equation*}
+
+\anh{Konvektionsrand.} Randkante der Länge $L$ zwischen den Radien $r_a$,
+$r_b$:
+\begin{equation*}
+\mathbf K_{\mathrm{Kante}} = 2\pi h\,\frac{L}{12}
+\begin{pmatrix}3r_a+r_b & r_a+r_b\\ r_a+r_b & r_a+3r_b\end{pmatrix}.
+\end{equation*}
+
+\anh{Randbedingungen.} Feld: $A_\varphi = 0$ auf der Achse und am Außenrand
+(Kontrolle mit Neumann-Rand). Wärme: Die Achse braucht keine Bedingung, da
+$2\pi r$ dort verschwindet.
+
+\anh{Löser.} Direkte LU-Zerlegung (\texttt{spsolve}); das Feldsystem wird
+komplex gelöst. Die Eisenpermeabilität wird iterativ an die Flussdichte
+angepasst (Konvergenz nach 2 Iterationen).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Reproduktion}
+\label{app:repro}
+
+Im Repository-Stamm:
+{\footnotesize
+\begin{verbatim}
+python RUN.py            # rechnen + HTML-Ansicht
+.venv/bin/python projectseminar_DT4TM_report/\
+    report_numbers.py    # Rechenwerte (A.2)
+.venv/bin/python projectseminar_DT4TM_report/\
+    report_numbers.py --figure   # Abb. C1, C2
+python refit_hA.py       # Kalibrierung hA
+\end{verbatim}
+}
+
+% ieeeconf.cls schreibt fest "References" -> deutsche Überschrift
+\makeatletter
+\let\@origthebib\thebibliography
+\def\thebibliography#1{\let\@origsection\section
+  \def\section*##1{\@origsection*{Literatur}}\@origthebib{#1}\let\section\@origsection}
+\makeatother
+\bibliographystyle{IEEEtran}
+\bibliography{project_course_final_v3}
+
+\end{document}

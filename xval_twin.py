@@ -165,9 +165,10 @@ def _build_schedules(I_ref: float, I_lev_min: float) -> list[tuple[str, "float |
 # ---------------------------------------------------------------------------
 def _twin_from_params(params: dict, T_amb_js: float) -> TwinState:
     """Coefficients built from the LIVE PARAMS/T_AMB_JS just read out of the
-    page -- NOT from params.yaml. T_amb_js (JS's T_AMB_FALLBACK_C=29.0,
-    build_twin_html_fem.py) deliberately does NOT equal params["rom"]["T_amb"]
-    (params.yaml's T_ambient_degC=20.0) -- seeding TwinState.T_amb from the
+    page -- NOT from params.yaml. T_amb_js is the page's runtime ambient: the
+    fallback params["rom"]["T_amb"] (20.0) in the placeholder build, but the
+    LIVE weather reading in a --bake-key build, so it need not equal
+    params["rom"]["T_amb"] -- seeding TwinState.T_amb from the
     wrong one would make every coil/air/disc quantity diverge from traceRom's
     own trajectory for a reason that has nothing to do with the integrator
     port, producing a false-alarm "assertion A" failure."""
@@ -316,7 +317,7 @@ def main() -> int:
 
             twin = _twin_from_params(params, T_amb_js)
             print(f"Seeded from live page: T_amb_js={T_amb_js}  (params['rom']['T_amb']="
-                  f"{params['rom']['T_amb']}, deliberately different -- see module docstring)")
+                  f"{params['rom']['T_amb']}; may differ in a live-weather build -- see _twin_from_params)")
             print(f"I_ref={twin.rom.I_ref}A  tau={twin.rom.tau:.2f}s  I_LEV_MIN={twin.lev.I_lev_min:.3f}A\n")
 
             ok_a, rows = run_assertion_a(page, twin, twin.rom.I_ref, twin.lev.I_lev_min)

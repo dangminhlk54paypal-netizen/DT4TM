@@ -1,0 +1,59 @@
+========================================================================
+A. INPUT DATA (params.yaml) -- measured or assumed, not computed
+========================================================================
+[N1] I_rms operating point = 5.0 A, f = 50.0 Hz, I_peak = 7.071 A
+[N2] plate R = 80.0 mm, d = 3.0 mm, sigma_Al = 3.4e+07 S/m, k = 237.0, rho = 2700.0, cp = 900.0, alpha = 0.0039
+[N3] h_top = None W/m2K, h_bottom = 25.0 W/m2K, T_amb = 20.0 C, k_coil_coupling = 0.094 K/W
+[N4] hA_inner = 2.4744, hA_outer = 2.8885 W/K (calibrated), air C = 3000.0, air hA_far = 40.0
+[N5] IR steady @7.8A: {'inner_coil_C': 79, 'outer_coil_C': 74, 'center_core_C': 45, 'separator_C': 40, 'disc_rim_C': 40, 'disc_center_C': 37, 'ambient_C': 29, 'note': 'disc+center IR unreliable (shiny Al, ε set 0.91)'}
+[N6] IR ramp: [{'t_s': 140, 'C': 40}, {'t_s': 200, 'C': 43}, {'t_s': 300, 'C': 48.5}, {'t_s': 360, 'C': 55.75}, {'t_s': 450, 'C': 56}]
+========================================================================
+B. EM FEM
+========================================================================
+[E1] EM mesh: 8700 nodes, 17028 triangles, complex unknowns; linear solve median = 0.399 s
+[E2] compute_losses (default path, incl. mu(B) iteration) median = 1.313 s
+[E3] P_plate = 25.81 W, P_iron = 5.86 W, P_coil = 106.44 W, P_total = 138.11 W
+[E4] coil split: inner = 52.32 W, outer = 54.12 W; shares: coils = 77.1 %, plate = 18.7 %, iron = 4.2 %
+[E5] B_max in iron at phasor amplitude 5.0 A: RMS = 0.480 T, peak = 0.679 T; real peak @5A_rms (amp 7.07 A) = 0.960 T; @7.8A_rms (amp 11.03 A) = 1.498 T; B_sat (params) = 1.5 T
+[E6] I^2 check (full re-solve, default mu(B) path): P(2I)/P(I) = 4.0088, plate only = 3.9937
+[E6] I^2 check (linear solve, constant mu_r): P(2I)/P(I) = 4.0000, plate only = 4.0000
+[E7] domain check Dirichlet vs Neumann: True
+[E8] skin depth Al @50Hz = 12.2 mm  (d/delta = 0.25)
+========================================================================
+C. THERMAL FEM + ROM
+========================================================================
+[T1] thermal mesh: 697 nodes, 1280 triangles; build (FEM solve+ROM) median = 0.028 s
+[T2] energy balance: Q_in = 25.8139 W; energy_balance() -> (np.float64(25.813877465420976), np.float64(25.81387746444499))
+[T3] Tinf_bottom = 30.01 C (= T_amb + k_coil*P_coil)
+[R1] C = rho*cp*V = 146.57 J/K, P_ref = 25.814 W, mean dT_ref = 43.029 K, UA = P/dT = 0.5999 W/K, tau = C/UA = 244.3 s
+[R2] dT_ref range = 42.50 .. 43.34 K
+[R3] Biot number (h_bottom, half thickness) = 1.58e-04
+[R4] sum(M) = 146.57 J/K (= C), 1^T K 1 = 0.7188 W/K -> C/(1^T K 1) = 203.9 s
+[R5] eigen time constants tau_i = [203.931, 4.38, 1.33, 0.637, 0.373, 0.246] s; gap tau1/tau2 = 46.6
+[R6] ROM vs transient FEM (I_ref, from ambient, dt=1s, 1200s): 1-mode(tau1) max err = 0.359 K (0.83 %); code ROM(tau=C/UA) max err = 2.976 K (6.87 %) at t = 212 s; steady dT_max = 43.34 K
+[R7] one prefactored transient FEM step = 15.1 us
+[R8] f_eddy = 0.8374, f_air = 0.1626
+========================================================================
+D. LUMPED NETWORK, CALIBRATION, RUNTIME
+========================================================================
+[L1] inner: P_ref = 52.32 W, C_surf = 246.7 J/K, C_deep = 854.0 J/K, hA = 2.4744, G_wind = 1.0, G_cond = None
+[L1] outer: P_ref = 54.12 W, C_surf = 255.2 J/K, C_deep = 883.5 J/K, hA = 2.8885, G_wind = 1.0, G_cond = None
+[L1] iron: P_ref = 5.86 W, C_surf = 1676.3 J/K, C_deep = 0.0 J/K, hA = 0.244, G_wind = None, G_cond = 0.06
+[L2] air node: {'C': 3000.0, 'hA_far': 40.0}
+[L3] steady state @7.8A, T_amb=29.0C: inner = 79.00, outer = 74.00, iron = 83.72, air = 35.83, inner_deep = 177.79, outer_deep = 176.20, disc mean = 107.4 C  [IR @7.8A: inner 79, outer 74, core 45, disc 37-40 (unreliable)]
+[L3] steady state @5.0A, T_amb=20.0C: inner = 44.00, outer = 41.54, iron = 46.25, air = 22.81, inner_deep = 84.60, outer_deep = 83.54, disc mean = 57.5 C  [IR @7.8A: inner 79, outer 74, core 45, disc 37-40 (unreliable)]
+[L4] ramp t = 450 s: inner coil model = 44.53 C (IR 60.75), disc mean model = 78.4 C (IR disc-bottom rim 44, unreliable)
+[L4] ramp t = 140 s: IR = 40.00 C, model = 33.55 C, diff = -6.45 K
+[L4] ramp t = 200 s: IR = 43.00 C, model = 34.70 C, diff = -8.30 K
+[L4] ramp t = 300 s: IR = 48.50 C, model = 36.22 C, diff = -12.28 K
+[L4] ramp t = 360 s: IR = 55.75 C, model = 40.00 C, diff = -15.75 K
+[L4] ramp t = 450 s: IR = 56.00 C, model = 43.56 C, diff = -12.44 K
+[L5] ramp RMS error (outer coil, 5 points) = 11.52 K
+[L6] TwinState.step(I, dt=1s) with REAL coefficients = 3.25 us (n_sub = 1); speed-up vs one EM+thermal solve = 4.13e+05
+========================================================================
+E. LEVITATION
+========================================================================
+[V1] Plate: m=162.9g  F_gravity=1.5977N
+[V1] Observed: disc levitates at ~7-8 mm VISIBLE gap (plate top above coil top) at 5A/190V (2026-07-01)
+[V1] → Predicted z_eq (plate bottom) ≈ 11.7 mm  (visible plate-top gap ≈ 14.7 mm)
+[V1] → Observed visible gap ~7-8 mm:  MISMATCH (Δ=7.2 mm)

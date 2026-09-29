@@ -1,0 +1,872 @@
+ %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%2345678901234567890123456789012345678901234567890123456789012345678901234567890
+%        1         2         3         4         5         6         7         8
+
+\documentclass[a4paper, 10pt, conference]{ieeeconf}
+
+\IEEEoverridecommandlockouts                              % This command is only needed if
+ % you want to use the \thanks command
+
+\overrideIEEEmargins                                      % Needed to meet printer requirements.
+
+%In case you encounter the following error:
+%Error 1010 The PDF file may be corrupt (unable to open PDF file) OR
+%Error 1000 An error occurred while parsing a contents stream. Unable to analyze the PDF file.
+%This is a known problem with pdfLaTeX conversion filter. The file cannot be opened with acrobat reader
+%Please use one of the alternatives below to circumvent this error by uncommenting one or the other
+%\pdfobjcompresslevel=0
+%\pdfminorversion=4
+
+
+% The following packages can be found on http:\\www.ctan.org
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[ngerman]{babel}
+\usepackage{graphicx} % for pdf, bitmapped graphics files
+%\usepackage{epsfig} % for postscript graphics files
+%\usepackage{mathptmx} % assumes new font selection scheme installed
+%\usepackage{times} % assumes new font selection scheme installed
+\usepackage{amsmath} % assumes amsmath package installed
+%\usepackage{amssymb}  % assumes amsmath package installed
+
+%%%%%%%%%%%%% added for project course control engineering
+\usepackage[left=1.57cm,right=1.57cm,top=2.54cm,bottom=2.54cm]{geometry}
+\usepackage{subfigure}
+%%%%%%%%%%%%% added for project course control engineering
+
+
+\usepackage{amssymb}
+\usepackage{enumitem}
+\usepackage{multirow}
+\usepackage{amsthm}
+
+%%%%%%%%%%%%% added for the Thermal Digital Twin (DT4TM) report %%%%%%%%%%%%%
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning}
+\usepackage{url} % \url{} breaks long filenames at _ . - / so they wrap inside narrow table columns (plain \texttt{} cannot break there)
+\usepackage{tabularx} % X columns share \textwidth exactly and auto-wrap text,
+                       % unlike plain tabular's c/l columns which size to content
+                       % and silently overflow the page margin if content is wide
+\usepackage[hidelinks]{hyperref} % makes \cite/\ref/\eqref clickable (jump to the
+                       % bibliography/label); loaded last so it patches every
+                       % preceding package's cross-referencing commands. `hidelinks`
+                       % keeps links invisible (no colored text/boxes) so the printed
+                       % look is unchanged -- only PDF click-navigation is added.
+% ieeeconf.cls defines a FAKE \NAT@parse purely to make hyperref think natbib
+% is loaded (so hyperref's natbib-compatibility code, not its plain-\cite code,
+% handles \cite) -- but the class's own comment says this fools hyperref into
+% NOT hyperlinking citation numbers at all. The class explicitly names this
+% override as the fix (ieeeconf.cls, \NAT@parse definition): undefine it so
+% \cite{...} actually links down to the matching \bibitem.
+%%%%%%%%%%%%% added for the Thermal Digital Twin (DT4TM) report %%%%%%%%%%%%%
+
+\theoremstyle{remark}
+% Template default is \newtheorem{remark}{Remark}; renamed to the German
+% "Anmerkung" only because this report is written in German. Same environment,
+% same style -- no format change.
+\newtheorem{remark}{Anmerkung}
+
+% ieeeconf.cls hard-codes the English word "Appendix" for auto-generated
+% appendix headings (see \@IEEEprocessthesectionargument); since this report
+% is in German, override it here to "Anhang" so headings match the prose.
+\makeatletter
+\def\@IEEEprocessthesectionargument#1{%
+\@ifmtarg{#1}{%
+\@IEEEappendixsavesection*{Anhang \thesectiondis}%
+\addcontentsline{toc}{section}{Anhang \thesection}}{%
+\@IEEEappendixsavesection*{Anhang \thesectiondis \\* #1}%
+\addcontentsline{toc}{section}{Anhang \thesection: #1}}}
+\makeatother
+
+\title{\LARGE \bf
+Thermal Digital Twin für ein elektrodynamisches Levitationssystem
+}
+\author{ Dang Minh Hoang, Marina Borchert, Mohamed Aziz El Majid % <-this % stops a space
+\thanks{Project Course Digital Twin, Summer Term 2026. Supervisors: Hr. Prof. Dr. rer. nat. Dirk Hartmann, Fr. Dr.-Ing. Melina Merkel}% project course: only change the supervisor(s)
+}
+
+
+\begin{document}
+
+
+
+\maketitle
+\thispagestyle{plain}
+\pagestyle{plain}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+Dieser Bericht beschreibt Konzept, Methodik und Softwarearchitektur eines
+\emph{digitalen Zwillings} (Digital Twin) für die thermische Vorhersage am
+elektrodynamischen Levitator nach dem TEAM-28-Benchmark (COMPUMAG). Statt
+kommerzieller CAE-Software wurde ein selbst entwickelter Python-Löser
+gewählt, weil das eigentliche Ziel keine einmalige Simulation, sondern ein
+\emph{echtzeitfähiges} Vorhersagemodell ist, das sich schnell auf
+intelligenten Endgeräten (Laptop, Smartphone) anzeigen lässt. Der Bericht
+begründet diese Wahl physikalisch (die Joulschen Verluste skalieren
+quadratisch mit dem Strom bei fester räumlicher Verteilung, was eine
+einmalige Offline-FEM-Lösung plus echtzeitfähiges Reduced-Order-Model
+erlaubt). Als Eingangsgröße dient dabei der \emph{gemessene} Spulenstrom
+$I(t)$: Ein Hall-Stromsensor am Prüfstand speist den Zeitintegrator
+fortlaufend, während die Temperatur die daraus berechnete Ausgangsgröße
+ist. Der Bericht fasst bisherige sowie erwartete Ergebnisse zusammen und
+unterscheidet dabei ausdrücklich zwischen dem bereits validierten
+stationären Zustand und dem noch nicht validierten Zeitverlauf. Für die
+Implementierung des physikalischen Modells wurde ein in die
+Entwicklungsumgebung integriertes KI-Werkzeug genutzt, wobei alle
+physikalischen Annahmen und Validierungskriterien vom Team definiert und
+geprüft wurden.
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\section{Einleitung}
+\label{sec:intro}
+
+\subsection{Die Aufgabenstellung}
+Das TEAM-Problem~28~\cite{team28} ist ein etablierter Benchmark der
+Computational-Electromagnetics-Gemeinschaft (COMPUMAG) zur Validierung
+selbst geschriebener elektromagnetischer Löser: Eine leitfähige
+Aluminiumscheibe levitiert über einer Spulenanordnung, die mit
+Wechselstrom ($I_{\mathrm{rms}}\approx5\,\mathrm{A}$ gemessen,
+$f=50\,\mathrm{Hz}$) betrieben wird. Der zeitlich veränderliche
+magnetische Fluss induziert
+Wirbelströme in der Scheibe, die sowohl eine Hubkraft (Levitation) als
+auch eine Verlustwärme erzeugen. Der am Fachgebiet aufgebaute
+Versuchsstand entspricht diesem Benchmark strukturell, besitzt
+zusätzlich eine zweigeteilte Spulenanordnung (Innenspule ca.\
+$1000$ Windungen, Außenspule ca.\ $500$ Windungen) mit
+ferromagnetischem Kern ($\mu_r\approx1000$) und ferromagnetischem
+Außenring, die selbst spürbar Wärme erzeugen.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=0.065cm, y=0.065cm,
+    ironfill/.style={fill=gray!45},
+    cufill/.style={fill=orange!35},
+    alfill/.style={fill=cyan!25},
+    lbl/.style={font=\scriptsize, align=center}]
+  % Symmetrieachse
+  \draw[dash dot] (0,15) -- (0,-58);
+  \node[font=\tiny, right] at (2,16) {$r=0$};
+  % r-Achse
+  \draw[-{Stealth[length=4pt]}] (0,-58) -- (109,-58) node[below, font=\tiny] {$r$ [mm]};
+  \draw (25.9,-58) -- (25.9,-56.5); \node[font=\tiny] at (25.9,-63) {25{,}9};
+  \draw (61.9,-58) -- (61.9,-56.5); \node[font=\tiny] at (61.9,-63) {61{,}9};
+  \draw (79.9,-58) -- (79.9,-56.5); \node[font=\tiny] at (79.9,-63) {79{,}9};
+  \draw (102.9,-58) -- (102.9,-56.5); \node[font=\tiny] at (102.9,-63) {102{,}9};
+  % Eisenkern
+  \draw[ironfill] (0,0) rectangle (25.9,-53);
+  \node[lbl] at (13,-26.5) {Eisenkern\\$\mu_r{=}1000$};
+  % Innenspule
+  \draw[cufill] (27.9,0) rectangle (61.9,-53);
+  \node[lbl] at (44.9,-26.5) {Innenspule\\$N{=}1000$};
+  % Eisenring
+  \draw[ironfill] (64.9,0) rectangle (79.9,-53);
+  \node[lbl, rotate=90] at (72.4,-26.5) {Eisenring};
+  % Außenspule
+  \draw[cufill] (82.9,0) rectangle (102.9,-53);
+  \node[lbl] at (92.9,-26.5) {Außen-\\spule\\$N{=}500$};
+  % Al-Scheibe (schematische Position -- Luftspalt umstritten, s. Abschnitt VIII)
+  \draw[alfill] (0,6) rectangle (80,9);
+  \node[lbl] at (40,7.5) {Al-Scheibe, $R{=}80$, $z{=}3$\,[mm]};
+  \draw[<->, dashed] (85,0) -- (85,6);
+  \node[font=\tiny] at (91,3) {$z_{\mathrm{gap}}$};
+\end{tikzpicture}
+\caption{Querschnitt der Gerätegeometrie, identisch zur Eingabe in
+\texttt{params.yaml}. Eingangsgröße $I_{\mathrm{rms}}=5\,\mathrm A$:
+rechnerisch $z_{\mathrm{gap}}\approx12\,\mathrm{mm}$, real beobachtet
+$7$--$8\,\mathrm{mm}$ (Abschnitt~\ref{sec:limitations}).}
+\label{fig:geometry}
+\end{figure}
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{Reale,vermessene Gerätegeometrie für FEM-Löser (\texttt{params.yaml}).}
+\label{tab:geometry}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Bauteil & $r$\,[mm] & $\mu_r$ & $\sigma$\,[MS/m] & $N$ \\
+\midrule
+Eisenkern & 0{,}0--25{,}9 & 1000 & 1{,}0 & -- \\
+Luftspalt & 25{,}9--27{,}9 & 1 & 0 & -- \\
+Innenspule (Cu) & 27{,}9--61{,}9 & 1 & 59{,}6 & 1000 \\
+Luftspalt & 61{,}9--64{,}9 & 1 & 0 & -- \\
+Eisenring & 64{,}9--79{,}9 & 1000 & 1{,}0 & -- \\
+Luftspalt & 79{,}9--82{,}9 & 1 & 0 & -- \\
+Außenspule (Cu) & 82{,}9--102{,}9 & 1 & 59{,}6 & 500 \\
+Al-Scheibe & 0{,}0--80{,}0 & 1 & 34{,}0 & -- \\
+Luft $\to$ Rahmen & 102{,}9--130{,}4 & 1 & 0 & -- \\
+Rahmenwand (Sperrholz) & 130{,}4--152{,}9 & 1 & 0 & -- \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+{\footnotesize Höhe aller Kern-/Spulen-/Ringbereiche: $53\,\mathrm{mm}$;
+Scheibendicke: $3\,\mathrm{mm}$ (oberhalb dieser Höhe positioniert, vgl.
+Abbildung~\ref{fig:geometry}). Elektrische Anregung:
+$I_{\mathrm{rms}}=5{,}0\,\mathrm A$ (Hauptbetriebspunkt, Variac-Dial
+$220^\circ\approx195{,}5\,\mathrm V$) bzw.\ $7{,}8\,\mathrm A$
+(Variac-Dial auf Maximalstellung $270^\circ$, $\approx240\,\mathrm V$,
+Kalibrieranker), $f=50\,\mathrm{Hz}$.}
+\end{table}
+
+Abbildung~\ref{fig:geometry} und Tabelle~\ref{tab:geometry} dokumentieren
+diese reale Geometrie vollständig und identisch zu \texttt{params.yaml} --
+der \emph{einzigen} Quelle, aus der sowohl der eigene FEM-Löser als auch
+ein potenzieller Vergleichslauf in kommerzieller Software gespeist werden.
+Aus Transparenzgründen sei betont: Nur die Radien, die Windungszahlen und
+die (per Magnettest bestätigte) Werkstoffklasse Eisen/Kupfer/Aluminium
+sind direkt gemessen; Permeabilität $\mu_r$ und Leitfähigkeit $\sigma$
+sind Referenz-/Literaturwerte für die jeweilige Werkstoffklasse
+(Abschnitt~\ref{sec:limitations}), keine Messung an der konkreten Probe.
+
+\subsection{Vom Simulationsmodell zum digitalen Zwilling}
+Die Aufgabe besteht nicht darin, \emph{einmal} ein Temperaturfeld zu
+berechnen, sondern ein Modell zu bauen, das (i) das Temperaturfeld
+$T(r,z,t)$ \textbf{kontinuierlich} vorhersagt, angetrieben vom real
+gemessenen Spulenstrom $I(t)$, (ii) gegen den realen Versuchsstand
+\textbf{validiert} wird (IR-Kamera), und (iii) am Ende
+über einen \textbf{QR-Code} auf einem Smartphone in Augmented Reality
+betrachtet werden kann. Diese drei Anforderungen zusammen definieren
+einen \emph{digitalen Zwilling} im eigentlichen Sinn~\cite{tao2019digitaltwin}
+und sind der Ausgangspunkt aller im Folgenden begründeten methodischen
+Entscheidungen.
+
+
+\section{Physikalisches Grundkonzept}
+\label{sec:concept}
+
+Ein digitaler Zwilling, der bei jeder Stromänderung eine volle
+FEM-Simulation neu rechnet, wäre auf einem Smartphone nicht realisierbar
+(Rechenzeit: Sekunden bis Minuten pro Lauf). Die Lösung liegt in einer
+physikalischen Beobachtung, nicht in einer Software-Abkürzung: Bei fester
+Frequenz ($50\,\mathrm{Hz}$) und linearen Materialeigenschaften skalieren
+alle Joulschen Verluste quadratisch mit dem Strom ($P\propto I^2$),
+während sich die \textbf{räumliche Verteilung} der Verluste \emph{nicht}
+ändert -- nur ihre Amplitude. Daraus folgt eine zweistufige Architektur:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Offline (einmalig):} Die elektromagnetische FEM wird
+        einmal bei einem Referenzstrom $I_{\mathrm{ref}}$
+        gelöst und liefert eine ortsaufgelöste Verlustkarte
+        $\hat q_{\mathrm{Al}}(r,z)$ sowie Spulenverluste
+        $\hat P_{\mathrm{Cu}}$.
+  \item \textbf{Online (Millisekunden):} Für einen beliebigen Strom $I$
+        und die zuletzt bekannte Körpertemperatur $\bar T$ werden diese
+        nur noch skalar multipliziert.
+\end{enumerate}
+
+Wichtig ist, dass die $\sigma(T)$-Korrektur für die beiden Körper
+\textbf{gegenläufig} ist (Abschnitt~\ref{sec:physics}): Der
+Wirbelstromverlust der Scheibe ist $\propto\sigma_{\mathrm{Al}}$, der
+ohmsche Spulenverlust dagegen $\propto1/\sigma_{\mathrm{Cu}}$. Die
+Echtzeitgleichungen lauten daher
+\begin{align}
+  q_{\mathrm{Al}}(r,z;I,\bar T) &= \hat q_{\mathrm{Al}}(r,z)
+     \left(\frac{I}{I_{\mathrm{ref}}}\right)^{\!2}
+     \frac{\sigma_{\mathrm{Al}}(\bar T)}{\sigma_{\mathrm{Al}}(T_{\mathrm{ref}})},
+     \label{eq:realtime}\\[2pt]
+  P_{\mathrm{Cu}}(I,\bar T) &= \hat P_{\mathrm{Cu}}
+     \left(\frac{I}{I_{\mathrm{ref}}}\right)^{\!2}
+     \frac{\sigma_{\mathrm{Cu}}(T_{\mathrm{ref}})}{\sigma_{\mathrm{Cu}}(\bar T)}.
+     \label{eq:realtime_coil}
+\end{align}
+Beide speisen ein reduziertes thermisches Modell (ROM), das ebenfalls nur
+mit Vektor-/Skalar-Arithmetik arbeitet.
+
+\begin{remark}[Implementierungsstand]
+\label{rem:sigma}
+Gl.~\eqref{eq:realtime} ist im Laufzeitmodell vollständig umgesetzt.
+Gl.~\eqref{eq:realtime_coil} ist es \emph{nicht}: Die Spulen- und
+Eisenknoten werden zur Laufzeit nur mit $(I/I_{\mathrm{ref}})^2$
+skaliert. Die Temperaturabhängigkeit der Spule steckt stattdessen
+implizit in den gegen Messdaten gefitteten Konvektionsleitwerten $hA$
+(Abschnitt~\ref{sec:validation}). Am Kalibrierpunkt ist das exakt, für
+weit davon entfernte Betriebspunkte eine bekannte Vereinfachung.
+\end{remark}
+
+Diese Zerlegung ist der methodische Kern des Projekts: Die
+"`Intelligenz"' steckt vollständig im einmaligen Offline-Löser; die
+Echtzeitfähigkeit entsteht aus der physikalischen Struktur des Problems
+(Linearität, feste Frequenz), nicht aus vereinfachter Physik.
+
+
+\section{Physikalisches Modell}
+\label{sec:physics}
+
+Das Modell besteht aus drei gekoppelten, achsensymmetrischen
+Teilproblemen, die in 2D $(r,z)$ gelöst und für die Darstellung zu 3D
+rotiert werden. Die vollständige Herleitung befindet sich in
+Anhang~\ref{app:derivation}.
+
+\textbf{Elektromagnetik (Phasor):} Da nur die zyklusgemittelte
+Verlustwärme für die (im Vergleich zu $50\,\mathrm{Hz}$ langsame) Thermik
+relevant ist, wird das Feld nicht zeitschrittweise simuliert, sondern als
+komplexer Phasor $A_\varphi(r,z)$ gelöst -- die hier verwendete
+Formulierung über das magnetische Vektorpotential folgt der klassischen
+Arbeit von Bíró und Preis~\cite{biro1989vectorpotential},
+\begin{equation}
+  -\nabla\!\cdot\!\left(\nu\nabla A_\varphi\right)
+  + \nu\frac{A_\varphi}{r^{2}} + j\omega\sigma A_\varphi = J_s,
+  \label{eq:em}
+\end{equation}
+mit $\nu=1/(\mu_r\mu_0)$, $\omega=2\pi f$ und der eingeprägten
+Stromdichte $J_s$ in den Spulen (Innen-/Außenspule mit entgegengesetztem
+Wicklungssinn). Im ferromagnetischen Kern/Ring fällt $\nu$ stark ab und
+bündelt so den Fluss.
+
+\textbf{Joulsche Verlustwärme:} Aus der induzierten Wirbelstromdichte
+$J_e=-j\omega\sigma A_\varphi$ folgt die zyklusgemittelte Verlustdichte
+\begin{equation}
+  q(r,z) = \frac{|J_e|^{2}}{2\sigma}
+         = \tfrac12\,\sigma\,\omega^{2}\,|A_\varphi|^{2}\ \;[\mathrm{W/m^3}],
+  \label{eq:loss}
+\end{equation}
+deren quadratische Abhängigkeit von $|A_\varphi|$ die Grundlage der
+$I^2$-Skalierung aus Gl.~\eqref{eq:realtime} ist.
+
+\textbf{Temperaturabhängige Leitfähigkeit:} Da $70\,\mathrm K$ Erwärmung
+den spezifischen Widerstand um $\approx27\,\%$ ändern, gilt
+$\sigma(T)=\sigma_0/(1+\alpha(T-T_0))$ mit
+$\alpha\approx3{,}9\times10^{-3}\,\mathrm{K^{-1}}$ -- mit gegenläufiger
+Wirkung: Scheibenverluste $\propto\sigma_{\mathrm{Al}}$ (negative
+Rückkopplung), Spulenverluste $\propto1/\sigma_{\mathrm{Cu}}$ (positive
+Rückkopplung) -- siehe Gl.~\eqref{eq:realtime} und
+\eqref{eq:realtime_coil} sowie Anmerkung~\ref{rem:sigma} zum
+Umsetzungsstand. Beide
+Effekte ändern nur die Amplitude, sodass die Zweistufenarchitektur gültig
+bleibt.
+
+\textbf{Wärmeleitung:} Die Verlustdichte $q$ speist die instationäre
+Fourier-Gleichung
+\begin{equation}
+  \rho c_p\,\frac{\partial T}{\partial t} = \nabla\!\cdot\!(k\nabla T) + q,
+  \label{eq:fourier}
+\end{equation}
+mit Robin-Randbedingung $-k\,\partial T/\partial n=h(T-T_\infty)$. Im
+stationären Fall muss die Energiebilanz
+$\int_V q\,\mathrm dV=\oint_\Gamma h(T-T_\infty)\,\mathrm dA$ exakt
+erfüllt sein -- der zentrale Verifikationstest des thermischen Lösers
+(siehe Abschnitt~\ref{sec:validation}).
+
+
+\section{Numerische Umsetzung und Softwarearchitektur}
+\label{sec:numerics}
+
+Beide Teilprobleme werden mit der Finite-Elemente-Methode (FEM) in
+Galerkin-Formulierung diskretisiert, mit linearen Dreieckselementen (P1)
+auf einem strukturierten 2D-Netz $(r,z)$; die achsensymmetrische
+Schwachform trägt das Volumengewicht $2\pi r$ (Details in
+Anhang~\ref{app:derivation}). Die elektromagnetische Assemblierung ergibt
+eine komplexe dünnbesetzte Matrix (wegen $j\omega\sigma$), gelöst mit
+\url{scipy.sparse.linalg.spsolve} auf Basis von
+NumPy~\cite{harris2020numpy} und SciPy~\cite{virtanen2020scipy}. Bei
+$\sim\!10^4$ Unbekannten
+(2D, achsensymmetrisch) ist ein direkter Löser ausreichend; die
+Skintiefe in Aluminium bei $50\,\mathrm{Hz}$
+($\delta\approx12\,\mathrm{mm}\gg3\,\mathrm{mm}$ Scheibendicke) macht eine
+feine Vernetzung in $z$-Richtung unnötig.
+
+Aus der einmaligen FEM-Lösung wird ein niederdimensionales,
+echtzeitfähiges Modell abgeleitet: eine $I^2$-Skalierung mit
+Zeitkonstante erster Ordnung ($\tau\approx4{,}07\,\mathrm{min}$ bei
+$R=80\,\mathrm{mm}$) für die Scheibe, sowie ein verteiltes RC-Netzwerk
+(\emph{lumped-parameter thermal network}) für Spulen, Eisenkern/-ring und
+den gemeinsamen Luftknoten -- ein in der elektrischen Antriebstechnik
+etabliertes Modellierungsprinzip~\cite{wallscheid2021thermal}, das sich
+direkt an realen Sensordaten kalibrieren lässt. Der gesamte Online-Schritt
+reduziert sich auf $O(n)$-Arithmetik, lauffähig in Millisekunden im
+Browser intelligenter Endgeräte wie Laptop und Smartphone.
+Tabelle~\ref{tab:modules} (Anhang~\ref{app:software})
+listet zusätzlich für jede Datei explizit, welche Gleichung sie löst und
+mit welcher Bibliothek/Methode.
+
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=5mm and 9mm,
+  box/.style={draw, rounded corners, align=center, minimum width=3.0cm,
+              minimum height=0.95cm, font=\footnotesize},
+  arr/.style={-Stealth, thick}
+]
+\node[box] (params) {\texttt{params.yaml}\\[-2pt]\tiny (SSOT aller Parameter)};
+\node[box, right=of params] (config) {\texttt{config.py}\\[-2pt]\tiny Einheiten, $I_{\mathrm{peak}}$};
+\node[box, right=of config] (em) {\texttt{em\_solver.py}\\[-2pt]\tiny EM-FEM, Verlustkarte};
+\node[box, right=of em] (th) {\texttt{thermal\_solver.py}\\[-2pt]\tiny Wärme-FEM, Bilanz};
+\node[box, right=of th] (rom) {\texttt{rom.py} / \texttt{twin\_core.py}\\[-2pt]\tiny Echtzeit-ROM (SSOT)};
+\node[box, right=of rom] (out) {\texttt{build\_twin\_html\_fem.py}\\[-2pt]\tiny Bake $\to$ AR-HTML + QR};
+\node[box, below=of rom] (sensor) {\texttt{data\_io.py} + Arduino\\[-2pt]\tiny gemessener Strom $I(t)$};
+
+\draw[arr] (params) -- (config);
+\draw[arr] (config) -- (em);
+\draw[arr] (em) -- (th);
+\draw[arr] (th) -- (rom);
+\draw[arr] (rom) -- (out);
+\draw[arr] (sensor) -- (rom);
+\end{tikzpicture}%
+}
+\caption{Softwarepipeline: von der Parameterdatei über die
+Offline-FEM-Löser zum echtzeitfähigen ROM und der finalen
+AR-Auslieferung. Der Sensorpfad liefert den gemessenen Spulenstrom $I(t)$
+als \emph{Eingang} des Zeitintegrators (Abschnitt~\ref{sec:realtime_input});
+die Temperatur ist die daraus berechnete Ausgangsgröße.}
+\label{fig:pipeline}
+\end{figure*}
+
+Abbildung~\ref{fig:pipeline} zeigt die Ein-Weg-Pipeline: Jede Datei trägt
+genau eine Verantwortung, und alle physikalischen Parameter liegen
+zentral in \texttt{params.yaml} (\emph{single source of truth}) -- keine
+Konstante ist im Code fest verdrahtet.
+
+\subsection{Gemessener Wechselstrom als Echtzeit-Eingang}
+\label{sec:realtime_input}
+
+Bislang wird der Zwilling mit einer \emph{konstanten} Annahme
+$I=5\,\mathrm A$ betrieben. Der eigentliche Zielzustand ist ein anderer:
+Der Spulenstrom soll \textbf{fortlaufend gemessen} und als Eingangsgröße
+in das thermische Modell zurückgeführt werden -- erst damit wird aus der
+Simulation ein Zwilling, der dem realen Betrieb folgt statt ihn nur
+nachzubilden.
+
+Messtechnisch ist dies gelöst über einen Hall-Effekt-Stromsensor
+(ACS712-20A) in Reihe mit einem Zuleiter des Spulenkreises. Er ist
+galvanisch getrennt ($\approx2{,}1$\,kV), was bei den anliegenden
+$\approx195$--$240\,\mathrm V$ Netzspannung zwingend ist; ein einfacher
+Shunt-Widerstand wäre hier nicht zulässig. Der Mikrocontroller bildet den
+Effektivwert der Wechselkomponente um den \emph{gemessenen} Mittelwert
+(nicht um den nominellen $V_{\mathrm{cc}}/2$-Offset, da sowohl die
+$5\,\mathrm V$-Versorgung als auch der Sensor-Nullpunkt Toleranz und Drift
+aufweisen):
+\begin{equation}
+  I_{\mathrm{rms}} = \frac{k}{S}\sqrt{\frac{1}{N}\sum_{n=1}^{N}
+      \bigl(v_n - \bar v\bigr)^2},
+  \qquad \bar v = \frac{1}{N}\sum_{n=1}^{N} v_n .
+  \label{eq:irms}
+\end{equation}
+Dabei ist $S=0{,}100\,\mathrm{V/A}$ die Sensorempfindlichkeit und $k$ ein
+Ein-Punkt-Korrekturfaktor gegen ein Multimeter am
+$5\,\mathrm A$-Betriebspunkt ($k=1$, solange nicht gemessen); er absorbiert
+die Toleranz beider Datenblattkonstanten.
+
+Entscheidend für die Genauigkeit ist die Wahl des Mittelungsfensters: Ein
+echter Effektivwert ist nur über eine \emph{ganzzahlige} Anzahl
+Netzperioden exakt. Das Fenster ist deshalb über die \textbf{Zeit}
+festgelegt -- fünf Netzperioden, also exakt $100\,\mathrm{ms}$ -- und
+nicht über eine feste Stichprobenzahl $N$. Andernfalls hinge das Ergebnis
+von der ADC-Geschwindigkeit des jeweiligen Boards ab: dieselben $1000$
+Abtastwerte überspannen auf einem AVR-Board etwa $5{,}6$ Netzperioden, auf
+dem schnelleren ADC eines Renesas-Boards nur rund $1{,}25$, was einen
+phasenabhängigen Fehler von mehreren Prozent verursacht. Mit
+zeitbegrenztem Fenster ist $N$ eine Folge der Boardgeschwindigkeit statt
+einer Fehlerquelle, und dieselbe Firmware liefert auf beiden
+Plattformen denselben Messwert.
+
+Softwareseitig ist die Kette vollständig implementiert: Der Messwert wird
+im Sekundentakt als CSV übertragen und treibt den Zeitintegrator direkt an
+-- der Zeitschritt wird mit dem gemessenen $I(t)$ statt mit der Konstante
+ausgeführt (\texttt{data\_io.py} ruft
+\texttt{TwinState.step(}$I_{\mathrm{rms}}$\texttt{,}~$\Delta t$\texttt{)}
+mit dem $\Delta t$ zwischen zwei Proben auf; bei ungültiger Probe fällt es
+auf den Konstantwert zurück). Da alle Verluste nach
+Gl.~\eqref{eq:realtime} quadratisch mit dem Strom skalieren, bleibt es
+dabei bei einer skalaren Multiplikation pro Zeitschritt -- die
+Echtzeitfähigkeit bleibt also auch mit echtem Messeingang erhalten.
+Getestet wurde die Kette durchgängig mit synthetischen Messreihen; es
+fehlt allein der physische Einbau des Sensors -- diese Umsetzung ist
+derzeit in Arbeit (Stand: 02.09.2026).
+
+
+\section{Warum Simulation mit Python-Bibliotheken}
+\label{sec:tools}
+
+Die Simulation wird bewusst selbst in Python
+(NumPy~\cite{harris2020numpy}, SciPy~\cite{virtanen2020scipy})
+umgesetzt, weil die eigentliche Anforderung -- ein echtzeitfähiges,
+sensor-kalibrierbares, auf einem Smartphone lauffähiges Modell --
+Kontrolle auf Quellcode-Ebene voraussetzt: Um die $I^2$-Struktur aus
+Abschnitt~\ref{sec:concept} auszunutzen (FEM einmal lösen, danach nur
+noch skalieren), muss die Verlustkarte $\hat q(r,z)$ \emph{vor} der
+Multiplikation mit $I^2$ gezielt herausgezogen und in einem eigenen
+Echtzeit-ROM weiterverwendet werden können -- strukturell nur möglich,
+wenn der Löser selbst geschrieben ist.
+
+Zum Einordnen wurden dennoch die etablierten Alternativen geprüft:
+Werkzeuge wie SimScale, COMSOL/ANSYS Maxwell~\cite{comsol_team28} oder
+FEMM~\cite{meeker2020femm} könnten das elektromagnetisch-thermische
+Teilproblem grundsätzlich lösen -- COMSOL bietet für TEAM~28 sogar ein
+fertiges Beispielmodell~\cite{comsol_team28} --, ebenso die
+Open-Source-Löser Elmer~\cite{malinen2013elmer} und
+FEniCS~\cite{langtangen2017fenics}. Tabelle~\ref{tab:tools} zeigt: Keines
+davon erfüllt ohne größeren Zusatzaufwand die obige
+Echtzeit-Anforderung.
+
+\begin{table*}[t]
+\centering\small
+\caption{Vergleich der Werkzeugoptionen gegen die Anforderungen des digitalen Zwillings (nicht gegen eine reine Einzelsimulation).}
+\label{tab:tools}
+% tabularx: X columns split \textwidth exactly and wrap their own text, so the
+% table can never overflow the page margin regardless of cell content length
+% (plain tabular's c-columns size to content and silently spill past the margin).
+\begin{tabularx}{\textwidth}{@{}l
+    >{\centering\arraybackslash}X
+    >{\centering\arraybackslash}X
+    >{\centering\arraybackslash}X
+    >{\centering\arraybackslash}X
+    >{\centering\arraybackslash}X@{}}
+\toprule
+Kriterium & SimScale & COMSOL/Maxwell & FEMM & Elmer/FEniCS & \textbf{Python (gewählt)} \\
+\midrule
+Niederfrequenz-EM (Wirbelstrom) & begrenzt & \checkmark & \checkmark & \checkmark & \checkmark (Verlustpfad ja, Hubkraft offen$^\ast$) \\
+EM$\to$Thermik-Kopplung & schwierig & \checkmark & schwach & komplex & \checkmark direkt in-memory \\
+ROM / Echtzeitfähigkeit & -- & teilweise, teuer & -- & -- & \checkmark \textbf{Kernentwurf} \\
+Export nach Web/AR & -- & -- & -- & -- & \checkmark 1 HTML-Datei \\
+Sensor-Kalibrierung & -- & proprietär & -- & selbst zu bauen & \checkmark \url{data_io.py} \\
+Läuft auf macOS & \checkmark & \checkmark (teuer) & -- nur Windows & \checkmark & \checkmark \\
+Kosten & Core-Hour-Limit & tausende~€ & kostenlos & kostenlos & kostenlos \\
+Black Box? & ja & ja & teilweise & nein & \textbf{nein -- volle Kontrolle} \\
+\bottomrule
+\end{tabularx}
+
+\vspace{2pt}
+{\footnotesize $^\ast$Verlustpfad (Wirbelstrom-/Ohmverluste) ist validiert; die
+Hubkraft/Levitationshöhe stimmt noch nicht mit der Beobachtung überein
+-- siehe Abschnitt~\ref{sec:limitations}.}
+\end{table*}
+
+Die letzte Zeile von Tabelle~\ref{tab:tools} fasst den strukturellen
+Kern zusammen: Kommerzielle und viele Open-Source-FEM-Pakete kapseln ihren
+Löser als Black Box, unabhängig von den übrigen Kriterien -- jede
+Stromänderung erfordert dort einen vollständigen Solver-Neustart, statt
+der oben beschriebenen einmaligen Lösung plus Skalierung. FEMM entfällt
+zusätzlich aus praktischem Grund (nur Windows-nativ, Entwicklungsrechner
+ist macOS).
+
+Für einen unabhängigen Vergleichslauf in einem der genannten
+kommerziellen Pakete sind Abbildung~\ref{fig:geometry} und
+Tabelle~\ref{tab:geometry} (Abschnitt~\ref{sec:intro}) direkt
+verwendbar: Sie enthalten dieselben Radien, Windungszahlen und
+Materialkonstanten, die auch der eigene Löser aus \texttt{params.yaml}
+liest -- ein Nachbau ist damit ohne Rückfrage beim Team möglich.
+
+
+\section{Validierung und bisherige Ergebnisse}
+\label{sec:validation}
+
+\begin{table}[t]
+\centering\small
+\caption{Verlustleistungen der Offline-FEM bei einer Anregungs\emph{amplitude}
+von $5\,\mathrm A$ und $T_\infty=20\,^\circ$C. Zur Umrechnung auf den realen
+Betriebspunkt siehe Anmerkung~\ref{rem:current}.}
+\label{tab:losses}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Verlustquelle & $P$\,[W] \\
+\midrule
+Wirbelstromverlust Scheibe (Al) & 25{,}81 \\
+Wirbelstromverlust Eisenkern + -ring & 5{,}86 \\
+Ohmscher Spulenverlust (innen 52{,}32 + außen 54{,}12) & 106{,}44 \\
+\midrule
+\textbf{Gesamt} & \textbf{138{,}11} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tabelle~\ref{tab:losses} zeigt die aktuelle Verlustverteilung. Die
+folgenden internen Prüfungen sind als Python-Funktionen auf Basis von
+NumPy~\cite{harris2020numpy} und SciPy~\cite{virtanen2020scipy}
+implementiert und werden bei jeder Modelländerung erneut ausgeführt;
+ihre Aussagekraft ist bewusst unterschiedlich gewichtet:
+
+\begin{itemize}[nosep]
+  \item \textbf{Energiebilanz: $0{,}000\,\%$ Abweichung.} Am stationären
+        Punkt gilt $\int_V q\,\mathrm dV = \oint_\Gamma h(T-T_\infty)\,\mathrm dA$.
+        Dies ist die \emph{aussagekräftigste} Prüfung, da sie unabhängig
+        assemblierte Volumen- und Randterme gegeneinander stellt.
+  \item \textbf{Gebietsgröße: alle Abweichungen $<1\,\%$} (größte:
+        $P_{\mathrm{Scheibe}}$ mit $0{,}767\,\%$) beim Vergleich von
+        Dirichlet- gegen Neumann-Randbedingung auf dem
+        $1\times1\,\mathrm m$-Gebiet -- der vom Fachgebiet vorgegebene
+        Nachweis, dass der Außenrand weit genug entfernt liegt.
+  \item \textbf{$I^2$-Skalierung: $P(2I)/P(I) = 3{,}994$} (Sollwert
+        $4{,}000$) bei vollständiger Neulösung der FEM. Die Restabweichung
+        von $0{,}15\,\%$ ist \emph{kein} Fehler, sondern der erwartete
+        Effekt der nichtlinearen $\mu_r(B)$-Korrektur: Bei doppeltem Strom
+        sinkt $\mu_r$ im Eisen von $993$ auf $977$, sodass die Verluste
+        geringfügig unterquadratisch wachsen.
+\end{itemize}
+
+\begin{remark}[$I^2$-Prüfung im ROM]
+Das ROM selbst liefert für dieselbe Prüfung exakt $4{,}000000$. Dieser
+Wert ist jedoch \emph{tautologisch}: Das ROM \emph{ist} per Konstruktion
+eine skalare Multiplikation mit $(I/I_{\mathrm{ref}})^2$, kann diesen Test
+also gar nicht verfehlen. Er belegt lediglich die korrekte Arithmetik der
+Reduktion, nicht die Physik. Aussagekräftig ist allein der oben genannte
+FEM-Wert $3{,}994$.
+\end{remark}
+
+\begin{remark}[Stromkonvention]
+\label{rem:current}
+Der am Prüfstand gemessene Wert $I_{\mathrm{rms}}=5\,\mathrm A$ ist ein
+Effektivwert; die zugehörige Amplitude beträgt
+$\hat I=\sqrt2\,I_{\mathrm{rms}}=7{,}07\,\mathrm A$. Die Verlustkette
+(Tabelle~\ref{tab:losses}) setzt bewusst $5\,\mathrm A$ als
+Phasor\-amplitude ein. Da alle Verluste $\propto I^2$ sind, liegen die
+dort angegebenen Wattzahlen damit um den Faktor~$2$ unter der am realen
+Betriebspunkt tatsächlich umgesetzten Leistung. Das ist zulässig und
+beabsichtigt, weil dieser konstante Faktor beim Fit der
+Konvektionsleitwerte $hA$ gegen die gemessenen Spulentemperaturen
+vollständig absorbiert wird -- die \emph{Temperatur}vorhersage bleibt
+dadurch korrekt. Die \emph{Kraft}kette rechnet dagegen mit der echten
+Amplitude $\hat I$, da eine Kraft nicht wegkalibriert werden kann.
+\end{remark}
+
+Die Sättigungsreserve des Eisens ist ebenfalls unkritisch, muss aber
+korrekt verglichen werden: Der Löser meldet $B_{\max}=0{,}663\,\mathrm T$
+als \emph{Effektivwert}, während $B_{\mathrm{sat}}=1{,}5\,\mathrm T$ eine
+Spitzenwert-Materialgröße ist. Der maßgebliche Spitzenwert beträgt somit
+$\sqrt2\cdot0{,}663 \approx 0{,}94\,\mathrm T$, also rund $63\,\%$ von
+$B_{\mathrm{sat}}$. Die Annahme eines linearen $\mu_r$ bleibt damit
+gültig, die Reserve ist jedoch kleiner, als ein direkter Vergleich der
+Effektivwerte suggerieren würde.
+
+Zwei reale Betriebspunkte wurden per IR-Kamera vermessen (Variac-Dial
+$220^\circ\approx195{,}5\,\mathrm V\to5\,\mathrm A$ als
+Hauptbetriebspunkt, Variac-Dial auf Maximalstellung $270^\circ$
+($\approx240\,\mathrm V$) $\to7{,}8\,\mathrm A$ als Kalibrieranker). Das
+RC-Netzwerkmodell der Spulen wurde direkt gegen den vollständigen,
+nichtlinearen Zeitintegrator kalibriert und trifft den stationären
+Zustand exakt ($T_{\mathrm{innen}}=79{,}00\,^\circ$C,
+$T_{\mathrm{außen}}=74{,}00\,^\circ$C bei $7{,}8\,\mathrm A$). Nur die
+dunkel lackierten Spulen liefern verlässliche IR-Werte (unbekannte
+Emissivität von blankem Aluminium). Für Scheibe und Kern ist die
+naheliegende Abhilfe kein zusätzlicher Sensor, sondern ein
+mattschwarzer Messfleck bekannter Emissivität ($\varepsilon\approx0{,}95$)
+auf der Scheibenunterseite -- kabellos, und damit ohne Rückwirkung auf die
+Levitation.
+
+\textbf{Stationär validiert, transient noch nicht.} Diese Unterscheidung
+ist wichtig: Der stationäre Zustand ist per Konstruktion exakt, weil
+$hA_{\mathrm{innen/außen}}$ genau darauf gefittet wurden. Der zeitliche
+Verlauf ist damit jedoch \emph{nicht} mitvalidiert. Gegen die einzige
+vorhandene Transientenmessung -- eine zweistufige Stromrampe
+($5\,\mathrm A$ bis $t=300\,\mathrm s$, dann $7{,}75\,\mathrm A$) mit fünf
+Zeitstempeln der Außenspulentemperatur -- ergibt das aktuelle Modell einen
+Fehler von $\mathrm{RMS}=11{,}5\,^\circ$C (Tabelle~\ref{tab:transient}):
+Es erwärmt sich systematisch zu langsam. Ursache ist eine bewusst in Kauf
+genommene Modelländerung; sie wird in Abschnitt~\ref{sec:limitations}
+diskutiert.
+
+\begin{table}[t]
+\centering\small
+\caption{Transientenvergleich gegen die gemessene Stromrampe
+(Außenspule, $T_\infty=29\,^\circ$C). Der stationäre Zustand stimmt exakt,
+der Aufheizverlauf noch nicht.}
+\label{tab:transient}
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+$t$\,[s] & gemessen\,[$^\circ$C] & Modell\,[$^\circ$C] & $\Delta$\,[K] \\
+\midrule
+140 & 40{,}00 & 33{,}55 & $-6{,}45$ \\
+200 & 43{,}00 & 34{,}70 & $-8{,}30$ \\
+300 & 48{,}50 & 36{,}22 & $-12{,}28$ \\
+360 & 55{,}75 & 40{,}00 & $-15{,}75$ \\
+450 & 56{,}00 & 43{,}55 & $-12{,}45$ \\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{RMS}} & \textbf{11{,}53} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Zur Rollenverteilung von Messung und Modell sei ausdrücklich festgehalten:
+Der Prüfstand besitzt \emph{keine} fest installierte Temperatursensorik.
+Gemessen wird ausschließlich der Spulenstrom; die Temperatur ist die
+Größe, die das Modell daraus \emph{berechnet}
+(Abschnitt~\ref{sec:realtime_input}). Temperaturmesswerte zur Gegenprobe
+stammen daher aus manuellen IR-Aufnahmen, nicht aus einem kontinuierlichen
+Log. Eine automatisierte Nachkalibrierung des Wärmeübergangs aus einem
+Sensorlog ist auf diesem Aufbau folglich nicht möglich -- eine bewusst
+akzeptierte Grenze, keine offene Implementierungslücke.
+
+
+\section{Erwartete Ergebnisse und Ausblick}
+\label{sec:outlook}
+
+Kurzfristig erwartet: die Inbetriebnahme der Sensorhardware und damit der
+Übergang von der konstanten Annahme $I=5\,\mathrm A$ auf einen
+\textbf{real gemessenen Stromverlauf $I(t)$}, der den thermischen Zwilling
+zur Laufzeit speist (Abschnitt~\ref{sec:realtime_input}); daraus eine reale
+Aufheiz-\emph{und} Abkühlkurve, die das bislang unteridentifizierte
+RC-Netzwerk (insbesondere den gemeinsamen Luftknoten und die
+Zwei-Knoten-Aufteilung der Spule) erstmals identifizierbar macht und damit
+die derzeit offene Transientenabweichung (Abschnitt~\ref{sec:limitations})
+schließen soll -- die Temperaturseite dieser Kurven wird dabei
+berührungslos per IR-Kamera erfasst, mit mattschwarzem Messfleck auf der
+Scheibenunterseite als Abhilfe gegen die Emissivitätsunsicherheit; sowie
+eine veröffentlichte AR-Ansicht mit QR-Code, aufrufbar ohne Installation. Mittelfristig: eine dichtere Kalibriertabelle
+Stelldrehwinkel~$\to$~Strom und eine belastbarere Bestimmung der
+Eisenpermeabilität zur Klärung der in Abschnitt~\ref{sec:limitations}
+genannten Hubkraft-Frage.
+
+
+\section{Offene Fragen und Grenzen}
+\label{sec:limitations}
+
+Im Sinne wissenschaftlicher Transparenz: Die vorhergesagte
+Levitationshöhe ($z_{\mathrm{eq}}\approx11{,}7$--$14{,}7\,\mathrm{mm}$)
+stimmt nicht mit dem beobachteten Spalt ($7$--$8\,\mathrm{mm}$) überein;
+magnetische Sättigung wurde als Ursache ausgeschlossen (Kraftänderung
+$<0{,}1\,\%$), wahrscheinlichste Ursache ist der unvermessene
+$\mu_r$-Platzhalterwert des Eisens. Eine willkürliche Rückwärtsanpassung
+von $\mu_r$ an die beobachtete Höhe wurde bewusst \emph{nicht}
+vorgenommen. Der Original-TEAM-28-Benchmark (ohne Eisen, $20\,\mathrm A$)
+weicht ebenfalls $\approx28\,\%$ von der Referenztabelle ab -- pausiert,
+nicht blockierend.
+
+\textbf{Transientenabweichung der Spule.} Der in
+Tabelle~\ref{tab:transient} dokumentierte Fehler von
+$\mathrm{RMS}=11{,}5\,^\circ$C ist die derzeit größte offene Diskrepanz
+des thermischen Modells. Ihre Ursache ist bekannt und nachvollziehbar: Die
+Spule wird als Zwei-Knoten-Körper modelliert (IR-sichtbare Oberfläche plus
+träges Wicklungsinneres). In einer früheren Modellversion wurde die
+gesamte ohmsche Verlustleistung auf den Oberflächenknoten gelegt, der nur
+$22{,}4\,\%$ der Wärmekapazität trägt -- das ergab eine gut zur Messung
+passende, aber physikalisch unbegründete Aufheizrate. Die Verlustleistung
+wird inzwischen massenproportional auf beide Knoten verteilt, was den
+stationären Zustand beweisbar unverändert lässt, die anfängliche
+Aufheizrate jedoch um den Faktor $\approx4{,}5$ senkt. Das Modell ist
+seither physikalisch konsistenter, trifft die gemessene Rampe aber
+schlechter. Die dafür maßgeblichen Parameter (Kapazitätsaufteilung
+\texttt{coil\_C\_scale}, innere Kopplung \texttt{coil\_G\_wind}) sind aus
+einer reinen Aufheizmessung nicht eindeutig bestimmbar -- sie erfordern
+zusätzlich eine \emph{Abkühlkurve}, die noch aussteht. Bis dahin gilt: der
+stationäre Zustand ist validiert, der Zeitverlauf ausdrücklich nicht.
+
+Ohne diese Abkühlkurve bleibt zudem der gemeinsame
+Luftknoten des RC-Netzwerks unteridentifiziert. Ebenfalls offen: Im
+Modell erreichen Scheibe und Spule annähernd dieselbe Temperatur, während
+die IR-Daten eine deutlich heißere Spule nahelegen; entschieden werden
+kann das erst mit einer vertrauenswürdigen Ablesung an der
+Scheibenunterseite, also mit dem oben genannten mattschwarzen Messfleck.
+Schließlich ist die $\sigma(T)$-Rückkopplung der Spule
+derzeit nur implizit über den $hA$-Fit enthalten
+(Anmerkung~\ref{rem:sigma}).
+
+
+\section{Zusammenfassung}
+\label{sec:conclusion}
+
+Das Projekt verfolgt einen physikalisch begründeten Weg zu einem
+echtzeitfähigen digitalen Zwilling: Eine einmalige, hochauflösende
+FEM-Lösung wird über $I^2$-Skalierung und ein kalibrierbares
+Reduced-Order-Model auf Millisekunden-Laufzeit reduziert -- eine Struktur,
+die mit gekapselten kommerziellen CAE-Werkzeugen nur schwer umsetzbar
+ist. Jede Änderung am Modell wird ausschließlich über harte,
+automatisierte physikalische Kriterien freigegeben (Energiebilanz,
+$I^2$-Konsistenz). Erste
+Kalibrierungsergebnisse an der Spulentemperatur bestätigen die
+Tragfähigkeit des Modells; die Levitationshöhe bleibt als offene
+physikalische Frage bestehen und wird mit der geplanten Sensorhardware
+weiter untersucht.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\appendices
+
+\section{Vollständige Herleitung der physikalischen Gleichungen}
+\label{app:derivation}
+
+Die axisymmetrische Schwachform der Wärmeleitungsgleichung mit
+Volumengewicht $2\pi r$ lautet
+\begin{multline*}
+  \int k\,\nabla T\!\cdot\!\nabla v \cdot 2\pi r \,\mathrm dA
+  + \oint_\Gamma h\,T\,v\cdot 2\pi r\,\mathrm ds \\
+  = \int p\,v\cdot 2\pi r\,\mathrm dA
+  + \oint_\Gamma h\,T_\infty\,v\cdot 2\pi r\,\mathrm ds .
+\end{multline*}
+Für P1-Elemente ist $\nabla T$ elementweise konstant, sodass die
+Elementsteifigkeitsmatrix
+$K_e = 2\pi k\,(bb^\top+cc^\top)\,A\,r_c$ direkt aus den Formfunktionsgradienten
+$b,c$, der Elementfläche $A$ und dem Schwerpunktradius $r_c$ folgt. Die
+Konvektionsrandmatrix mit linearer Radiusgewichtung ergibt sich zu
+$K_{\mathrm{edge}} = 2\pi h\,\tfrac{L}{12}
+\left(\begin{smallmatrix} 3r_a+r_b & r_a+r_b \\ r_a+r_b & r_a+3r_b\end{smallmatrix}\right)$.
+Im \emph{thermischen} Teilproblem ist die Achse $r=0$ eine
+Symmetriebedingung und bleibt als natürliche Randbedingung unerzwungen
+(Randkanten auf der Achse werden bei der Konvektionsassemblierung
+übersprungen). Im \emph{elektromagnetischen} Teilproblem gilt das
+\textbf{nicht}: Dort wird auf der Achse $A_\varphi=0$ als
+Dirichlet-Bedingung explizit gesetzt, da die azimutale Komponente des
+Vektorpotentials bei $r\to0$ physikalisch verschwinden muss. Für dieses
+Teilproblem folgt analog eine
+Steifigkeitsmatrix aus Gl.~\eqref{eq:em}. Der Term $j\omega\sigma$ macht
+sie komplexwertig; sie wird als \emph{eine} komplexe Matrix assembliert
+und direkt in komplexer Arithmetik faktorisiert (keine Aufspaltung in
+Real- und Imaginärteilsystem). Die magnetische Flussdichte ergibt sich
+aus $B_r=-\partial A_\varphi/\partial z$,
+$B_z=\tfrac1r\,\partial(rA_\varphi)/\partial r$.
+
+Physikalisch beschreibt Gl.~\eqref{eq:em} das AC-Feld: Der Term $j\omega\sigma
+A_\varphi$ ist die Wirbelstromreaktion in jedem leitfähigen Körper
+(Scheibe, Eisen); der Term $\nu A_\varphi/r^2$ ist der geometrische Effekt
+der Achsensymmetrie und der Grund, warum 2D statt 3D genügt. Bei
+$I_{\mathrm{rms}}=5\,\mathrm A$ durch die $1000$-Windungen-Innenspule
+beträgt $B_{\max}$ im Eisenkern $0{,}663\,\mathrm T$ als Effektivwert,
+entsprechend einem Spitzenwert von $\approx0{,}94\,\mathrm T$ -- gegenüber
+$B_{\mathrm{sat}}=1{,}5\,\mathrm T$ also unsaturiert (vgl.
+Abschnitt~\ref{sec:validation}).
+
+\section{Vollständige Softwarepipeline}
+\label{app:software}
+
+Tabelle~\ref{tab:modules} beantwortet explizit, welche Bibliothek welche
+Gleichung mit welcher numerischen Methode löst -- ergänzend zu
+Abbildung~\ref{fig:pipeline} (Datenfluss) und Anhang~\ref{app:derivation}
+(Herleitung der Gleichungen selbst).
+
+\begin{table}[h]
+\centering\scriptsize
+\caption{Kernmodule der Softwarepipeline: gelöste Gleichung und
+numerische Methode je Datei.}
+\label{tab:modules}
+\begin{tabularx}{\linewidth}{@{}p{1.6cm} X X@{}}
+\toprule
+Datei & Löst & Methode \\
+\midrule
+\url{config.py} & Parameter laden/normieren (mm$\to$m), $I_{\mathrm{peak}}=I_{\mathrm{rms}}\sqrt2$ & PyYAML; Datenklassen, kein Gleichungslöser \\
+\url{em_solver.py} & Gl.~\eqref{eq:em} $\to$ Gl.~\eqref{eq:loss}, Hubkraft & \url{scipy.sparse.linalg.spsolve} (komplex, LU) \\
+\url{thermal_solver.py} & Gl.~\eqref{eq:fourier}, stationär & \url{scipy.sparse.linalg.spsolve} (reell, SPD) \\
+\url{rom.py} & $\tau{=}C/UA$ aus $\hat P,\Delta\hat T$; Verifikations-ODE & \url{scipy.integrate.solve_ivp} \\
+\url{twin_core.py} & RC-Netzwerk (Spule/Eisen/Luft); Levitation & explizites Euler, $n_{\mathrm{sub}}{=}\lceil\Delta t/(0{,}05\tau)\rceil$; Levitation geschlossen gelöst \\
+\url{refit_hA.py} & Nullstelle von $T_{\mathrm{ss}}(hA)-T_{\mathrm{meas}}$ & \url{scipy.optimize.fsolve} \\
+\url{xval_twin.py} & -- (Software-Verifikation) & Playwright: Python- vs.\ JS-Integrator, $|\Delta|{<}10^{-9}$ \\
+\url{build_twin_html_fem.py} & bake: identische Formeln in JavaScript & -- \\
+\url{data_io.py} & Sensorbrücke $\to$ \url{TwinState.step(I,dt)} & seriell/Mock-CSV-Parser (NumPy) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Algorithmisch gliedert sich die Pipeline exakt in die zwei Stufen aus
+Abschnitt~\ref{sec:concept}: \textbf{Offline} lösen \url{em_solver.py}
+und \url{thermal_solver.py} je ein lineares Gleichungssystem
+\emph{einmal direkt} (LU-Zerlegung, keine Iteration) und liefern
+$\hat q(r,z)$, $\hat P_{\mathrm{Cu}}$ sowie $\tau$. \textbf{Online}
+integriert \url{twin_core.py} das resultierende RC-Netzwerk mit einem
+handgeschriebenen expliziten Euler-Verfahren -- gewählt, weil erst die
+Bibliotheksfreiheit (\texttt{numpy+stdlib only}) den späteren
+Browser-Export nach JavaScript ermöglicht; die Schrittweite wird pro
+Aufruf automatisch in $n_{\mathrm{sub}}$ Teilschritte von höchstens
+$5\,\%$ von $\tau$ geteilt, damit das Verfahren auch bei großen
+$\Delta t$ (z.\,B. Zeitraffer) numerisch stabil bleibt. Einzige Ausnahme
+ist die Levitationsdynamik: Ihre Bewegungsgleichung (gedämpfter
+Feder-Masse-Schwinger) besitzt eine exakte analytische Lösung und wird
+deshalb bei jedem Aufruf direkt ausgewertet, nicht iterativ integriert.
+
+\bibliographystyle{IEEEtran}
+\bibliography{dt4tm_references}
+
+\end{document}

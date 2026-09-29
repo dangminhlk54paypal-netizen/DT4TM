@@ -21,7 +21,7 @@ Output:
     digital_twin_fem.html   (standalone, double-click to run)
 """
 from __future__ import annotations
-import sys, os, struct, base64, json, math, copy
+import sys, os, struct, base64, json, math, copy, datetime
 import numpy as np
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 
@@ -29,19 +29,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 
-def _load_google_weather_key() -> str:
-    """Read GOOGLE_WEATHER_API_KEY from local/.env.local (gitignored folder,
-    repo root) if present, else from the environment, else fall back to the
-    placeholder. Keeps the real secret out of this tracked script and out of
-    the baked HTML unless a local secret file / env var is explicitly provided."""
-    env_path = os.path.join(HERE, "local", ".env.local")
-    if os.path.isfile(env_path):
-        with open(env_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("GOOGLE_WEATHER_API_KEY="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return os.environ.get("GOOGLE_WEATHER_API_KEY", "YOUR_KEY_HERE")
+# Single key loader (local/.env.local -> env -> placeholder) lives in weather_api.py.
+from weather_api import load_key as _load_google_weather_key
 
 from config import load_config, Geometry
 from em_solver import compute_losses, compute_lift_force
@@ -222,6 +211,37 @@ def lev_params(cfg) -> dict:
         # mains frequency ever changes.
         "lev_ripple_display_gain": float(lv.get("lev_ripple_display_gain", 0.0)),
         "mains_omega_rad_s": 2.0 * math.pi * float(cfg.freq),
+    }
+
+
+def ambient_presets(cfg) -> list:
+    """Fixed-ambient choices for the HTML's T_amb selector (the third choice,
+    Live, is the Google Weather reading). Both values come from params.yaml:
+    thermal_bc.T_ambient_degC = the reference the FEM/ROM is solved at, and
+    validation_data.thermal_at_7p8A.ambient_C = the lab during the IR session
+    the coil hA values are calibrated against."""
+    T_ref = float(cfg.raw["thermal_bc"]["T_ambient_degC"])
+    presets = [{"key": "ref", "value": T_ref,
+                "note": "model reference (thermal_bc.T_ambient_degC)"}]
+    lab = cfg.raw.get("validation_data", {}).get("thermal_at_7p8A", {}).get("ambient_C")
+    if lab is not None and float(lab) != T_ref:
+        presets.append({"key": "lab", "value": float(lab),
+                        "note": "lab during the IR calibration session (validation_data)"})
+    return presets
+
+
+def live_sensor_params(cfg) -> dict:
+    """params.yaml live_sensor block for the HTML's Sensor excitation mode —
+    the same knobs digital_twin_live.py reads, so both live paths condition
+    the measured current identically."""
+    from twin_model import i_max_for   # lazy: twin_model imports this module too
+    ls = cfg.raw.get("live_sensor") or {}
+    return {
+        "baudrate": int(ls.get("baudrate", 9600)),
+        "deadband_A": float(ls.get("deadband_A", 0.2)),
+        "stale_after_s": float(ls.get("stale_after_s", 3.0)),
+        "max_gap_s": float(ls.get("max_gap_s", 10.0)),
+        "i_max_A": float(i_max_for(cfg)),
     }
 
 
@@ -1022,6 +1042,9 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     psup = power_supply_params(cfg)
     params = {"rom": rom_params, "lumped": lumped, "field_lines": field_lines, "lev": lev,
               "power_supply": psup,
+              # 2026-09-27: T_amb selector presets + Sensor-mode conditioning.
+              "ambient_presets": ambient_presets(cfg),
+              "live_sensor": live_sensor_params(cfg),
               # WP-HTML (2026-07-10): bake turn counts + the disc heat-ramp ceiling
               # from params.yaml instead of hardcoding them as JS/HTML literals.
               "coils_inner_turns": int(cfg.coils["inner"]["turns"]),
@@ -1095,11 +1118,20 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     # -- the previous unconditional call baked a real live key into this tracked
     # output file. Only --bake-key opts into embedding a real key, with a loud
     # warning so it's obvious the resulting file must not be committed as-is.
+    # Expiry (params.yaml weather_api.key_valid_until, inclusive): past that date
+    # the real key is never baked, and the baked JS itself also stops calling the
+    # API, so a copy made before the cutoff goes quiet once the date passes.
+    key_valid_until = str(cfg.raw.get("weather_api", {}).get("key_valid_until", "1970-01-01"))
+    key_expired = datetime.date.today() > datetime.date.fromisoformat(key_valid_until)
+    if bake_key and key_expired:
+        print(f"\n[weather] key expired (valid until {key_valid_until}) — "
+              f"baking the placeholder instead")
+        bake_key = False
     if bake_key:
         google_key = _load_google_weather_key()
         if google_key and google_key != "YOUR_KEY_HERE":
-            print(f"\n⚠️  Baking a REAL API key into {out_path} — "
-                  f"do not commit this file while it contains a real key")
+            print(f"\n⚠️  Baking a REAL API key into {out_path} (valid until "
+                  f"{key_valid_until}) — do not commit this file while it contains a real key")
     else:
         google_key = "YOUR_KEY_HERE"
 
@@ -1110,7 +1142,10 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
             .replace("__DTAIR_B64__", dtair_b64)
             .replace("__JE_B64__",    je_b64)
             .replace("__PARAMS__",    json.dumps(params))
-            .replace("__GOOGLE_WEATHER_KEY__", google_key))
+            .replace("__GOOGLE_WEATHER_KEY__", google_key)
+            .replace("__GOOGLE_WEATHER_KEY_VALID_UNTIL__", key_valid_until)
+            .replace("__WEATHER_LAT__", repr(float(cfg.raw.get("weather_api", {}).get("lat", 49.8728))))
+            .replace("__WEATHER_LON__", repr(float(cfg.raw.get("weather_api", {}).get("lon", 8.6512)))))
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -1125,112 +1160,159 @@ TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Digital Twin — TEMF Thermal Levitator</title>
+<title>Digital Twin for Thermal Management — TEMF Levitator</title>
 <style>
+/* Design tokens. Values are tuned for long viewing: low-saturation text,
+   one accent, semantic colours only on numbers that carry meaning. */
 :root{
-  --bg:#0f0f1e; --panel-bg:rgba(10,10,22,.72); --panel-border:#2a3050;
-  --text:#ccc; --accent:#7ab4ff; --muted:#9ab;
-  --hdr-bg:linear-gradient(135deg,rgba(14,16,30,.94),rgba(20,26,48,.88));
+  --bg:#0d0f1a; --panel-bg:rgba(14,17,30,.80); --panel-border:rgba(130,150,200,.16);
+  --text:#dde3f0; --muted:#8e98b0; --faint:#626c86; --accent:#8fb6ff;
+  --hover:rgba(143,182,255,.08); --chip:rgba(143,182,255,.07);
+  --hdr-bg:rgba(13,15,26,.86);
+  --c-hot:#ffc266; --c-ok:#7fd8a0; --c-air:#f0a868; --c-gap:#9fcdf5;
+  --c-b:#8fb6ff; --c-j:#e6cf72; --c-coil:#f59a62; --c-warn:#ff7a7a;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,Roboto,sans-serif;
 }
 body.light{
-  --bg:#eef1f8; --panel-bg:rgba(255,255,255,.78); --panel-border:#c4cce4;
-  --text:#1c2333; --accent:#1d5fd6; --muted:#5a6478;
-  --hdr-bg:linear-gradient(135deg,rgba(255,255,255,.94),rgba(238,242,250,.9));
+  --bg:#eef1f7; --panel-bg:rgba(255,255,255,.86); --panel-border:rgba(40,60,110,.14);
+  --text:#1c2333; --muted:#566079; --faint:#8a93a8; --accent:#2a62d4;
+  --hover:rgba(42,98,212,.07); --chip:rgba(42,98,212,.06);
+  --hdr-bg:rgba(255,255,255,.88);
+  --c-hot:#c27a00; --c-ok:#1f8a4c; --c-air:#b8621e; --c-gap:#2a7ab8;
+  --c-b:#2a62d4; --c-j:#9a7a00; --c-coil:#c4561b; --c-warn:#d23b3b;
 }
 *{box-sizing:border-box}
 body{margin:0;overflow:hidden;background:var(--bg);color:var(--text);
-     font-family:'Segoe UI',Tahoma,sans-serif;font-size:13px;transition:background .25s}
+     font-family:var(--font);font-size:12.5px;line-height:1.4;
+     -webkit-font-smoothing:antialiased;transition:background .25s}
 
 /* ── Header bar ──────────────────────────────────────────────────────────── */
-#headerBar{position:fixed;top:0;left:0;right:0;height:54px;z-index:30;
+#headerBar{position:fixed;top:0;left:0;right:0;height:48px;z-index:30;
   display:flex;align-items:center;justify-content:space-between;gap:14px;
-  padding:0 18px;background:var(--hdr-bg);border-bottom:1px solid var(--panel-border);
-  backdrop-filter:blur(12px);color:var(--text)}
+  padding:0 16px;background:var(--hdr-bg);border-bottom:1px solid var(--panel-border);
+  backdrop-filter:blur(14px);color:var(--text)}
 .brand{display:flex;align-items:center;gap:10px;min-width:0}
-.brand .logo{font-size:1.35rem;line-height:1}
-.brand .titles{display:flex;flex-direction:column;line-height:1.15;min-width:0}
-.brand .title{font-weight:600;font-size:.92rem;color:var(--accent);white-space:nowrap}
-.brand .subtitle{font-size:.68rem;color:var(--muted);white-space:nowrap}
+.brand .logo{font-size:1.15rem;line-height:1;opacity:.9}
+.brand .titles{display:flex;flex-direction:column;line-height:1.2;min-width:0}
+.brand .title{font-weight:600;font-size:13.5px;color:var(--text);letter-spacing:.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand .subtitle{font-size:11px;color:var(--faint);white-space:nowrap}
 .hdr-mid{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.hdr-badge{font-size:.68rem;padding:3px 9px;border-radius:12px;border:1px solid var(--panel-border);
-  background:rgba(127,127,160,.08);color:var(--muted);white-space:nowrap}
+.hdr-badge{font-size:11px;padding:2px 9px;border-radius:10px;background:var(--chip);
+  color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .hdr-right{display:flex;align-items:center;gap:8px}
-.iconbtn{background:none;border:1px solid var(--panel-border);color:var(--text);
-  border-radius:6px;padding:6px 10px;cursor:pointer;font-size:.78rem;white-space:nowrap}
-.iconbtn:hover{border-color:var(--accent)}
+.iconbtn{background:none;border:1px solid var(--panel-border);color:var(--muted);
+  border-radius:6px;padding:5px 10px;cursor:pointer;font-size:11.5px;white-space:nowrap}
+.iconbtn:hover{color:var(--text);border-color:var(--accent)}
 
-#ui{position:absolute;top:66px;left:12px;display:flex;gap:14px;
-    pointer-events:none;z-index:10}
-.panel{background:var(--panel-bg);padding:0;border-radius:12px;
-       border:1px solid var(--panel-border);pointer-events:auto;backdrop-filter:blur(12px);
-       box-shadow:0 8px 24px rgba(0,0,0,.35);width:260px;overflow:hidden;
-       transition:width .3s ease,background .25s,border-color .25s}
-.panel-head{margin:0;font-size:.95rem;color:var(--accent);
-   border-bottom:1px solid var(--panel-border);padding:12px 16px;cursor:pointer;
-   display:flex;justify-content:space-between;align-items:center;user-select:none;gap:10px}
+/* ── Panels: controls on the LEFT, readouts on the RIGHT, model free in the middle */
+.ui-col{position:absolute;top:58px;display:flex;flex-direction:column;gap:10px;
+  max-height:calc(100vh - 68px);overflow-y:auto;overflow-x:hidden;
+  pointer-events:none;z-index:10;scrollbar-width:thin;scrollbar-color:var(--panel-border) transparent}
+.ui-col::-webkit-scrollbar{width:4px}
+.ui-col::-webkit-scrollbar-thumb{background:var(--panel-border);border-radius:2px}
+#uiLeft{left:12px;align-items:flex-start}
+#uiRight{right:12px;align-items:flex-end}
+.panel{background:var(--panel-bg);border-radius:10px;flex:none;
+  border:1px solid var(--panel-border);pointer-events:auto;backdrop-filter:blur(14px);
+  box-shadow:0 6px 20px rgba(0,0,0,.28);width:252px;overflow:hidden;
+  transition:width .25s ease,background .25s,border-color .25s}
+.panel-head{margin:0;padding:9px 12px;cursor:pointer;user-select:none;
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+  font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);border-bottom:1px solid var(--panel-border)}
+.panel-head:hover{color:var(--text);background:var(--hover)}
 .panel-head span:first-child{white-space:nowrap}
-.panel-head .chev{font-size:.75rem;color:var(--muted);transition:transform .2s}
+.panel-head .chev{font-size:10px;color:var(--faint);transition:transform .2s}
+.panel.collapsed .panel-head{border-bottom-color:transparent}
 .panel.collapsed .chev{transform:rotate(-90deg)}
 .panel.collapsed .panel-body{display:none}
-.panel-body{padding:14px 16px;max-height:calc(100vh - 100px);overflow-y:auto}
-#ui{transition:top .3s ease}
-#ui.pulled-up{top:58px}   /* just under #headerBar (54px tall) -- never overlap it */
-.cg{margin-bottom:10px}
-.cg label{display:flex;justify-content:space-between;margin-bottom:4px;
-          font-size:.82rem;color:var(--muted)}
-input[type=range]{width:100%;cursor:pointer;accent-color:#4facfe}
-.row{display:flex;justify-content:space-between;margin-bottom:6px;
-     font-size:.82rem;align-items:center;color:var(--text)}
-.box{width:13px;height:13px;border-radius:3px;margin-right:7px;
-     display:inline-block;vertical-align:middle}
-.val{font-family:monospace;font-weight:bold;font-size:.95rem;color:var(--text)}
-.valbig{font-family:monospace;font-weight:bold;font-size:1.2rem;color:#ffcc44}
-.note{font-size:.72rem;color:var(--muted);line-height:1.4;margin-top:8px}
-.badge{display:inline-block;background:#1a3a1a;color:#66ff88;
-       border:1px solid #44aa44;border-radius:4px;padding:2px 7px;
-       font-size:.75rem;margin-top:4px}
-/* scenario buttons */
-.sc-group{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px}
-.sc-btn{flex:1;background:rgba(127,127,160,.08);color:var(--muted);border:1px solid var(--panel-border);
-        border-radius:5px;padding:4px 0;cursor:pointer;font-size:.78rem;
-        transition:all .15s}
-.sc-btn.active{background:#1e3a5f;color:#7ab4ff;border-color:#4facfe}
-button#reset{width:100%;background:#2a1a1a;color:#f88;border:1px solid #633;
-             border-radius:5px;padding:5px;cursor:pointer;font-size:.8rem}
-.export-row{display:flex;gap:6px;margin-top:8px}
-.export-row .sc-btn{padding:6px 0}
-#chart,#chartI{background:#0a0a14;border-radius:6px;border:1px solid var(--panel-border);
-       display:block;margin-top:8px;width:100%}
-.chart-legend{display:flex;gap:10px;font-size:.68rem;color:var(--muted);margin-top:4px;flex-wrap:wrap}
-.chart-legend i{display:inline-block;width:11px;height:0;border-top:2px solid;margin-right:4px;vertical-align:middle}
+.panel-body{padding:10px 12px 12px}
+.sec{font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--faint);margin:12px 0 6px}
+.sec:first-child{margin-top:0}
+.cg{margin-bottom:8px}
+.cg label{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px;
+  font-size:12px;color:var(--muted)}
+input[type=range]{width:100%;margin:2px 0;cursor:pointer;accent-color:var(--accent)}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  padding:2px 0;font-size:12px;color:var(--muted)}
+.row .sub{font-size:10.5px;color:var(--faint);font-style:italic}
+.box{width:9px;height:9px;border-radius:2px;margin-right:6px;display:inline-block}
+.val{font-weight:600;font-size:12.5px;color:var(--text);font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.valbig{font-weight:600;font-size:20px;line-height:1.1;color:var(--c-hot);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.hero{display:flex;justify-content:space-between;align-items:center;padding:2px 0 4px}
+.hero .lbl{font-size:12px;color:var(--muted)}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.kv > div{background:var(--chip);border-radius:6px;padding:5px 8px;min-width:0}
+.kv .k{display:block;font-size:10.5px;color:var(--faint)}
+.kv .val{display:block;overflow:hidden;text-overflow:ellipsis}
+.note{font-size:11px;color:var(--faint);font-style:italic;line-height:1.45;margin:6px 0 0}
+details.more{margin-top:8px}
+details.more summary{cursor:pointer;font-size:11px;color:var(--faint);list-style:none}
+details.more summary::-webkit-details-marker{display:none}
+details.more summary::before{content:"ⓘ  "}
+details.more summary:hover{color:var(--muted)}
+details.more p{font-size:11px;color:var(--muted);line-height:1.5;margin:6px 0 0}
+/* segmented buttons */
+.sc-group{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.sc-btn{flex:1;background:var(--chip);color:var(--muted);border:1px solid transparent;
+  border-radius:6px;padding:4px 0;cursor:pointer;font-size:11.5px;font-family:inherit;
+  transition:background .15s,color .15s,border-color .15s}
+.sc-btn:hover{color:var(--text)}
+.sc-btn.active{background:rgba(143,182,255,.16);color:var(--accent);border-color:rgba(143,182,255,.35)}
+body.light .sc-btn.active{background:rgba(42,98,212,.12);border-color:rgba(42,98,212,.35)}
+button#reset{width:100%;background:none;color:var(--c-warn);border:1px solid rgba(255,122,122,.35);
+  border-radius:6px;padding:5px;cursor:pointer;font-size:11.5px;font-family:inherit}
+button#reset:hover{background:rgba(255,122,122,.08)}
+.sc-btn:disabled,input[type=range]:disabled{opacity:.4;cursor:not-allowed}
+.sc-group.locked{opacity:.4;pointer-events:none}
+.sensor-stat{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin:2px 0 6px}
+.sensor-stat .val{margin-left:auto}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.dot.live{background:var(--c-ok);box-shadow:0 0 6px var(--c-ok)}
+.dot.stale{background:var(--c-hot)}
+.dot.error{background:var(--c-warn)}
+.export-row{display:flex;gap:4px;margin-top:8px}
+.export-row .sc-btn{padding:5px 0}
+#chart,#chartI{background:rgba(0,0,0,.28);border-radius:6px;border:1px solid var(--panel-border);
+  display:block;margin-top:4px;width:100%}
+.chart-legend{display:flex;gap:4px 10px;font-size:10.5px;color:var(--muted);margin-top:5px;flex-wrap:wrap}
+.chart-legend i{display:inline-block;width:10px;height:0;border-top:2px solid;margin-right:4px;vertical-align:middle}
 .chart-tip{position:fixed;background:rgba(0,0,0,.85);color:#fff;padding:4px 8px;
-  border-radius:4px;font-size:.72rem;pointer-events:none;z-index:60;display:none;
-  border:1px solid #456;font-family:monospace}
-#scaleBar{margin-top:10px;height:14px;border-radius:4px;position:relative;
-          background:linear-gradient(to right,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000)}
-#scaleBar .marker{position:absolute;top:-3px;width:2px;height:20px;background:#fff;
-  box-shadow:0 0 3px #000}
-.scaleLabel{display:flex;justify-content:space-between;
-            font-size:.68rem;color:var(--muted);margin-top:3px}
-hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
+  border-radius:4px;font-size:11px;pointer-events:none;z-index:60;display:none;
+  border:1px solid #456;font-variant-numeric:tabular-nums}
+#scaleBar{margin-top:4px;height:8px;border-radius:4px;position:relative;
+  background:linear-gradient(to right,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000)}
+#scaleBar .marker{position:absolute;top:-3px;width:2px;height:14px;background:#fff;
+  box-shadow:0 0 2px #000}
+.scaleLabel{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);
+  margin-top:3px;font-variant-numeric:tabular-nums}
+.scale-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px}
+.scale-foot .sc-btn{flex:none;padding:3px 10px}
+hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
 
 /* ── 3D labels (CSS2DRenderer) ───────────────────────────────────────────── */
-.label3d{font-family:'Segoe UI',Tahoma,sans-serif;font-size:11px;color:#cfe3ff;
-  background:rgba(10,15,30,.6);padding:3px 9px;border-radius:10px;
-  border:1px solid rgba(122,180,255,.35);white-space:nowrap;
+.label3d{font-family:var(--font);font-size:10.5px;color:#d6e4ff;
+  background:rgba(10,14,28,.62);padding:2px 8px;border-radius:9px;
+  border:1px solid rgba(143,182,255,.28);white-space:nowrap;
   transform:translate(-50%,-100%);pointer-events:none}
-.label3d.iron{color:#ffd9a8;border-color:rgba(255,170,80,.4)}
+.label3d.iron{color:#ffdcb0;border-color:rgba(255,170,80,.35)}
 
-#pausedBadge{position:fixed;top:64px;left:50%;transform:translateX(-50%);
-  background:rgba(255,80,80,.15);color:#ff8888;border:1px solid #ff8888;
-  border-radius:6px;padding:4px 14px;font-size:.78rem;letter-spacing:.05em;
+#pausedBadge{position:fixed;top:58px;left:50%;transform:translateX(-50%);
+  background:rgba(255,122,122,.12);color:var(--c-warn);border:1px solid rgba(255,122,122,.45);
+  border-radius:6px;padding:3px 12px;font-size:11.5px;letter-spacing:.04em;
   z-index:25;display:none}
 
 @media (max-width:760px){
-  #headerBar{height:auto;flex-wrap:wrap;padding:8px 12px;gap:6px}
+  body{overflow-y:auto;overflow-x:hidden}
+  #headerBar{position:sticky;height:auto;flex-wrap:wrap;padding:8px 12px;gap:6px}
+  .brand .title{white-space:normal}
   .hdr-mid{order:3;width:100%}
-  #ui{flex-direction:column;top:auto;position:relative;left:0;margin:90px 10px 10px;
-      pointer-events:auto}
+  .ui-col,#uiLeft,#uiRight{position:relative;top:auto;left:auto;right:auto;max-height:none;overflow:visible;
+    margin:10px;align-items:stretch;pointer-events:auto}
   .panel{width:100%}
 }
 </style></head><body>
@@ -1239,13 +1321,13 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
   <div class="brand">
     <span class="logo">🧲</span>
     <div class="titles">
-      <span class="title">Digital Twin — TEMF Thermal Levitator</span>
+      <span class="title">Digital Twin for Thermal Management — TEMF Levitator</span>
       <span class="subtitle">Real-time thermal simulation · TEAM 28</span>
     </div>
   </div>
   <div class="hdr-mid">
     <span class="hdr-badge">FEM ROM (axisymmetric)</span>
-    <span class="hdr-badge" id="tAmbBadge">T_amb = 29 °C</span>
+    <span class="hdr-badge" id="tAmbBadge">T_amb = 20 °C</span>
     <span class="hdr-badge" id="hdrIBadge">I = 5.00 A</span>
   </div>
   <div class="hdr-right">
@@ -1254,24 +1336,35 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
 </div>
 <div id="pausedBadge">⏸ PAUSED — press Space to resume</div>
 
-<div id="ui">
+<div id="uiLeft" class="ui-col">
   <!-- Panel 1: Controls -->
   <div class="panel" id="panelControls">
     <div class="panel-head"><span>Physics Controls</span><span class="chev">▾</span></div>
     <div class="panel-body">
+    <div class="sec">Scenario</div>
     <div class="sc-group" id="scGroup">
-      <button class="sc-btn active" data-sc="quickstart">Quickstart</button>
+      <button class="sc-btn active" data-sc="quickstart">Quick</button>
       <button class="sc-btn" data-sc="step">Step</button>
       <button class="sc-btn" data-sc="ramp">Ramp</button>
       <button class="sc-btn" data-sc="sine">Sine</button>
       <button class="sc-btn" data-sc="pulse">Pulse</button>
     </div>
+    <div class="sec">Excitation</div>
     <div class="sc-group" id="inputModeGroup">
       <button class="sc-btn active" data-mode="amps">Amps</button>
-      <button class="sc-btn" data-mode="dial">Variac Dial</button>
+      <button class="sc-btn" data-mode="dial">Variac dial</button>
+      <button class="sc-btn" data-mode="sensor">Sensor</button>
     </div>
-    <div style="font-size:.78rem;color:var(--muted);margin:2px 0 4px">Disc radius (compare mode)</div>
-    <div class="sc-group" id="plateGroup"></div>
+    <div class="cg" id="sensorGroup" style="display:none">
+      <div class="sensor-stat"><span class="dot" id="sensorDot"></span>
+        <span id="sensorState">Not connected</span><span class="val" id="sensorI">— A</span></div>
+      <div class="sc-group" style="margin-bottom:4px">
+        <button class="sc-btn" id="btnSerial">Connect Arduino</button>
+        <button class="sc-btn" id="btnSensorDemo">Demo signal</button>
+      </div>
+      <p class="note" id="sensorNote">Measured I<sub>rms</sub> (ACS712 → Arduino, 1 Hz) drives the
+        model in real time. Temperatures stay model predictions.</p>
+    </div>
     <div class="cg" id="ampsGroup">
       <label><span>Current I</span><span id="vI" class="val">5.0 A</span></label>
       <input type="range" id="sI" min="0" max="20" step="0.1" value="5">
@@ -1285,97 +1378,85 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
       <input type="range" id="sS" min="0" max="2.301" step="0.01" value="0">
     </div>
     <button id="reset">↺ Reset temperatures</button>
-    <div class="badge">FEM ROM (axisymmetric)</div>
-    <hr class="div">
-    <div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Heat sources</div>
-    <div class="row" style="font-size:.79rem">
-      <span>⚡ Disc eddy currents</span>
-      <span class="val" id="vPdisc" style="color:#7ab4ff">0.0 W</span></div>
-    <div class="row" style="font-size:.79rem">
-      <span>🔥 Coils (Ohmic)</span>
-      <span class="val" id="vPcoil" style="color:#ff8844">0.0 W</span></div>
-    <p class="note">
-      The disc heats up from <b>2 sources</b>, each with its OWN speed:<br>
-      ① <b>Foucault eddy currents</b> (~4K) induced in the disc — appear <i>instantly</i> with I².<br>
-      ② <b>Hot air from the coils</b> (~8K) — coils sit only 3.8mm below the disc. This part is
-      <i>slow</i>: the copper mass takes ~25min to warm, so the bottom air lags behind I².<br>
-      Total ΔT_ss ≈ 11K — hot air is the <i>dominant</i> (but delayed) heat source for the disc.
-    </p>
-    <hr class="div">
-    <div style="font-size:.78rem;color:var(--muted);margin-bottom:4px">Visualization</div>
+    <div class="sec">Ambient T<sub>amb</sub></div>
+    <div class="sc-group" id="ambGroup" style="margin-bottom:2px"></div>
+    <p class="note" id="ambNote" style="margin:0 0 4px"></p>
+    <div class="sec">Disc radius</div>
+    <div class="sc-group" id="plateGroup"></div>
+    <div class="sec">Heat sources</div>
+    <div class="row"><span>Disc eddy currents</span>
+      <span class="val" id="vPdisc" style="color:var(--c-b)">0.0 W</span></div>
+    <div class="row"><span>Coils (ohmic)</span>
+      <span class="val" id="vPcoil" style="color:var(--c-coil)">0.0 W</span></div>
+    <details class="more"><summary>Why does the disc heat up?</summary>
+      <p>Two sources with different speeds: <b>eddy currents</b> in the disc (~4 K, instant
+      with I²) and <b>hot air from the coils</b> 3.8 mm below (~8 K, slow — the copper
+      takes ~25 min to warm). Total ΔT<sub>ss</sub> ≈ 11 K; hot air dominates, but lags.</p>
+    </details>
+    <div class="sec">Visualization</div>
     <div class="sc-group" id="vizGroup">
       <button class="sc-btn active" data-viz="thermal">Thermal</button>
-      <button class="sc-btn" data-viz="bfield">🧲 B Field</button>
-      <button class="sc-btn" data-viz="eddy">⚡ Eddy J</button>
-      <button class="sc-btn" data-viz="combined">Combined</button>
+      <button class="sc-btn" data-viz="bfield">B field</button>
+      <button class="sc-btn" data-viz="eddy">Eddy J</button>
+      <button class="sc-btn" data-viz="combined">Both</button>
     </div>
     <div class="cg">
       <label><span>Field line opacity</span><span id="vFLO" class="val">70%</span></label>
       <input type="range" id="sFLO" min="0" max="100" step="1" value="70">
     </div>
-    <p class="note">⌨ Space=pause · R=reset · 1-5=scenario · +/−=speed</p>
+    <p class="note">Space pause · R reset · 1–5 scenario · +/− speed</p>
     </div>
   </div>
+</div>
 
+<div id="uiRight" class="ui-col">
   <!-- Panel 2: Telemetry -->
   <div class="panel" id="panelTelemetry">
     <div class="panel-head"><span>Thermal Telemetry</span><span class="chev">▾</span></div>
     <div class="panel-body">
-    <div class="row"><span>Room temp (T_amb)</span>
-      <span class="val" id="vTambInit">— °C</span></div>
-    <div class="row"><span>Sim time</span>
-      <span class="val" id="vT">0 s</span></div>
-    <div class="row"><span>Current I(t)</span>
-      <span class="val" id="vIC">0.0 A</span></div>
-    <div class="row"><span>Total heat in</span>
-      <span class="val" id="vP">0.0 W</span></div>
-    <hr class="div">
-    <div class="row">
-      <div><span class="box" id="bPl" style="background:#2255aa"></span>
-        <b>Plate T_max</b></div>
+    <div class="kv">
+      <div><span class="k">Sim time</span><span class="val" id="vT">0 s</span></div>
+      <div><span class="k">Current I(t)</span><span class="val" id="vIC">0.0 A</span></div>
+      <div><span class="k">Heat in</span><span class="val" id="vP">0.0 W</span></div>
+      <div><span class="k">T<sub>amb</sub></span><span class="val" id="vTambInit">— °C</span></div>
+    </div>
+    <div class="sec">Disc</div>
+    <div class="hero">
+      <span class="lbl"><span class="box" id="bPl" style="background:#2255aa"></span>T<sub>max</sub></span>
       <span class="valbig" id="tPmax">25.0 °C</span></div>
+    <div class="row"><span>T<sub>mean</sub></span><span class="val" id="tPmean">25.0 °C</span></div>
+    <div class="row"><span>T<sub>ss</sub> target</span>
+      <span class="val" id="tPss" style="color:var(--c-ok)">25.0 °C</span></div>
+    <div class="row"><span>Bottom air</span>
+      <span class="val" id="tAirBot" style="color:var(--c-air)">—</span></div>
+    <div class="row"><span>Levitation gap</span>
+      <span class="val" id="tLevGap" style="color:var(--c-gap)">0.0 mm</span></div>
+    <div class="sec">Coils &amp; iron</div>
     <div class="row">
-      <div><span>Plate T_mean</span></div>
-      <span class="val" id="tPmean">25.0 °C</span></div>
+      <span><span class="box" id="bIn"></span>Inner · <span id="lblInnerTurns">1000</span> t</span>
+      <span><span class="val" id="tIn">25.0 °C</span> <span class="sub" id="tInSS"></span></span></div>
     <div class="row">
-      <div><span>Plate T_ss (target)</span></div>
-      <span class="val" id="tPss" style="color:#44ff88">25.0 °C</span></div>
-    <div class="row" style="font-size:.68rem;color:var(--muted);line-height:1.3">
-      <span>Disc colours = <i>relative</i> scale (cool→hot within plate).
-      Bottom face runs hotter than the top as the coils' hot air builds up.</span></div>
-    <hr class="div">
+      <span><span class="box" id="bOut"></span>Outer · <span id="lblOuterTurns">500</span> t</span>
+      <span><span class="val" id="tOut">25.0 °C</span> <span class="sub" id="tOutSS"></span></span></div>
     <div class="row">
-      <div><span class="box" id="bIn"></span>Inner coil (<span id="lblInnerTurns">1000</span>t)</div>
-      <span class="val" id="tIn">25.0 °C</span>
-      <span style="font-size:.7rem;color:#ff8844" id="tInSS"></span></div>
-    <div class="row">
-      <div><span class="box" id="bOut"></span>Outer coil (<span id="lblOuterTurns">500</span>t)</div>
-      <span class="val" id="tOut">25.0 °C</span>
-      <span style="font-size:.7rem;color:#ff8844" id="tOutSS"></span></div>
-    <div class="row">
-      <div><span class="box" id="bFe"></span>Iron core</div>
+      <span><span class="box" id="bFe"></span>Iron core</span>
       <span class="val" id="tFe">25.0 °C</span></div>
-    <hr class="div">
-    <div class="row" style="font-size:.78rem">
-      <span>Bottom air T (disc)</span>
-      <span class="val" id="tAirBot" style="color:#ffaa44">—</span></div>
-    <div class="row">
-      <div>Levitation Gap</div>
-      <span class="val" id="tLevGap" style="color:#aaddff">0.0 mm</span></div>
-    <div class="row" style="font-size:.78rem" id="satRow">
-      <span>Iron core B_max</span>
-      <span class="val" id="tBmax" style="color:#88ff88">—</span></div>
-    <div class="row" style="font-size:.78rem">
-      <span>🧲 Plate |B| max</span>
-      <span class="val" id="tBplate" style="color:#7ab4ff">—</span></div>
-    <div class="row" style="font-size:.78rem">
-      <span>⚡ Disc |J_e| max</span>
-      <span class="val" id="tJmax" style="color:#ffe066">—</span></div>
+    <div class="sec">Field</div>
+    <div class="row" id="satRow"><span>Iron B<sub>max</sub> / B<sub>sat</sub></span>
+      <span class="val" id="tBmax" style="color:var(--c-ok)">—</span></div>
+    <div class="row"><span>Disc |B|<sub>max</sub></span>
+      <span class="val" id="tBplate" style="color:var(--c-b)">—</span></div>
+    <div class="row"><span>Disc |J<sub>e</sub>|<sub>max</sub></span>
+      <span class="val" id="tJmax" style="color:var(--c-j)">—</span></div>
+    <div class="sec">Colour scale</div>
     <div id="scaleBar"><div class="marker" id="scaleMarkerLo"></div><div class="marker" id="scaleMarkerHi"></div></div>
     <div class="scaleLabel" id="scaleTicks"></div>
-    <div class="row" style="font-size:.7rem;margin-top:4px">
-      <span>Current range</span><span class="val" id="scaleCurRange" style="font-size:.72rem">—</span></div>
-    <button class="sc-btn" id="scaleModeBtn" style="width:100%;margin-top:4px">Scale: Auto</button>
+    <div class="scale-foot">
+      <span class="row" style="padding:0"><span>Range&nbsp;</span><span class="val" id="scaleCurRange">—</span></span>
+      <button class="sc-btn" id="scaleModeBtn">Scale: Auto</button>
+    </div>
+    <p class="note">Disc colours are relative (cool→hot within the disc); the bottom face runs
+      hotter as the coils' hot air builds up.</p>
     </div>
   </div>
 
@@ -1383,21 +1464,21 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:8px 0}
   <div class="panel" id="panelChart">
     <div class="panel-head"><span>Time History</span><span class="chev">▾</span></div>
     <div class="panel-body">
-    <div style="font-size:.78rem;color:var(--muted);margin-bottom:2px">Temperatures vs time</div>
+    <div class="sec">Temperature</div>
     <canvas id="chart" width="228" height="150"></canvas>
     <div class="chart-legend">
-      <span><i style="border-color:#ff6644"></i>Plate T_max</span>
-      <span><i style="border-color:#ff8844"></i>Inner coil</span>
-      <span><i style="border-color:#ffcc44"></i>Outer coil</span>
-      <span><i style="border-color:#44ff88;border-top-style:dashed"></i>T_ss</span>
-      <span><i style="border-color:#5599ff;border-top-style:dashed"></i>T_amb</span>
+      <span><i style="border-color:#ff6644"></i>Disc T<sub>max</sub></span>
+      <span><i style="border-color:#ff8844"></i>Inner</span>
+      <span><i style="border-color:#ffcc44"></i>Outer</span>
+      <span><i style="border-color:#44ff88;border-top-style:dashed"></i>T<sub>ss</sub></span>
+      <span><i style="border-color:#5599ff;border-top-style:dashed"></i>T<sub>amb</sub></span>
     </div>
     <div class="note" id="tauLabel"></div>
-    <div style="font-size:.78rem;color:var(--muted);margin:8px 0 2px">I(t) — current profile</div>
+    <div class="sec">Current I(t)</div>
     <canvas id="chartI" width="228" height="80"></canvas>
     <div class="export-row">
-      <button class="sc-btn" id="btnScreenshot">📸 Screenshot</button>
-      <button class="sc-btn" id="btnExportCsv">📊 Export CSV</button>
+      <button class="sc-btn" id="btnScreenshot">Screenshot</button>
+      <button class="sc-btn" id="btnExportCsv">Export CSV</button>
     </div>
     </div>
   </div>
@@ -1425,15 +1506,14 @@ const FIELD_LINES = PARAMS.field_lines; // [{r:[mm],z:[mm],amp:[0..1]}, ...] mer
 document.getElementById('lblInnerTurns').textContent = PARAMS.coils_inner_turns;
 document.getElementById('lblOuterTurns').textContent = PARAMS.coils_outer_turns;
 
-// Display ambient temperature fallback: 29°C (measured lab condition, IR validation
-// session 2026-06-23). NOTE: physics T_ref in FEM solve is 20°C (per professor
-// guidelines: "take everything as simple as possible"); here we use 29°C as a
-// display-only fallback when live weather data is unavailable. This mismatch
-// (20°C physics vs 29°C display) is intentional: T predictions are accurate
-// relative to whatever ambient is used; baking 29°C here matches the real lab
-// ambient from the calibration session. Offline FEM was solved once at 20°C,
-// so ramp tests and steady-state equations use T_ref=20°C throughout.
-const T_AMB_FALLBACK_C = 29.0;
+// Ambient fallback = params.yaml thermal_bc.T_ambient_degC (20 °C, baked as
+// ROM.T_amb) -- the same constant ambient the offline FEM/ROM was solved at
+// (professor: "take everything as simple as possible"). Used whenever there is
+// no live reading (placeholder key, key past weather_api.key_valid_until,
+// offline). With a live reading the twin runs on the REAL lab ambient instead,
+// and the reading (value, source, time) is recorded in the header badge, the
+// telemetry panel and every row of the exported CSV.
+const T_AMB_FALLBACK_C = ROM.T_amb;
 
 // Optional live ambient lookup (Google Maps Platform Weather API,
 // currentConditions:lookup, Darmstadt DE @ 49.8728,8.6512) — this HTML is a
@@ -1445,12 +1525,26 @@ const T_AMB_FALLBACK_C = 29.0;
 // https://console.cloud.google.com/apis/credentials (enable "Weather API";
 // docs: https://developers.google.com/maps/documentation/weather).
 const GOOGLE_WEATHER_API_KEY = "__GOOGLE_WEATHER_KEY__";
-const DARMSTADT_LAT = 49.8728;
-const DARMSTADT_LON = 8.6512;
+// Inclusive last day the key may be used (params.yaml weather_api.key_valid_until).
+const GOOGLE_WEATHER_KEY_VALID_UNTIL = "__GOOGLE_WEATHER_KEY_VALID_UNTIL__";
+const DARMSTADT_LAT = __WEATHER_LAT__;   // params.yaml weather_api.lat/lon
+const DARMSTADT_LON = __WEATHER_LON__;
+
+function weatherKeyExpired() {
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return today > GOOGLE_WEATHER_KEY_VALID_UNTIL;   // ISO dates compare as strings
+}
 
 async function fetchAmbientC(timeoutMs = 4000) {
+  const at = new Date();
+  const fallback = (why) => ({ value: T_AMB_FALLBACK_C, live: false, at, source: `fallback (${why})` });
   if (!GOOGLE_WEATHER_API_KEY || GOOGLE_WEATHER_API_KEY === "YOUR_KEY_HERE") {
-    return { value: T_AMB_FALLBACK_C, live: false };
+    return fallback('no key');
+  }
+  if (weatherKeyExpired()) {
+    console.warn(`[ambient] weather key expired (valid until ${GOOGLE_WEATHER_KEY_VALID_UNTIL}); using fallback`);
+    return fallback('key expired');
   }
   try {
     const ctrl = new AbortController();
@@ -1462,30 +1556,38 @@ async function fetchAmbientC(timeoutMs = 4000) {
     const data = await res.json();
     const t = data && data.temperature && data.temperature.degrees;
     if (typeof t !== 'number' || !isFinite(t)) throw new Error('Malformed Google Weather API response');
-    return { value: t, live: true };
+    return { value: t, live: true, at, source: 'google_weather' };
   } catch (err) {
-    console.warn('[ambient] Google Weather API fetch failed, falling back to 29°C:', err);
-    return { value: T_AMB_FALLBACK_C, live: false };
+    console.warn(`[ambient] Google Weather API fetch failed, falling back to ${T_AMB_FALLBACK_C}°C:`, err);
+    return fallback('fetch failed');
   }
 }
 // Top-level await (module script): blocks the rest of this module until we know
 // the baseline, so every T_AMB_JS-derived const below picks up the right value —
-// resolves immediately (no real fetch) unless OPENWEATHER_API_KEY is filled in.
-const ambient = await fetchAmbientC();
-const T_AMB_JS = ambient.value;
-{
+// resolves immediately (no real fetch) unless a live, unexpired key was baked in.
+// `let`, not `const` (2026-09-27): the T_amb selector (20 °C / 29 °C / Live) can
+// change it at runtime -- setAmbient() below then resets the sim to equilibrium
+// at the new ambient and repaints everything derived from it.
+let ambient = await fetchAmbientC();
+let T_AMB_JS = ambient.value;
+let T_AMB_AT = ambient.at.toISOString();   // when the ambient was recorded
+console.info(`[ambient] T_amb = ${T_AMB_JS} °C, source=${ambient.source}, at ${T_AMB_AT}`);
+function paintAmbient() {
+  const hhmm = ambient.at.toTimeString().slice(0, 5);
   const badge = document.getElementById('tAmbBadge');
   if (badge) {
-    badge.textContent = `T_amb = ${T_AMB_JS.toFixed(1)} °C${ambient.live ? ' (live)' : ''}`;
+    badge.textContent = `T_amb = ${T_AMB_JS.toFixed(1)} °C${ambient.live ? ` (live ${hhmm})` : ''}`;
+    badge.title = `source: ${ambient.source}, recorded ${T_AMB_AT}`;
   }
   // Telemetry-panel row: same initial value as the header badge, fetched once
   // from the weather API at load and used as the model's own T_amb baseline
   // (see T_AMB_JS above) -- shown as a first-class parameter, not just a badge.
   const vTambInit = document.getElementById('vTambInit');
   if (vTambInit) {
-    vTambInit.textContent = `${T_AMB_JS.toFixed(1)} °C${ambient.live ? ' (live)' : ''}`;
+    vTambInit.textContent = `${T_AMB_JS.toFixed(1)} °C${ambient.live ? ` (live ${hhmm})` : ''}`;
   }
 }
+paintAmbient();
 
 function b64Buf(b64){
   const s=atob(b64),a=new Uint8Array(s.length);
@@ -1565,7 +1667,13 @@ const SCENARIOS = {
 };
 let curScenario = 'quickstart';
 let targetI = 5.0;   // from slider
-function getI() { return SCENARIOS[curScenario](targetI, sim.t); }
+// Non-null while Sensor mode drives the model: the latest MEASURED I_rms after
+// dead-band/clamp (zero-order hold until the next sample). Scenarios are
+// bypassed -- the rig, not a script, decides the current.
+let sensorDriveI = null;
+function getI() {
+  return sensorDriveI !== null ? sensorDriveI : SCENARIOS[curScenario](targetI, sim.t);
+}
 
 // Nonlinear natural convection (simplified Churchill-Chu): h grows slowly with
 // ΔT (h ~ ΔT^n, n=LUMPED.convection_exponent≈0.25). hA_cal was calibrated
@@ -1672,7 +1780,8 @@ function resetSim() {
 //  tracks the baked ambient (20 °C per params.yaml) instead of a stale hardcoded
 //  value; ceiling now reads levitating_disc.plate_hot_display_C (WP-HTML fix,
 //  was a JS literal `125`) instead of a hardcoded literal.
-const T_COLOR_LO = T_AMB_JS, T_COLOR_HI = PARAMS.plate_hot_display_C;
+let T_COLOR_LO = T_AMB_JS;   // follows the T_amb selector (setAmbient)
+const T_COLOR_HI = PARAMS.plate_hot_display_C;
 const STRUCT = new THREE.Color(0x5a5a68);   // neutral grey for housing
 function tcol(T) {  // allocating version — for UI swatches / legend only
   let t = (T - T_COLOR_LO) / (T_COLOR_HI - T_COLOR_LO);
@@ -1914,12 +2023,15 @@ document.body.appendChild(labelRenderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.dampingFactor = 0.08;
-document.querySelectorAll('.panel, #headerBar').forEach(p => {
-  p.addEventListener('pointerenter', () => controls.enabled = false);
-  p.addEventListener('pointerleave', () => controls.enabled = true);
-  ['pointerdown','mousedown','wheel','touchstart'].forEach(ev =>
-    p.addEventListener(ev, e => e.stopPropagation(), {passive:false}));
-});
+// OrbitControls listens ONLY on renderer.domElement, and the panels/header are
+// siblings of that canvas, not descendants -- so a click or drag on a panel can
+// never reach the controls; no guard is needed. The previous guard toggled
+// controls.enabled on pointerenter/pointerleave, which goes stale whenever a
+// panel collapses/moves under a stationary cursor (no leave event fires until
+// the pointer moves), leaving the orbit disabled or enabled in the wrong place.
+// Only wheel is stopped, so scrolling a panel never also zooms the model.
+document.querySelectorAll('.panel, #headerBar').forEach(p =>
+  p.addEventListener('wheel', e => e.stopPropagation(), {passive:true}));
 
 // Build sub-meshes (plate levitates, base is fixed)
 function buildSub(keepFn) {
@@ -2129,7 +2241,8 @@ window.twinDebug = {camera, controls, size, plateM, coilInnerM, coilOuterM,
   get ROM() { return ROM; }, get activePlateIdx() { return activePlateIdx; },
   selectPlateVariant,   // disc-radius compare mode (2026-07-03): headless hooks
   fieldLineGroup, get fieldLineMats() { return fieldLineMats; },   // per-variant B-field verification
-  get PARAMS() { return PARAMS; }, T_AMB_JS,
+  get PARAMS() { return PARAMS; }, get T_AMB_JS() { return T_AMB_JS; },
+  setAmbient: (...a) => setAmbient(...a), get sensor() { return sensorDebug; },
   // Headless Python<->JS numeric cross-check (WP-DEBUG/WP-XVAL): drives
   // romStep/levStep directly, bypassing the render loop (so this never
   // substeps -- loop()'s nSub chopping, :2718, is a separate concern from the
@@ -2383,7 +2496,7 @@ function updateHeatParticles(dt) {
 }
 
 // ── Paint vertex colors (allocation-free hot path) ───────────────────────────
-const TRANGE = T_COLOR_HI - T_COLOR_LO;
+let TRANGE = T_COLOR_HI - T_COLOR_LO;
 // Coil colour-ramp ceiling — ABSOLUTE scale: 0 = T_amb, 1 = T_COIL_HOT.
 // Anchored to the real IR data (session 1, 2026-06-23): inner coil hit 79°C @7.8A,
 // the hottest reading ever measured. Colour only changes when the actual
@@ -2626,6 +2739,7 @@ sS.oninput = () => {
 };
 sS.oninput();  // sync display with initial slider value on load
 function selectScenario(name) {
+  if (sensorDriveI !== null) return;   // Sensor mode: the rig sets I(t)
   const btn = document.querySelector(`.sc-btn[data-sc="${name}"]`);
   if (!btn) return;
   document.querySelectorAll('.sc-btn[data-sc]').forEach(b=>b.classList.remove('active'));
@@ -2680,18 +2794,6 @@ const setBox = (id, T) => document.getElementById(id).style.background =
 // CSS can't animate a transition into `width:fit-content` (browsers treat it as
 // a non-interpolable keyword and just snap), so measure the header's natural
 // shrink-to-fit width in JS and transition between two explicit px values.
-// Thermal Telemetry / Time History are the two tall, content-heavy panels
-// (long row lists / chart canvas) — while either is open, pull the whole
-// panel row up toward the header so it clears more room below for the 3D
-// simulation instead of pushing further down over it.
-function updatePulledUp() {
-  const uiEl = document.getElementById('ui');
-  const tallPanelOpen = ['panelTelemetry', 'panelChart'].some(id => {
-    const p = document.getElementById(id);
-    return p && !p.classList.contains('collapsed');
-  });
-  uiEl.classList.toggle('pulled-up', tallPanelOpen);
-}
 document.querySelectorAll('.panel-head').forEach(h => {
   const panel = h.parentElement;
   h.onclick = () => {
@@ -2702,20 +2804,21 @@ document.querySelectorAll('.panel-head').forEach(h => {
       const collapsedWidth = title.scrollWidth + chev.scrollWidth
         + parseFloat(headStyle.gap || 10)
         + parseFloat(headStyle.paddingLeft) + parseFloat(headStyle.paddingRight);
+      // pin the CURRENT width first so the transition has a start value
+      panel.style.width = panel.offsetWidth + 'px';
+      panel.offsetWidth;   // force reflow
       panel.style.width = collapsedWidth + 'px';
       panel.classList.add('collapsed');
     } else {
       // Clear the inline override a frame later (double rAF = wait for the
       // collapsed width to actually paint) so the transition animates from
-      // that width back to the stylesheet's own width (260px desktop / 100%
+      // that width back to the stylesheet's own width (252px desktop / 100%
       // under the mobile media query) instead of a stale fixed px forever.
       panel.classList.remove('collapsed');
       requestAnimationFrame(() => requestAnimationFrame(() => { panel.style.width = ''; }));
     }
-    updatePulledUp();
   };
 });
-updatePulledUp();   // reflect the default (both open) state immediately on load
 
 // ── Dark / light theme toggle ─────────────────────────────────────────────────
 const themeBtn = document.getElementById('themeToggle');
@@ -2729,7 +2832,7 @@ themeBtn.onclick = () => {
 };
 
 // ── Colour-scale ticks + mode toggle ──────────────────────────────────────────
-(function buildScaleTicks() {
+function buildScaleTicks() {
   const ticksEl = document.getElementById('scaleTicks');
   const steps = 6;
   let html = '';
@@ -2738,7 +2841,8 @@ themeBtn.onclick = () => {
     html += `<span>${T.toFixed(0)}°</span>`;
   }
   ticksEl.innerHTML = html;
-})();
+}
+buildScaleTicks();
 const scaleModeBtn = document.getElementById('scaleModeBtn');
 const SCALE_MODES = ['auto', 'absolute', 'relative'];
 scaleModeBtn.onclick = () => {
@@ -2767,11 +2871,12 @@ document.getElementById('btnScreenshot').onclick = () => {
   });
 };
 document.getElementById('btnExportCsv').onclick = () => {
-  let csv = 't_s,T_plate_max_C,T_inner_coil_C,T_outer_coil_C,I_A\n';
+  let csv = 't_s,T_plate_max_C,T_inner_coil_C,T_outer_coil_C,I_A,T_amb_C,T_amb_source,T_amb_recorded_at\n';
+  const amb = `${T_AMB_JS.toFixed(2)},${ambient.source},${T_AMB_AT}`;
   for (let i = 0; i < sim.hist_t.length; i++)
     csv += `${sim.hist_t[i].toFixed(2)},${sim.hist_Tmax[i].toFixed(3)},` +
            `${sim.hist_T_inner[i].toFixed(3)},${sim.hist_T_outer[i].toFixed(3)},` +
-           `${sim.hist_I[i].toFixed(3)}\n`;
+           `${sim.hist_I[i].toFixed(3)},${amb}\n`;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
   a.download = `tmax_history_${Date.now()}.csv`;
@@ -2786,6 +2891,7 @@ function setPaused(v) {
   pausedBadge.style.display = paused ? 'block' : 'none';
 }
 function adjustSpeed(dir) {
+  if (sS.disabled) return;   // Sensor mode runs at 1x real time
   const v = Math.max(0, Math.min(2.301, +sS.value + dir * 0.1));
   sS.value = v;
   sS.oninput();
@@ -2810,10 +2916,13 @@ document.getElementById('tauLabel').textContent =
 // Precompute coil steady-state temperatures (at I_ref) — shown as target arrows.
 // True steady rise = own rise above the local air node + the air node's rise above
 // the far ambient (AIR_DT_SS_REF), since the coils now convect into shared air.
-const T_ss_inner = T_AMB_JS + LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF;
-const T_ss_outer = T_AMB_JS + LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF;
-document.getElementById('tInSS').textContent  = `→${T_ss_inner.toFixed(0)}°`;
-document.getElementById('tOutSS').textContent = `→${T_ss_outer.toFixed(0)}°`;
+function paintCoilSS() {
+  const T_ss_inner = T_AMB_JS + LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF;
+  const T_ss_outer = T_AMB_JS + LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF;
+  document.getElementById('tInSS').textContent  = `→${T_ss_inner.toFixed(0)}°`;
+  document.getElementById('tOutSS').textContent = `→${T_ss_outer.toFixed(0)}°`;
+}
+paintCoilSS();
 
 // Iron/plate EM badges (B_max_iron/saturation) — was a one-shot block that never
 // re-ran after a disc-radius swap (selectPlateVariant Object.assign(ROM, v.rom)
@@ -2823,7 +2932,7 @@ function updateEmBadges() {
   const bmax = ROM.B_max_iron, bsat = ROM.B_sat;
   const satEl = document.getElementById('tBmax');
   satEl.textContent = `${bmax.toFixed(3)} T / ${bsat} T`;
-  satEl.style.color = ROM.saturated ? '#ff4444' : '#88ff88';
+  satEl.style.color = ROM.saturated ? 'var(--c-warn)' : 'var(--c-ok)';
   document.getElementById('satRow').title = ROM.saturated
     ? 'WARNING: iron core is magnetically saturated — μ_r=1000 is invalid!'
     : '';
@@ -2891,9 +3000,185 @@ document.querySelectorAll('.sc-btn[data-mode]').forEach(btn => {
     const mode = btn.dataset.mode;
     document.getElementById('ampsGroup').style.display = mode === 'amps' ? '' : 'none';
     document.getElementById('dialGroup').style.display  = mode === 'dial' ? '' : 'none';
-    if (mode === 'dial') sDial.oninput(); else sI.oninput();
+    document.getElementById('sensorGroup').style.display = mode === 'sensor' ? '' : 'none';
+    if (mode !== 'sensor') stopSensor();   // leaving Sensor mode hands I back to the sliders
+    if (mode === 'dial') sDial.oninput(); else if (mode === 'amps') sI.oninput();
   };
 });
+
+// ── Ambient selector: fixed presets (params.yaml) + Live (Google Weather) ─────
+// Changing T_amb restarts the sim at equilibrium with the NEW ambient: the disc
+// field is stored relative to T_amb while the coil/iron/air nodes are absolute,
+// so switching mid-run would give an inconsistent mixed state.
+const AMB_PRESETS = PARAMS.ambient_presets || [{key: 'ref', value: ROM.T_amb, note: 'model reference'}];
+const LIVE_KEY_OK = !!GOOGLE_WEATHER_API_KEY && GOOGLE_WEATHER_API_KEY !== "YOUR_KEY_HERE" && !weatherKeyExpired();
+const ambGroup = document.getElementById('ambGroup'), ambNote = document.getElementById('ambNote');
+let ambMode = ambient.live ? 'live'
+  : (AMB_PRESETS.find(p => Math.abs(p.value - T_AMB_JS) < 1e-9) || AMB_PRESETS[0]).key;
+function paintAmbGroup() {
+  ambGroup.querySelectorAll('.sc-btn').forEach(b => b.classList.toggle('active', b.dataset.amb === ambMode));
+  const p = AMB_PRESETS.find(q => q.key === ambMode);
+  ambNote.textContent = ambMode === 'live'
+    ? `Google Weather, Darmstadt · ${ambient.at.toTimeString().slice(0, 5)}`
+    : (p ? p.note : '');
+}
+function setAmbient(value, src) {
+  ambient = src; T_AMB_JS = value; T_AMB_AT = src.at.toISOString();
+  T_COLOR_LO = T_AMB_JS; TRANGE = T_COLOR_HI - T_COLOR_LO;
+  resetSim();
+  discTlo = discThi = T_AMB_JS;
+  buildScaleTicks(); paintCoilSS(); paintAmbient(); liveAirBot();
+  console.info(`[ambient] switched: T_amb = ${T_AMB_JS} °C, source=${ambient.source}`);
+}
+AMB_PRESETS.forEach(p => {
+  const b = document.createElement('button');
+  b.className = 'sc-btn'; b.dataset.amb = p.key; b.title = p.note;
+  b.textContent = `${p.value.toFixed(0)} °C`;
+  b.onclick = () => {
+    ambMode = p.key;
+    setAmbient(p.value, {value: p.value, live: false, at: new Date(), source: `preset ${p.key}`});
+    paintAmbGroup();
+  };
+  ambGroup.appendChild(b);
+});
+{
+  const b = document.createElement('button');
+  b.className = 'sc-btn'; b.dataset.amb = 'live'; b.textContent = 'Live';
+  b.disabled = !LIVE_KEY_OK;
+  b.title = LIVE_KEY_OK ? 'Current outdoor temperature, Darmstadt (Google Weather API)'
+    : 'Unavailable: this build has no (valid) weather API key -- see params.yaml weather_api';
+  b.onclick = async () => {
+    b.disabled = true; ambNote.textContent = 'Fetching live temperature…';
+    const r = await fetchAmbientC();
+    b.disabled = false;
+    if (r.live) { ambMode = 'live'; setAmbient(r.value, r); paintAmbGroup(); }
+    else { paintAmbGroup(); ambNote.textContent = `Live unavailable (${r.source}) — kept ${T_AMB_JS.toFixed(0)} °C`; }
+  };
+  ambGroup.appendChild(b);
+}
+paintAmbGroup();
+
+// ── Sensor excitation mode: measured I_rms drives the model ──────────────────
+// Source: the rig's Arduino (arduino/thermal_sensor/thermal_sensor.ino) over
+// Web Serial -- "millis,I_rms_A" at 1 Hz ('#' lines = diagnostics), the same
+// wire format data_io.py parses -- or a synthetic demo signal. Conditioning
+// matches digital_twin_live.py's LiveDriver (params.yaml live_sensor): dead-band,
+// clamp to the rig's I_max, zero-order hold between samples, STALE after
+// stale_after_s without a sample. While a source runs: speed locked to 1x (real
+// time), scenarios off. Temperatures remain model OUTPUT (no T sensor on the rig).
+const LS = PARAMS.live_sensor || {};
+const SENSOR_BAUD = LS.baudrate || 9600, SENSOR_DEADBAND_A = LS.deadband_A ?? 0.2;
+const SENSOR_STALE_S = LS.stale_after_s || 3.0, SENSOR_I_MAX = LS.i_max_A || 20.0;
+const HAS_SERIAL = 'serial' in navigator;
+const sensor = {kind: null, state: 'off', msg: '', lastWall: 0, lastRaw: NaN, n: 0,
+                port: null, reader: null, timer: null};
+const sDot = document.getElementById('sensorDot'), sStateEl = document.getElementById('sensorState');
+const sIEl = document.getElementById('sensorI'), sNote = document.getElementById('sensorNote');
+const btnSerial = document.getElementById('btnSerial'), btnDemo = document.getElementById('btnSensorDemo');
+if (!HAS_SERIAL) {
+  btnSerial.disabled = true;
+  btnSerial.title = 'Web Serial needs Chrome or Edge on a desktop (not Safari/Firefox/iOS)';
+}
+function parseSensorLine(line) {
+  // "millis,I_rms_A" (rig) or "millis,T_core,T_disc,I_rms" (legacy log) -> I, else null
+  line = line.trim();
+  if (!line || line[0] === '#') return null;
+  const f = line.split(',').map(x => x.trim());
+  if ((f.length !== 2 && f.length !== 4) || !/^-?\d+$/.test(f[0])) return null;
+  const I = parseFloat(f[f.length - 1]);
+  return Number.isFinite(I) ? I : null;
+}
+function conditionI(I) {   // same rule as LiveDriver.condition()
+  if (!(I >= SENSOR_DEADBAND_A)) return 0.0;
+  return Math.min(I, SENSOR_I_MAX);
+}
+function lockControls(on) {
+  document.getElementById('scGroup').classList.toggle('locked', on);
+  if (on) { sS.value = 0; sS.oninput(); }
+  sS.disabled = on;
+}
+function paintSensor() {
+  const labels = {off: 'Not connected', connecting: 'Connecting…', waiting: 'Waiting for data…',
+                  live: sensor.kind === 'demo' ? 'LIVE · demo signal' : 'LIVE · Arduino',
+                  stale: 'STALE · no new sample', error: 'Disconnected'};
+  sDot.className = 'dot ' + ({live: 'live', stale: 'stale', error: 'error'}[sensor.state] || '');
+  sStateEl.textContent = labels[sensor.state] + (sensor.msg ? ` — ${sensor.msg}` : '');
+  sIEl.textContent = Number.isFinite(sensor.lastRaw) ? `${sensor.lastRaw.toFixed(2)} A` : '— A';
+  btnSerial.textContent = sensor.kind === 'serial' ? 'Disconnect' : 'Connect Arduino';
+  btnDemo.textContent = sensor.kind === 'demo' ? 'Stop demo' : 'Demo signal';
+  btnDemo.disabled = sensor.kind === 'serial';
+  if (HAS_SERIAL) btnSerial.disabled = sensor.kind === 'demo';
+}
+function sensorPush(I_raw) {
+  sensor.lastRaw = I_raw; sensor.lastWall = performance.now(); sensor.n++;
+  sensorDriveI = conditionI(I_raw);
+  sensor.state = 'live'; sensor.msg = '';
+  paintSensor();
+}
+function startSource(kind) {
+  sensor.kind = kind; sensor.state = kind === 'serial' ? 'connecting' : 'waiting';
+  sensor.n = 0; sensor.lastRaw = NaN; sensor.msg = '';
+  sensorDriveI = null; lockControls(true); setPaused(false); paintSensor();
+}
+async function stopSensor(msg = '') {
+  const {reader, port, timer} = sensor;
+  sensor.kind = null; sensor.reader = sensor.port = sensor.timer = null;
+  if (timer) clearInterval(timer);
+  if (reader) { try { await reader.cancel(); } catch (e) {} }
+  if (port) { try { await port.close(); } catch (e) {} }
+  sensorDriveI = null; lockControls(false);
+  sensor.state = msg ? 'error' : 'off'; sensor.msg = msg;
+  paintSensor();
+}
+function startDemo() {
+  // Stand-in for the rig: the Variac held at the 5 A operating point + ACS712-like
+  // noise, 1 sample/s (same as data_io.py's mock source). Real time, like the rig.
+  startSource('demo');
+  const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+  sensor.timer = setInterval(() => sensorPush(5.0 + 0.03 * gauss()), 1000);
+}
+async function connectSerial() {
+  let port;
+  try { port = await navigator.serial.requestPort(); }   // needs this click (user gesture)
+  catch (e) { sensor.msg = 'no port selected'; paintSensor(); return; }
+  startSource('serial');
+  try { await port.open({baudRate: SENSOR_BAUD}); }
+  catch (e) { await stopSensor(`cannot open port (${e.message})`); return; }
+  sensor.port = port; sensor.state = 'waiting'; paintSensor();   // Arduino reboots ~2 s on open
+  const decoder = new TextDecoderStream();
+  const piped = port.readable.pipeTo(decoder.writable).catch(() => {});
+  const reader = decoder.readable.getReader();
+  sensor.reader = reader;
+  let buf = '';
+  try {
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += value;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const I = parseSensorLine(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+        if (I !== null && sensor.port === port) sensorPush(I);
+      }
+    }
+  } catch (e) { /* unplugged -> handled below */ }
+  finally { try { reader.releaseLock(); } catch (e) {} await piped; }
+  if (sensor.port === port) {   // stream ended without the user pressing Disconnect
+    await stopSensor('serial link lost');
+    setPaused(true);            // do not keep simulating on an unknown current
+  }
+}
+btnSerial.onclick = () => sensor.kind === 'serial' ? stopSensor() : connectSerial();
+btnDemo.onclick   = () => sensor.kind === 'demo' ? stopSensor() : startDemo();
+setInterval(() => {   // watchdog: flag a silent source, keep holding the last I
+  if (sensor.state === 'live' && performance.now() - sensor.lastWall > SENSOR_STALE_S * 1000) {
+    sensor.state = 'stale'; paintSensor();
+  }
+}, 500);
+paintSensor();
+const sensorDebug = {parseSensorLine, conditionI, push: sensorPush, startDemo, stopSensor,
+                     get state() { return sensor.state; }, get driveI() { return sensorDriveI; }};
 
 // ── Main animation loop ───────────────────────────────────────────────────────
 let lastWall = performance.now();
@@ -2904,7 +3189,10 @@ function loop() {
   const now = performance.now();
   let wall_dt = (now - lastWall) / 1000;
   lastWall = now;
-  if (wall_dt > 0.1) wall_dt = 0.1;   // cap at 100ms (tab-hidden guard)
+  // cap at 100ms (tab-hidden guard) -- except while the sensor drives the model:
+  // then sim time must track wall time, so a throttled background tab catches up
+  // on return (substepping below keeps that stable), bridged with the held I.
+  if (wall_dt > 0.1) wall_dt = sensorDriveI !== null ? Math.min(wall_dt, 3600) : 0.1;
 
   const speed = Math.pow(10, +sS.value);
   const dt_sim = wall_dt * speed;      // simulated seconds per frame
@@ -2983,7 +3271,7 @@ function loop() {
 
   // Live gap = the spring-mass state, so telemetry shows the bob-and-settle too.
   document.getElementById('tLevGap').textContent =
-    'Levitation Gap: ' + lev.z.toFixed(1) + ' mm';
+    lev.z.toFixed(1) + ' mm';
   document.getElementById('tPmax').textContent  = Tmax.toFixed(2)+' °C';
   setV('tPmean', Tmean); setV('tPss', Tss);
   setV('tIn',  sim.T.inner); setV('tOut', sim.T.outer); setV('tFe',  sim.T.iron);
@@ -3059,11 +3347,16 @@ if __name__ == "__main__":
                           "always writes the literal placeholder 'YOUR_KEY_HERE', even if a real "
                           "key is available locally -- do not pass this flag for a build you "
                           "intend to commit.")
+    ap.add_argument("--out", default=None,
+                     help="Output filename inside outputs/ (overrides the default name). "
+                          "RUN.py uses digital_twin_fem_live.html (gitignored) for key builds.")
     args = ap.parse_args()
 
     out_dir = os.path.join(HERE, "outputs")
     os.makedirs(out_dir, exist_ok=True)
-    if args.plate_radius is not None:
+    if args.out is not None:
+        out_name = os.path.basename(args.out)
+    elif args.plate_radius is not None:
         out_name = f"digital_twin_fem_R{int(round(args.plate_radius))}.html"
     else:
         out_name = "digital_twin_fem.html"

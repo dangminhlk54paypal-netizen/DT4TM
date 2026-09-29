@@ -10,7 +10,10 @@ units: {length: mm, current: A, frequency: Hz, temperature: degC, power: W}
 # Re-measured on the real rig 2026-06-23 (AC 50Hz, HIKMICRO IR validation session):
 # 190V -> 5A is the main operating point (supersedes the earlier 220V estimate).
 # 270V -> 7.8A is a second, stronger-heating demo point used to calibrate the coil
-# thermal network (see validation_data below). Real-time current sensor: pending.
+# thermal network (see validation_data below). Real-time current sensor: ACS712-20A
+# install planned (docs/archive/Stromsensor_.docx), firmware/data_io.py ready
+# (arduino/thermal_sensor/thermal_sensor.ino), physical install pending -- current_A
+# below stays the fallback constant until a real log replaces it via calibrate_from_file.
 excitation:
   current_A: 5.0        # MEASURED RMS current (multimeter, rig: 190V -> 5A_rms). NOT a guess.
                         # CONVENTION: the LOSS chain (compute_losses -> hA calibration)
@@ -386,6 +389,20 @@ em_domain:
 # User asked for 5-10s; 8.0 is the midpoint.
 transient: {dt_s: 1.0, t_end_s: 600.0, quickstart_ramp_s: 8.0}
 
+# --- Live ambient temperature (Google Weather API) — user decision 2026-09-27 ---
+# The real key (local/.env.local only) may be baked into the LOCAL, gitignored
+# outputs/digital_twin_fem_live.html up to and INCLUDING this date. From the day
+# after: build_twin_html_fem.py refuses to bake it, the baked JS stops calling the
+# API (falls back to the constant ambient), and RUN.py rebuilds/removes any live
+# HTML still holding the key. The tracked digital_twin_fem.html never gets it.
+# This is a code-side switch only — also restrict/delete the key in Google Cloud.
+# Without a live reading (no key / expired / offline) every tool falls back to
+# thermal_bc.T_ambient_degC (20 °C). In a REAL measurement (data_io.py --mode log,
+# digital_twin_live.py on a serial port) weather_api.py records the live value
+# at start and every log_refresh_s into the log and seeds the twin with it.
+# lat/lon: Darmstadt (TEMF lab).
+weather_api: {key_valid_until: "2026-10-15", lat: 49.8728, lon: 8.6512, log_refresh_s: 600.0}
+
 # --- Original benchmark (to validate EM solver; NO iron core, 20A) ---
 # Geometry from the actual TeamProblem28.pdf (Karl/Fetzer/Kurz/Lehner/Rucker, Fig.2 +
 # text), supplied by the user 2026-06-23 -- NOT the same coil geometry as this rig
@@ -602,3 +619,21 @@ lumped_thermal:
                                # HTML twin (0=T_amb, 1=this). Anchored to IR session 1's
                                # hottest reading (inner coil 79C@7.8A). Was a JS literal
                                # `T_COIL_HOT`; moved here so it's not hardcoded.
+
+# ---------------------------------------------------------------------------
+# Live sensor mode — OPTIONAL, read ONLY by digital_twin_live.py (added 2026-09-27).
+# A separate entry point: the normal twins (digital_twin.py, the HTML) ignore this
+# block entirely and keep running on sliders/scenarios. In live mode the twin's
+# input current is the ACS712-measured I_rms streamed by
+# arduino/thermal_sensor/thermal_sensor.ino ("millis,I_rms_A" @1Hz); temperature
+# stays a MODEL OUTPUT (the rig has no temperature sensor).
+live_sensor:
+  port: mock            # Arduino serial port (macOS: ls /dev/cu.usbmodem*); "mock" = synthetic 5A source
+  baudrate: 9600        # must match Serial.begin() in thermal_sensor.ino
+  deadband_A: 0.5       # I_rms below this -> 0. = ~2x the firmware's startup "# noise floor",
+                        # MEASURED 2026-09-28: 0.248 A (UNO R4 Minima on USB power, IP+/IP- open,
+                        # no 0.1uF cap, DC bias 2.667 V). Re-measure once wired into the rig.
+  stale_after_s: 3.0    # no new sample for this long (wall clock) -> STALE warning (3 missed 1Hz samples)
+  max_gap_s: 10.0       # sample-time jump above this is flagged "gap" (bridged with the last I)
+  window_s: 600.0       # plot time window
+  mock_speed: 20.0      # mock/replay pacing: samples per wall-clock second (1 sample = 1s sim time)

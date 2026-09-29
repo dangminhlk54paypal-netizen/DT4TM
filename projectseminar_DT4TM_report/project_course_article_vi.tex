@@ -1,0 +1,778 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%2345678901234567890123456789012345678901234567890123456789012345678901234567890
+%        1         2         3         4         5         6         7         8
+
+\documentclass[a4paper, 10pt, conference]{ieeeconf}
+
+\IEEEoverridecommandlockouts
+
+\overrideIEEEmargins
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[vietnamese]{babel}
+\usepackage{graphicx}
+\usepackage{amsmath}
+
+%%%%%%%%%%%%% added for project course control engineering
+\usepackage[left=1.57cm,right=1.57cm,top=2.54cm,bottom=2.54cm]{geometry}
+\usepackage{subfigure}
+%%%%%%%%%%%%% added for project course control engineering
+
+
+\usepackage{amssymb}
+\usepackage{enumitem}
+\usepackage{multirow}
+\usepackage{amsthm}
+
+%%%%%%%%%%%%% added for the Thermal Digital Twin (DT4TM) report %%%%%%%%%%%%%
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning}
+\usepackage{url}
+\usepackage{tabularx}
+\usepackage[hidelinks]{hyperref}
+%%%%%%%%%%%%% added for the Thermal Digital Twin (DT4TM) report %%%%%%%%%%%%%
+
+\theoremstyle{remark}
+\newtheorem{remark}{Ghi chú}
+
+\makeatletter
+\def\@IEEEprocessthesectionargument#1{%
+\@ifmtarg{#1}{%
+\@IEEEappendixsavesection*{Phụ lục \thesectiondis}%
+\addcontentsline{toc}{section}{Phụ lục \thesection}}{%
+\@IEEEappendixsavesection*{Phụ lục \thesectiondis \\* #1}%
+\addcontentsline{toc}{section}{Phụ lục \thesection: #1}}}
+\makeatother
+
+\title{\LARGE \bf
+Cặp Kỹ Thuật Số Nhiệt cho Hệ Thống Lơ Lửng Điện Động
+}
+\author{ Dang Minh Hoang, Marina Borchert, Mohamed Aziz El Majid
+\thanks{Khóa học Dự án Kỹ Thuật Số, Học kỳ Hè 2026. Người hướng dẫn: GS. TS. Dirk Hartmann, PGS. TS. Melina Merkel}
+}
+
+
+\begin{document}
+
+
+
+\maketitle
+\thispagestyle{plain}
+\pagestyle{plain}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+Báo cáo này mô tả khái niệm, phương pháp luận và kiến trúc phần mềm của một
+\emph{kỹ thuật số} (Digital Twin) để dự đoán nhiệt trên máy lơ lửng điện động
+theo chuẩn TEAM-28 (COMPUMAG). Thay vì sử dụng phần mềm CAE thương mại, chúng tôi
+chọn một trình giải Python tự phát triển, vì mục tiêu thực sự không phải là một
+lần mô phỏng mà là một \emph{mô hình dự đoán thời gian thực} chạy trên Điện thoại
+thông minh thông qua chế độ Thực tế Tăng cường (Augmented Reality). Báo cáo này
+giải thích lựa chọn này từ quan điểm vật lý (tổn thất Joule tỷ lệ với bình phương
+dòng điện với phân bố không gian cố định, cho phép một lần giải FEM ngoại tuyến
+cộng với một mô hình giảm bậc thời gian thực). Dòng điện cuộn dây \emph{được đo}
+$I(t)$ đóng vai trò là đầu vào: cảm biến Hall trên giá thử nạp liên tục vào bộ
+tích phân thời gian, trong khi nhiệt độ là đầu ra được tính toán từ đó. Báo cáo
+tóm tắt các kết quả trước đây và dự kiến, đồng thời phân biệt rõ ràng giữa trạng
+thái ổn định đã được xác thực và quá trình thời gian chưa được xác thực. Để triển
+khai mô hình vật lý, chúng tôi sử dụng một công cụ AI được tích hợp trong môi
+trường phát triển, trong khi tất cả các giả định vật lý và tiêu chí xác thực được
+định nghĩa và kiểm tra bởi nhóm.
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\section{Giới thiệu}
+\label{sec:intro}
+
+\subsection{Mô tả công việc}
+Vấn đề TEAM~28~\cite{team28} là một chuẩn mực công nhân được thiết lập của cộng
+đồng Điện từ Tính toán (COMPUMAG) để xác thực các trình giải điện từ tự viết: Một
+đĩa nhôm dẫn điện lơ lửng phía trên một bộ cuộn dây được chạy bằng dòng xoay chiều
+($I_{\mathrm{rms}}\approx5\,\mathrm{A}$ được đo, $f=50\,\mathrm{Hz}$). Từ thông
+thay đổi theo thời gian tạo ra các dòng xoáy trong đĩa, tạo ra cả lực nâng (lơ
+lửng) và mất mát nhiệt. Giá thử nghiệm được xây dựng tại khoa có cấu trúc tương
+tự với chuẩn mực này, nhưng có thêm một bộ cuộn dây được chia thành hai phần
+(cuộn trong 1000 vòng, cuộn ngoài 500 vòng) với lõi từ ferromạgnetic
+($\mu_r\approx1000$) và vành ngoài ferromạgnetic, không xuất hiện trong vấn đề ban
+đầu và tự tạo ra nhiệt đáng kể.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=0.065cm, y=0.065cm,
+    ironfill/.style={fill=gray!45},
+    cufill/.style={fill=orange!35},
+    alfill/.style={fill=cyan!25},
+    lbl/.style={font=\scriptsize, align=center}]
+  % Symmetry axis
+  \draw[dash dot] (0,15) -- (0,-58);
+  \node[font=\tiny, right] at (2,16) {$r=0$};
+  % r-axis
+  \draw[-{Stealth[length=4pt]}] (0,-58) -- (109,-58) node[below, font=\tiny] {$r$ [mm]};
+  \draw (25.9,-58) -- (25.9,-56.5); \node[font=\tiny] at (25.9,-63) {25{,}9};
+  \draw (61.9,-58) -- (61.9,-56.5); \node[font=\tiny] at (61.9,-63) {61{,}9};
+  \draw (79.9,-58) -- (79.9,-56.5); \node[font=\tiny] at (79.9,-63) {79{,}9};
+  \draw (102.9,-58) -- (102.9,-56.5); \node[font=\tiny] at (102.9,-63) {102{,}9};
+  % Iron core
+  \draw[ironfill] (0,0) rectangle (25.9,-53);
+  \node[lbl] at (13,-26.5) {Lõi sắt\\$\mu_r{=}1000$};
+  % Inner coil
+  \draw[cufill] (27.9,0) rectangle (61.9,-53);
+  \node[lbl] at (44.9,-26.5) {Cuộn trong\\$N{=}1000$};
+  % Iron ring
+  \draw[ironfill] (64.9,0) rectangle (79.9,-53);
+  \node[lbl, rotate=90] at (72.4,-26.5) {Vành sắt};
+  % Outer coil
+  \draw[cufill] (82.9,0) rectangle (102.9,-53);
+  \node[lbl] at (92.9,-26.5) {Cuộn\\ngoài\\$N{=}500$};
+  % Al-Disc (schematic position)
+  \draw[alfill] (0,6) rectangle (80,9);
+  \node[lbl] at (40,7.5) {Đĩa Al, $R{=}80$, $3$\,mm};
+  \draw[<->, dashed] (85,0) -- (85,6);
+  \node[font=\tiny] at (91,3) {$z_{\mathrm{gap}}$};
+\end{tikzpicture}
+\caption{Mặt cắt ngang của hình học thiết bị, giống với đầu vào trong
+\texttt{params.yaml}. Đầu vào $I_{\mathrm{rms}}=5\,\mathrm A$: được tính toán
+$z_{\mathrm{gap}}\approx12\,\mathrm{mm}$, thực tế quan sát được $7$--$8\,\mathrm{mm}$
+(Phần~\ref{sec:limitations}).}
+\label{fig:geometry}
+\end{figure}
+
+\begin{table}[t]
+\centering\footnotesize
+\caption{Hình học thiết bị thực tế được đo bằng thước (2026-07-10) -- dữ liệu đầu
+vào chính xác cho trình giải FEM (\texttt{params.yaml}), có thể được sử dụng để
+so sánh trực tiếp với chuẩn gốc hoặc để xây dựng lại trong phần mềm CAE thương mại
+(Phần~\ref{sec:tools}).}
+\label{tab:geometry}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Bộ phận & $r$\,[mm] & $\mu_r$ & $\sigma$\,[MS/m] & $N$ \\
+\midrule
+Lõi sắt & 0{,}0--25{,}9 & 1000 & 1{,}0 & -- \\
+Khoảng không khí & 25{,}9--27{,}9 & 1 & 0 & -- \\
+Cuộn trong (Cu) & 27{,}9--61{,}9 & 1 & 59{,}6 & 1000 \\
+Khoảng không khí & 61{,}9--64{,}9 & 1 & 0 & -- \\
+Vành sắt & 64{,}9--79{,}9 & 1000 & 1{,}0 & -- \\
+Khoảng không khí & 79{,}9--82{,}9 & 1 & 0 & -- \\
+Cuộn ngoài (Cu) & 82{,}9--102{,}9 & 1 & 59{,}6 & 500 \\
+Đĩa Al & 0{,}0--80{,}0 & 1 & 34{,}0 & -- \\
+Không khí $\to$ khung & 102{,}9--130{,}4 & 1 & 0 & -- \\
+Tường khung (gỗ ép) & 130{,}4--152{,}9 & 1 & 0 & -- \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+{\footnotesize Chiều cao của tất cả các vùng lõi/cuộn/vành: $53\,\mathrm{mm}$;
+độ dày đĩa: $3\,\mathrm{mm}$ (được định vị phía trên chiều cao này, so sánh
+Hình~\ref{fig:geometry}). Kích thích điện: $I_{\mathrm{rms}}=5{,}0\,\mathrm A$
+(điểm hoạt động chính, phím quay Variac $220^\circ\approx195{,}5\,\mathrm V$)
+hoặc $7{,}8\,\mathrm A$ (phím Variac ở vị trí tối đa $270^\circ$, $\approx240\,\mathrm V$,
+điểm lập chỉ số hiệu chuẩn), $f=50\,\mathrm{Hz}$.}
+\end{table}
+
+Hình~\ref{fig:geometry} và Bảng~\ref{tab:geometry} ghi lại hình học thực tế này
+hoàn toàn và giống hệt nhau với \texttt{params.yaml} -- \emph{nguồn duy nhất}
+mà từ đó cả trình giải FEM của chính chúng tôi và chạy so sánh tiềm năng trong
+phần mềm thương mại được cung cấp. Vì lý do minh bạch: chỉ các bán kính, số vòng
+cuộn dây và lớp vật liệu (sắt/đồng/nhôm được xác nhận bằng bài kiểm tra từ tính
+ngày 2026-07-10) được đo trực tiếp; độ thẩm thấu $\mu_r=1000$ là một giá trị
+trình giữ chỗ không được đo (Phần~\ref{sec:limitations}), và độ dẫn $\sigma$ là
+các giá trị từ tài liệu tham khảo cho từng lớp vật liệu, không phải đo trên mẫu
+cụ thể.
+
+\subsection{Từ mô hình mô phỏng đến kỹ thuật số}
+Nhiệm vụ không phải là tính toán \emph{một} trường nhiệt độ, mà xây dựng một mô hình
+(i) dự đoán trường nhiệt độ $T(r,z,t)$ \textbf{liên tục}, được điều khiển bởi dòng
+cuộn dây \textbf{được đo} thực sự $I(t)$, (ii) \textbf{xác thực} với giá thử nghiệm
+thực tế (Máy ảnh IR), và (iii) cuối cùng có thể được xem qua \textbf{Mã QR} trên
+điện thoại thông minh trong Thực tế Tăng cường. Ba yêu cầu này cùng nhau xác định
+một \emph{kỹ thuật số} theo đúng nghĩa~\cite{tao2019digitaltwin} và là điểm khởi
+đầu của tất cả các quyết định phương pháp luận được giải thích sau.
+
+
+\section{Khái niệm Vật lý}
+\label{sec:concept}
+
+Một kỹ thuật số tính toán lại mô phỏng FEM đầy đủ mỗi khi dòng điện thay đổi sẽ
+không thể thực hiện được trên điện thoại thông minh (thời gian tính toán: từ giây
+đến phút trên mỗi lần chạy). Giải pháp nằm trong một quan sát vật lý, không phải
+một phím tắt phần mềm: Với tần số cố định ($50\,\mathrm{Hz}$) và các tính chất vật
+liệu tuyến tính, tất cả các tổn thất Joule tỷ lệ với bình phương dòng điện
+($P\propto I^2$), trong khi \textbf{phân bố không gian} của các tổn thất này
+\emph{không} thay đổi -- chỉ có biên độ của chúng. Điều này dẫn đến một kiến trúc
+hai bước:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Ngoại tuyến (một lần):} FEM điện từ được giải một lần ở dòng điện
+        tham chiếu $I_{\mathrm{ref}}$ và cung cấp một bản đồ mất mát được phân giải
+        không gian $\hat q_{\mathrm{Al}}(r,z)$ cũng như mất mát cuộn dây
+        $\hat P_{\mathrm{Cu}}$.
+  \item \textbf{Trực tuyến (Millisecond):} Đối với bất kỳ dòng điện $I$ nào và
+        nhiệt độ cơ thể $\bar T$ được biết lần cuối cùng, những cái này chỉ được
+        nhân với một đại lượng vô hướng.
+\end{enumerate}
+
+Điều quan trọng là sự hiệu chỉnh $\sigma(T)$ cho hai cơ thể là \textbf{ngược chiều}
+(Phần~\ref{sec:physics}): Tổn thất dòng xoáy của đĩa là $\propto\sigma_{\mathrm{Al}}$,
+tổn thất cuộn dây ohmic là $\propto1/\sigma_{\mathrm{Cu}}$. Do đó, các phương trình
+thời gian thực là
+\begin{align}
+  q_{\mathrm{Al}}(r,z;I,\bar T) &= \hat q_{\mathrm{Al}}(r,z)
+     \left(\frac{I}{I_{\mathrm{ref}}}\right)^{\!2}
+     \frac{\sigma_{\mathrm{Al}}(\bar T)}{\sigma_{\mathrm{Al}}(T_{\mathrm{ref}})},
+     \label{eq:realtime}\\[2pt]
+  P_{\mathrm{Cu}}(I,\bar T) &= \hat P_{\mathrm{Cu}}
+     \left(\frac{I}{I_{\mathrm{ref}}}\right)^{\!2}
+     \frac{\sigma_{\mathrm{Cu}}(T_{\mathrm{ref}})}{\sigma_{\mathrm{Cu}}(\bar T)}.
+     \label{eq:realtime_coil}
+\end{align}
+Cả hai đều cung cấp cho một mô hình nhiệt giảm bậc (ROM), cũng chỉ hoạt động với
+số học vectơ/vô hướng.
+
+\begin{remark}[Trạng thái triển khai]
+\label{rem:sigma}
+Phương trình~\eqref{eq:realtime} được triển khai hoàn toàn trong mô hình thời gian
+chạy. Phương trình~\eqref{eq:realtime_coil} \emph{không phải là}: Các nút cuộn dây
+và sắt chỉ được tỷ lệ ở thời gian chạy với $(I/I_{\mathrm{ref}})^2$. Sự phụ thuộc
+nhiệt độ của cuộn dây thay vào đó được chứa ngầm trong các giá trị dẫn điện lưu
+thông $hA$ được điều chỉnh với dữ liệu đo được (Phần~\ref{sec:validation}). Tại
+điểm hiệu chuẩn, điều này là chính xác, đối với các điểm hoạt động xa xôi, nó là
+một đơn giản hóa đã biết.
+\end{remark}
+
+Sự phân tách này là cốt lõi phương pháp luận của dự án: "Trí thông minh" nằm hoàn
+toàn trong trình giải ngoại tuyến một lần; khả năng thời gian thực phát sinh từ cấu
+trúc vật lý của vấn đề (Tuyến tính, tần số cố định), không phải từ vật lý đơn giản
+hóa.
+
+
+\section{Mô hình Vật lý}
+\label{sec:physics}
+
+Mô hình bao gồm ba vấn đề con được ghép nối, đối xứng trục, được giải trong 2D
+$(r,z)$ và quay đến 3D cho hiển thị. Bản sao đầy đủ nằm trong Phụ lục~\ref{app:derivation}.
+
+\textbf{Điện từ (Phasor):} Vì chỉ mất mát nhiệt được tính trung bình trong chu kỳ
+là liên quan đến (theo kiểu so với $50\,\mathrm{Hz}$ chậm) nhiệt học, trường không
+được mô phỏng theo từng bước thời gian mà được giải dưới dạng một phasor phức
+$A_\varphi(r,z)$ -- công thức được sử dụng ở đây thông qua thế năng vectơ từ tính
+tuân theo công trình cổ điển của Bíró và Preis~\cite{biro1989vectorpotential},
+\begin{equation}
+  -\nabla\!\cdot\!\left(\nu\nabla A_\varphi\right)
+  + \nu\frac{A_\varphi}{r^{2}} + j\omega\sigma A_\varphi = J_s,
+  \label{eq:em}
+\end{equation}
+với $\nu=1/(\mu_r\mu_0)$, $\omega=2\pi f$ và mật độ dòng điện được tạo $J_s$
+trong các cuộn dây (cuộn trong/ngoài với chiều cuộn đối lập). Trong lõi/vành
+ferromạgnetic, $\nu$ giảm mạnh và do đó gói lại từ thông.
+
+\textbf{Nhiệt Joule:} Từ mật độ dòng xoáy được tạo ra $J_e=-j\omega\sigma A_\varphi$,
+mật độ mất mát được tính trung bình trong chu kỳ tuân theo
+\begin{equation}
+  q(r,z) = \frac{|J_e|^{2}}{2\sigma}
+         = \tfrac12\,\sigma\,\omega^{2}\,|A_\varphi|^{2}\ \;[\mathrm{W/m^3}],
+  \label{eq:loss}
+\end{equation}
+có sự phụ thuộc bình phương của $|A_\varphi|$ là cơ sở cho tỷ lệ $I^2$ từ Phương
+trình~\eqref{eq:realtime}.
+
+\textbf{Độ dẫn phụ thuộc nhiệt độ:} Vì $70\,\mathrm K$ gia tăng thay đổi lợi
+điện trở cụ thể bởi $\approx27\,\%$, chúng tôi có $\sigma(T)=\sigma_0/(1+\alpha(T-T_0))$
+với $\alpha\approx3{,}9\times10^{-3}\,\mathrm{K^{-1}}$ -- với hiệu ứng ngược chiều:
+tổn thất dòng xoáy đĩa $\propto\sigma_{\mathrm{Al}}$ (phản hồi âm), tổn thất cuộn
+dây $\propto1/\sigma_{\mathrm{Cu}}$ (phản hồi dương) -- xem Phương trình~\eqref{eq:realtime}
+và \eqref{eq:realtime_coil} cũng như Ghi chú~\ref{rem:sigma} trên trạng thái triển
+khai. Cả hai hiệu ứng chỉ thay đổi biên độ, do đó kiến trúc hai bước vẫn có giá trị.
+
+\textbf{Dẫn nhiệt:} Mật độ mất mát $q$ cung cấp cho phương trình Fourier không
+ổn định
+\begin{equation}
+  \rho c_p\,\frac{\partial T}{\partial t} = \nabla\!\cdot\!(k\nabla T) + q,
+  \label{eq:fourier}
+\end{equation}
+với điều kiện biên Robin $-k\,\partial T/\partial n=h(T-T_\infty)$. Trong trường
+hợp ổn định, cân bằng năng lượng $\int_V q\,\mathrm dV=\oint_\Gamma h(T-T_\infty)\,\mathrm dA$
+phải được thỏa mãn chính xác -- bài kiểm tra xác minh trung tâm của trình giải
+nhiệt (xem Phần~\ref{sec:validation}).
+
+
+\section{Triển khai Số học và Kiến trúc Phần mềm}
+\label{sec:numerics}
+
+Cả hai vấn đề con đều được rời rạc hóa bằng Phương pháp Phần tử Hữu hạn (FEM)
+trong công thức Galerkin, với các phần tử tam giác tuyến tính (P1) trên lưới 2D
+có cấu trúc $(r,z)$; dạng yếu đối xứng trục mang trọng lượng thể tích $2\pi r$ (chi
+tiết trong Phụ lục~\ref{app:derivation}). Lắp ráp điện từ tạo ra một ma trận thưa
+phức tạp (vì $j\omega\sigma$), được giải bằng \url{scipy.sparse.linalg.spsolve}
+dựa trên NumPy~\cite{harris2020numpy} và SciPy~\cite{virtanen2020scipy}. Với
+$\sim\!10^4$ ẩn số (2D, đối xứng trục), một trình giải trực tiếp là đủ; chiều sâu
+da trong nhôm ở $50\,\mathrm{Hz}$ ($\delta\approx12\,\mathrm{mm}\gg3\,\mathrm{mm}$
+độ dày đĩa) làm cho một lưới tốt ở hướng $z$ là không cần thiết.
+
+Từ lần giải FEM một lần, một mô hình thứ nguyên thấp, khả năng thời gian thực được
+rút ra: tỷ lệ $I^2$ với hằng số thời gian bậc nhất ($\tau\approx4{,}07\,\mathrm{min}$
+ở $R=80\,\mathrm{mm}$) cho đĩa, cũng như một mạng RC phân tán (\emph{mạng nhiệt
+tham số lumped}) cho cuộn dây, lõi/vành sắt và nút không khí chung -- một nguyên
+tắc mô hình hóa được thiết lập trong công nghệ điều khiển điện~\cite{wallscheid2021thermal},
+có thể được hiệu chỉnh trực tiếp so với dữ liệu cảm biến thực. Toàn bộ bước trực
+tuyến giảm thành $O(n)$-số học, khả năng chạy trong mili giây trong trình duyệt của
+điện thoại thông minh. Bảng~\ref{tab:modules} (Phụ lục~\ref{app:software}) liệt kê
+thêm cho mỗi tệp rõ ràng phương trình nào nó giải và bằng thư viện/phương pháp nào.
+
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=5mm and 9mm,
+  box/.style={draw, rounded corners, align=center, minimum width=3.0cm,
+              minimum height=0.95cm, font=\footnotesize},
+  arr/.style={-Stealth, thick}
+]
+\node[box] (params) {\texttt{params.yaml}\\[-2pt]\tiny (Nguồn sự thật duy nhất cho tất cả các tham số)};
+\node[box, right=of params] (config) {\texttt{config.py}\\[-2pt]\tiny Đơn vị, $I_{\mathrm{peak}}$};
+\node[box, right=of config] (em) {\texttt{em\_solver.py}\\[-2pt]\tiny FEM điện từ, Bản đồ mất mát};
+\node[box, right=of em] (th) {\texttt{thermal\_solver.py}\\[-2pt]\tiny FEM nhiệt, Cân bằng};
+\node[box, right=of th] (rom) {\texttt{rom.py} / \texttt{twin\_core.py}\\[-2pt]\tiny ROM thời gian thực (SSOT)};
+\node[box, right=of rom] (out) {\texttt{build\_twin\_html\_fem.py}\\[-2pt]\tiny Nướng $\to$ AR-HTML + QR};
+\node[box, below=of rom] (sensor) {\texttt{data\_io.py} + Arduino\\[-2pt]\tiny Dòng điện được đo $I(t)$};
+
+\draw[arr] (params) -- (config);
+\draw[arr] (config) -- (em);
+\draw[arr] (em) -- (th);
+\draw[arr] (th) -- (rom);
+\draw[arr] (rom) -- (out);
+\draw[arr] (sensor) -- (rom);
+\end{tikzpicture}%
+}
+\caption{Đường ống phần mềm: từ tệp tham số qua các trình giải FEM ngoại tuyến
+đến ROM thời gian thực và cung cấp AR cuối cùng. Đường dẫn cảm biến cung cấp dòng
+cuộn dây được đo $I(t)$ làm \emph{đầu vào} của bộ tích phân thời gian
+(Phần~\ref{sec:realtime_input}); nhiệt độ là đầu ra được tính toán từ nó. Xác
+thực chéo (\texttt{xval\_twin.py}) thêm vào đó đảm bảo rằng bộ tích phân thời gian
+thực được nướng trong JavaScript phù hợp với $10^{-9}$ (tuyệt đối) với bộ tích phân
+tham chiếu Python.}
+\label{fig:pipeline}
+\end{figure*}
+
+Hình~\ref{fig:pipeline} cho thấy đường ống một chiều: Mỗi tệp có chính xác một
+trách nhiệm, và tất cả các tham số vật lý nằm trung tâm trong \texttt{params.yaml}
+(\emph{nguồn sự thật duy nhất}) -- không có hằng số nào được dây cứng trong mã.
+
+\subsection{Dòng điện xoay chiều được đo làm Đầu vào Thời gian thực}
+\label{sec:realtime_input}
+
+Cho đến nay, kỹ thuật số được vận hành với một giả định \emph{không đổi}
+$I=5\,\mathrm A$. Trạng thái mục tiêu thực tế là khác: Dòng cuộn dây nên được
+\textbf{đo liên tục} và phản hồi làm đầu vào cho mô hình nhiệt -- chỉ khi đó nó
+trở thành kỹ thuật số theo dõi hoạt động thực tế thay vì chỉ mô phỏng nó.
+
+Đo lường, điều này được giải quyết thông qua cảm biến dòng điện tác dụng Hall
+(ACS712-20A) trong một dây nối của mạch cuộn dây. Nó được cách ly gal vanically
+($\approx2{,}1$\,kV), cần thiết với $\approx195$--$240\,\mathrm V$ điện áp mạng
+được áp dụng; một điện trở shunt đơn giản sẽ không được phép ở đây. Bộ điều khiển
+vi mô hình thành giá trị hiệu dụng của thành phần xoay chiều xung quanh
+\emph{được đo} giá trị trung bình (không phải xung quanh danh nghĩa $V_{\mathrm{cc}}/2$-offset,
+vì cả nguồn cấp $5\,\mathrm V$ và điểm không của cảm biến có dung sai và trôi):
+\begin{equation}
+  I_{\mathrm{rms}} = \frac{k}{S}\sqrt{\frac{1}{N}\sum_{n=1}^{N}
+      \bigl(v_n - \bar v\bigr)^2},
+  \qquad \bar v = \frac{1}{N}\sum_{n=1}^{N} v_n .
+  \label{eq:irms}
+\end{equation}
+Ở đây $S=0{,}100\,\mathrm{V/A}$ là độ nhạy cảm biến và $k$ là hệ số hiệu chỉnh
+một điểm chống lại đồng hồ vôn kế ở điểm hoạt động $5\,\mathrm A$ ($k=1$, miễn là
+không được đo); nó hấp thụ dung sai của cả hai hằng số tờ dữ liệu.
+
+Quyết định về độ chính xác là sự lựa chọn của cửa sổ trung bình: Giá trị thực hiệu
+dụng chỉ chính xác trong một số \emph{số nguyên} các chu kỳ mạng. Cửa sổ do đó được
+xác định trên \textbf{Thời gian} -- năm chu kỳ mạng, đó là chính xác $100\,\mathrm{ms}$ --
+và không phải trên số lượng mẫu cố định $N$. Nếu không, kết quả sẽ phụ thuộc vào tốc
+độ ADC của bảng cụ thể: cùng $1000$ mẫu kéo dài trên bảng AVR khoảng $5{,}6$ chu kỳ
+mạng, trên ADC nhanh hơn của bảng Renesas chỉ khoảng $1{,}25$, gây ra lỗi phụ thuộc
+pha từ vài phần trăm. Với cửa sổ giới hạn thời gian, $N$ là một hệ quả của tốc độ
+bảng thay vì một nguồn lỗi, và firmware tương tự cung cấp cùng giá trị đo trên cả
+hai nền tảng.
+
+Phần mềm, chuỗi được triển khai hoàn toàn: giá trị đo được truyền mỗi giây dưới
+dạng CSV và điều khiển bộ tích phân thời gian trực tiếp -- bước thời gian được
+thực hiện với $I(t)$ được đo thay vì hằng số (\texttt{data\_io.py} gọi
+\texttt{TwinState.step(}$I_{\mathrm{rms}}$\texttt{,}~$\Delta t$\texttt{)} với
+$\Delta t$ giữa hai mẫu; khi mẫu không hợp lệ, nó rơi lại vào giá trị hằng số). Vì
+tất cả các tổn thất theo Phương trình~\eqref{eq:realtime} tỷ lệ với bình phương
+dòng điện, nó vẫn là một phép nhân vô hướng trên mỗi bước thời gian -- khả năng
+thời gian thực vẫn được duy trì ngay cả với đầu vào đo lường thực tế. Chuỗi được
+kiểm tra hoàn toàn với chuỗi đo lường tổng hợp; chỉ thiếu cài đặt vật lý của cảm
+biến.
+
+
+\section{Tại sao Mô phỏng với Thư viện Python}
+\label{sec:tools}
+
+Mô phỏng được tự triển khai trong Python (NumPy~\cite{harris2020numpy},
+SciPy~\cite{virtanen2020scipy}) vì yêu cầu thực tế -- một mô hình thời gian thực,
+có thể hiệu chỉnh cảm biến, chạy trên điện thoại thông minh -- yêu cầu kiểm soát
+ở cấp mã nguồn: Để khai thác cấu trúc $I^2$ từ Phần~\ref{sec:concept} (FEM giải
+một lần, sau đó chỉ tỷ lệ), bản đồ mất mát $\hat q(r,z)$ phải được trích xuất
+\emph{trước} phép nhân với $I^2$ một cách có chủ đích và tái sử dụng trong một ROM
+thời gian thực riêng biệt -- cấu trúc chỉ có thể nếu trình giải tự được viết.
+
+Để định vị, các lựa chọn thay thế được thiết lập được kiểm tra: Các công cụ như
+SimScale, COMSOL/ANSYS Maxwell~\cite{comsol_team28} hoặc FEMM~\cite{meeker2020femm}
+có thể giải quyết vấn đề điện từ nhiệt một cách cơ bản -- COMSOL thậm chí còn cung
+cấp một mô hình ví dụ hoàn thành cho TEAM~28~\cite{comsol_team28} -- cũng như các
+trình giải Mã nguồn mở Elmer~\cite{malinen2013elmer} và FEniCS~\cite{langtangen2017fenics}.
+Bảng~\ref{tab:tools} cho thấy: Không ai trong số họ thỏa mãn yêu cầu thời gian thực
+trên đây mà không có công việc bổ sung lớn.
+
+\begin{table*}[t]
+\centering\small
+\caption{So sánh các tùy chọn công cụ so với yêu cầu của kỹ thuật số (không phải
+so với một mô phỏng duy nhất).}
+\label{tab:tools}
+\begin{tabularx}{\textwidth}{@{}l
+    >{\centering\arraybackslash}X
+    >{\centering\arraybackslash}X
+    >{\centering\arraybackslash}X
+    >{\centering\arraybackslash}X
+    >{\centering\arraybackslash}X@{}}
+\toprule
+Tiêu chí & SimScale & COMSOL/Maxwell & FEMM & Elmer/FEniCS & \textbf{Python (Được chọn)} \\
+\midrule
+EM Tần số thấp (Dòng xoáy) & giới hạn & \checkmark & \checkmark & \checkmark & \checkmark (Đường dẫn mất mát có, Lực nâng mở$^\ast$) \\
+EM$\to$Liên kết nhiệt & khó & \checkmark & yếu & phức tạp & \checkmark trực tiếp trong bộ nhớ \\
+ROM / Khả năng thời gian thực & -- & một phần, đắt tiền & -- & -- & \checkmark \textbf{Thiết kế lõi} \\
+Xuất sang Web/AR & -- & -- & -- & -- & \checkmark 1 tệp HTML \\
+Hiệu chỉnh cảm biến & -- & độc quyền & -- & tự xây dựng & \checkmark \url{data_io.py} \\
+Chạy trên macOS & \checkmark & \checkmark (đắt tiền) & -- chỉ Windows & \checkmark & \checkmark \\
+Chi phí & Giới hạn giờ lõi & hàng nghìn €  & miễn phí & miễn phí & miễn phí \\
+Hộp đen? & có & có & một phần & không & \textbf{không -- kiểm soát đầy đủ} \\
+\bottomrule
+\end{tabularx}
+
+\vspace{2pt}
+{\footnotesize $^\ast$Đường dẫn mất mát (Dòng xoáy/Mất mát Ohmic) được xác thực;
+Lực nâng/Chiều cao lơ lửng vẫn chưa khớp với quan sát -- xem Phần~\ref{sec:limitations}.}
+\end{table*}
+
+Hàng cuối cùng của Bảng~\ref{tab:tools} tóm tắt cốt lõi cấu trúc: Các gói FEM
+thương mại và nhiều gói mã nguồn mở đóng gói trình giải của họ dưới dạng hộp đen,
+bất kể tiêu chí khác -- mỗi thay đổi dòng điện yêu cầu một khởi động lại trình giải
+hoàn toàn, thay vì giải một lần được mô tả cộng với tỷ lệ. FEMM được loại bỏ thêm
+vì lý do thực tế (chỉ Windows gốc, máy tính phát triển là macOS).
+
+Đối với chạy so sánh độc lập trong một trong các gói thương mại được đặt tên, Hình~\ref{fig:geometry}
+và Bảng~\ref{tab:geometry} (Phần~\ref{sec:intro}) có thể được sử dụng trực tiếp: Chúng
+chứa cùng các bán kính, số vòng cuộn dây và hằng số vật liệu, trình giải của chính
+chúng tôi đọc từ \texttt{params.yaml} -- xây dựng lại là có thể mà không cần liên
+hệ với nhóm.
+
+
+\section{Xác thực và Kết quả Trước đây}
+\label{sec:validation}
+
+\begin{table}[t]
+\centering\small
+\caption{Mất mát sức mạnh của FEM ngoài tuyến ở \emph{biên độ} kích thích $5\,\mathrm A$
+và $T_\infty=20\,^\circ$C. Để chuyển đổi thành điểm hoạt động thực tế, xem Ghi chú~\ref{rem:current}.}
+\label{tab:losses}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Nguồn mất mát & $P$\,[W] \\
+\midrule
+Tổn thất dòng xoáy đĩa (Al) & 25{,}81 \\
+Tổn thất dòng xoáy lõi sắt + vành & 5{,}86 \\
+Tổn thất cuộn dây ohmic (trong 52{,}32 + ngoài 54{,}12) & 106{,}44 \\
+\midrule
+\textbf{Tổng cộng} & \textbf{138{,}11} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Bảng~\ref{tab:losses} cho thấy phân bố mất mát hiện tại. Các bài kiểm tra nội bộ
+sau được thực hiện lại mỗi khi thay đổi mô hình; tính toán tính chất của chúng
+được cân nhắc một cách cố ý khác nhau:
+
+\begin{itemize}[nosep]
+  \item \textbf{Cân bằng năng lượng: $0{,}000\,\%$ độ lệch.} Tại điểm ổn định,
+        $\int_V q\,\mathrm dV = \oint_\Gamma h(T-T_\infty)\,\mathrm dA$. Đây là bài
+        kiểm tra \emph{có ý nghĩa nhất}, vì nó đặt các số hạng thể tích và biên độc
+        lập lại nhau.
+  \item \textbf{Kích thước vùng: tất cả độ lệch $<1\,\%$} (lớn nhất:
+        $P_{\mathrm{đĩa}}$ với $0{,}767\,\%$) trong so sánh điều kiện biên Dirichlet
+        so với Neumann trên vùng $1\times1\,\mathrm m$ -- bằng chứng được cụm khoa
+        đặt ra rằng biên ngoài xa đủ.
+  \item \textbf{Tỷ lệ $I^2$: $P(2I)/P(I) = 3{,}994$} (giá trị nên $4{,}000$) khi
+        giải lại FEM hoàn toàn. Độ lệch còn lại $0{,}15\,\%$ là \emph{không phải}
+        lỗi mà là hiệu ứng mong đợi của sự hiệu chỉnh phi tuyến $\mu_r(B)$: Tại
+        dòng điện kép, $\mu_r$ trong sắt giảm từ $993$ thành $977$, do đó tổn thất
+        tăng lên một chút dưới bình phương.
+  \item \textbf{Xác thực chéo: $<10^{-9}$ (tuyệt đối)} giữa bộ tích phân thời gian
+        thực được nướng trong JavaScript của chế độ xem AR và bộ tích phân tham chiếu
+        Python (\texttt{xval\_twin.py}), được kiểm tra trên bảy hồ sơ dòng điện.
+\end{itemize}
+
+\begin{remark}[Kiểm tra $I^2$ trong ROM]
+ROM chính nó cung cấp chính xác $4{,}000000$ cho cùng một bài kiểm tra. Tuy nhiên,
+giá trị này là \emph{tautological}: ROM \emph{là} theo cấu trúc một phép nhân vô
+hướng với $(I/I_{\mathrm{ref}})^2$, do đó không thể thất bại kiểm tra này. Nó chỉ
+chứng minh số học chính xác của mức giảm, không phải vật lý. Có ý nghĩa chỉ là giá
+trị FEM được đề cập ở trên $3{,}994$.
+\end{remark}
+
+\begin{remark}[Quy ước dòng điện]
+\label{rem:current}
+Giá trị được đo ở giá thử nghiệm $I_{\mathrm{rms}}=5\,\mathrm A$ là giá trị hiệu
+dụng; biên độ tương ứng là $\hat I=\sqrt2\,I_{\mathrm{rms}}=7{,}07\,\mathrm A$.
+Chuỗi mất mát (Bảng~\ref{tab:losses}) cố ý sử dụng $5\,\mathrm A$ làm biên độ phasor.
+Vì tất cả các tổn thất là $\propto I^2$, các số watt được đặt ra ở đó thấp hơn con
+số $2$ lần so với sức mạnh thực sự được chuyển đổi ở điểm hoạt động thực tế. Điều
+này là cho phép và cố ý, vì hệ số hằng số này được hấp thụ hoàn toàn vào lần phù
+hợp của các giá trị dẫn điện lưu thông $hA$ so với nhiệt độ cuộn dây được đo --
+dự đoán \emph{nhiệt độ} vẫn còn chính xác. Chuỗi \emph{lực} tương tác với biên độ
+thực $\hat I$, vì lực không thể được hiệu chỉnh đi.
+\end{remark}
+
+Sự cất giữ bão hòa của sắt cũng không quan trọng, nhưng phải được so sánh chính xác:
+Trình giải báo cáo $B_{\max}=0{,}663\,\mathrm T$ như một giá trị \emph{hiệu dụng},
+trong khi $B_{\mathrm{sat}}=1{,}5\,\mathrm T$ là một đại lượng vật liệu giá trị đỉnh.
+Giá trị đỉnh ngành do đó $\sqrt2\cdot0{,}663 \approx 0{,}94\,\mathrm T$, vì vậy khoảng
+$63\,\%$ của $B_{\mathrm{sat}}$. Giả định một $\mu_r$ tuyến tính vẫn có giá trị,
+dự trữ tuy nhiên nhỏ hơn, so với một so sánh trực tiếp các giá trị hiệu dụng gợi ý.
+
+Hai điểm hoạt động thực tế được đo bằng máy ảnh IR (Variac-Dial $220^\circ\approx195{,}5\,\mathrm V\to5\,\mathrm A$
+làm điểm hoạt động chính, Variac-Dial ở vị trí tối đa $270^\circ$ ($\approx240\,\mathrm V$)
+$\to7{,}8\,\mathrm A$ làm điểm lập chỉ số hiệu chuẩn). Mô hình mạng RC của các cuộn
+dây được hiệu chỉnh trực tiếp so với bộ tích phân thời gian phi tuyến hoàn toàn và
+đạt trạng thái ổn định chính xác ($T_{\mathrm{trong}}=79{,}00\,^\circ$C,
+$T_{\mathrm{ngoài}}=74{,}00\,^\circ$C ở $7{,}8\,\mathrm A$). Chỉ các cuộn dây được
+sơn đen mới cung cấp các giá trị IR đáng tin cậy (Emissivity không biết của nhôm trần).
+Đối với đĩa và lõi, phương pháp được đề xuất không phải là một cảm biến bổ sung mà
+là một mảng đo màu đen matte có emissivity già biết ($\varepsilon\approx0{,}95$) ở
+dưới đĩa -- không dây, và do đó không phản ứng lại trên lơ lửng.
+
+\textbf{Ổn định xác thực, Transient chưa xác thực.} Sự phân biệt này là quan trọng:
+Trạng thái ổn định chính xác theo cấu trúc, vì $hA_{\mathrm{trong/ngoài}}$ chính xác
+được điều chỉnh với nó. Quá trình thời gian tuy nhiên \emph{không} được xác thực
+với nó. Chống lại phép đo transient duy nhất có sẵn -- một gradual dòng điện hai bước
+($5\,\mathrm A$ cho đến $t=300\,\mathrm s$, sau đó $7{,}75\,\mathrm A$) với năm
+dấu thời gian của nhiệt độ cuộn dây ngoài -- mô hình hiện tại cho kết quả lỗi
+$\mathrm{RMS}=11{,}5\,^\circ$C (Bảng~\ref{tab:transient}): Nó ấm lên một cách có
+hệ thống quá chậm. Nguyên nhân là một thay đổi mô hình được chấp nhận cố ý; nó
+được thảo luận trong Phần~\ref{sec:limitations}.
+
+\begin{table}[t]
+\centering\small
+\caption{So sánh transient chống lại gradual dòng điện được đo (Cuộn ngoài,
+$T_\infty=29\,^\circ$C). Trạng thái ổn định khớp chính xác, quá trình ấm lên chưa.}
+\label{tab:transient}
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+$t$\,[s] & Được đo\,[$^\circ$C] & Mô hình\,[$^\circ$C] & $\Delta$\,[K] \\
+\midrule
+140 & 40{,}00 & 33{,}55 & $-6{,}45$ \\
+200 & 43{,}00 & 34{,}70 & $-8{,}30$ \\
+300 & 48{,}50 & 36{,}22 & $-12{,}28$ \\
+360 & 55{,}75 & 40{,}00 & $-15{,}75$ \\
+450 & 56{,}00 & 43{,}55 & $-12{,}45$ \\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{RMS}} & \textbf{11{,}53} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Để phân bổ vai trò giữa phép đo và mô hình, nó được giữ rõ ràng: Giá thử nghiệm
+có \emph{không} cảm biến nhiệt độ được lắp đặt vĩnh viễn. Được đo chỉ là dòng điện
+cuộn dây; nhiệt độ là đại lượng mà mô hình \emph{tính toán} từ nó (Phần~\ref{sec:realtime_input}).
+Giá trị đo nhiệt độ để đối chiếu do đó đến từ ảnh IR thủ công, không phải từ nhật ký
+liên tục. Hiệu chuẩn lại tự động của mức độ truyền nhiệt từ nhật ký cảm biến do đó
+không thể được thực hiện trên thiết lập này -- một giới hạn được chấp nhận cố ý, không
+phải một khoảng trống triển khai mở (xem Phụ lục~\ref{app:sensor}).
+
+
+\section{Kết quả Dự kiến và Triển vọng}
+\label{sec:outlook}
+
+Dự kiến gần thời gian: bắt đầu hoạt động phần cứng cảm biến và do đó chuyển từ
+giả định không đổi $I=5\,\mathrm A$ sang một \textbf{dòng điện được đo thực sự $I(t)$},
+nuôi dưỡng kỹ thuật số nhiệt lúc thực thi (Phần~\ref{sec:realtime_input}); từ đó
+một \emph{và} đường cong làm lạnh ấm lên thực tế, khiến mạng RC chưa xác định
+(đặc biệt là nút không khí chung và phân chia hai nút của cuộn dây) xác định lần
+đầu tiên và do đó sẽ đóng độ lệch transient hiện đang mở (Phần~\ref{sec:limitations}) --
+phía nhiệt độ của các đường cong này được ghi lại không tiếp xúc bằng máy ảnh IR,
+với mảng đo màu đen matte như một điều trị cho sự không chắc chắn emissivity; cũng
+như một chế độ xem AR được xuất bản với Mã QR, có thể gọi mà không cài đặt. Trung hạn:
+bảng hiệu chuẩn denser phím quay Variac $\to$ dòng điện và xác định quyết đoán hơn của
+độ thẩm thấu sắt để làm rõ câu hỏi lực nâng được đặt tên trong Phần~\ref{sec:limitations}.
+
+
+\section{Câu hỏi Mở và Giới hạn}
+\label{sec:limitations}
+
+Trong ý nghĩa của sự minh bạch khoa học: Chiều cao lơ lửng dự đoán ($z_{\mathrm{eq}}\approx11{,}7$--$14{,}7\,\mathrm{mm}$)
+không khớp với khoảng cách quan sát được ($7$--$8\,\mathrm{mm}$); bão hòa từ tính
+được loại bỏ làm nguyên nhân (Thay đổi lực $<0{,}1\,\%$), nguyên nhân có khả năng
+nhất là giá trị giữ chỗ $\mu_r$ không được đo của sắt. Điều chỉnh ngược tùy ý của
+$\mu_r$ để khớp với chiều cao quan sát được cố ý \emph{không} được thực hiện. Chuẩn
+TEAM-28 gốc (không sắt, $20\,\mathrm A$) cũng sai lệch $\approx28\,\%$ từ bảng tham
+chiếu -- tạm dừng, không chặn.
+
+\textbf{Độ lệch Transient của cuộn dây.} Lỗi $\mathrm{RMS}=11{,}5\,^\circ$C được
+ghi lại trong Bảng~\ref{tab:transient} là độ lệch mở lớn nhất hiện tại của mô hình
+nhiệt. Nguyên nhân của nó được biết đến và có thể hiểu được: Cuộn dây được mô hình
+hóa như một cơ thể hai nút (bề mặt nhìn thấy IR cộng với phần trong cuộn trễ).
+Trong phiên bản mô hình trước đó, toàn bộ sức mạnh mất mát ohmic được đặt trên nút
+bề mặt, chỉ mang $22{,}4\,\%$ dung lượng nhiệt -- điều đó có kết quả là một tỷ lệ
+ấm lên tốt để đo lường, nhưng về mặt vật lý không có cơ sở. Sức mạnh mất mát bây
+giờ được phân phối trong tỷ lệ khối lượng trên cả hai nút, để lại trạng thái ổn định
+chứng minh không thay đổi, nhưng tỷ lệ ấm lên ban đầu bằng một yếu tố $\approx4{,}5$.
+Mô hình kể từ đó là nhất quán hơn về mặt vật lý, nhưng phù hợp với gradual được đo
+tệ hơn. Các tham số ngành (phân chia dung lượng \texttt{coil\_C\_scale}, ghép nối
+nội bộ \texttt{coil\_G\_wind}) không thể xác định duy nhất từ phép đo ấm lên thuần
+-- chúng yêu cầu thêm một \emph{đường cong làm lạnh}, vẫn đang chờ. Cho đến lúc đó
+áp dụng: trạng thái ổn định được xác thực, quá trình thời gian rõ ràng không.
+
+Không có đường cong làm lạnh này, nút không khí chung của mạng RC vẫn còn xác định
+dưới. Cũng mở: Trong mô hình đĩa và cuộn dây đạt gần như cùng một nhiệt độ, trong
+khi dữ liệu IR gợi ý một cuộn dây rõ ràng nóng hơn; các quyết định chỉ có thể được
+thực hiện với một bài kiểm tra đáng tin cậy ở đoạn dưới của đĩa, tức là với mảng
+đo màu đen matte được đề cập ở trên. Cuối cùng, phản hồi $\sigma(T)$ của cuộn dây
+hiện tại được chứa ngầm chỉ qua lần phù hợp $hA$ (Ghi chú~\ref{rem:sigma}).
+
+
+\section{Tóm tắt}
+\label{sec:conclusion}
+
+Dự án theo một con đường có cơ sở vật lý cho một kỹ thuật số thời gian thực: Một
+lần giải FEM độ phân giải cao được giảm xuống thành thời gian chạy mili giây thông
+qua tỷ lệ $I^2$ và một mô hình giảm bậc có thể hiệu chỉnh được -- một cấu trúc không
+thể thực hiện được với công cụ CAE thương mại được đóng gói. Mỗi thay đổi mô hình
+được phát hành độc quyền thông qua tiêu chí vật lý tự động cứng (cân bằng năng lượng,
+Nhất quán $I^2$, xác thực chéo, điều chỉnh dữ liệu cảm biến thực). Các kết quả hiệu
+chuẩn đầu tiên trên nhiệt độ cuộn dây xác nhận khả năng của mô hình; chiều cao lơ
+lửng vẫn còn là một câu hỏi vật lý mở và sẽ được điều tra thêm với phần cứng cảm biến
+được lên kế hoạch.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\appendices
+
+\section{Bản sao Đầy đủ của các Phương trình Vật lý}
+\label{app:derivation}
+
+Dạng yếu đối xứng trục của phương trình dẫn nhiệt với trọng lượng thể tích
+$2\pi r$ đọc
+\begin{multline*}
+  \int k\,\nabla T\!\cdot\!\nabla v \cdot 2\pi r \,\mathrm dA
+  + \oint_\Gamma h\,T\,v\cdot 2\pi r\,\mathrm ds \\
+  = \int p\,v\cdot 2\pi r\,\mathrm dA
+  + \oint_\Gamma h\,T_\infty\,v\cdot 2\pi r\,\mathrm ds .
+\end{multline*}
+Đối với các phần tử P1, $\nabla T$ là phần tử hằng số, do đó ma trận độ cứng
+phần tử $K_e = 2\pi k\,(bb^\top+cc^\top)\,A\,r_c$ tuân theo trực tiếp từ các
+độ dốc của hàm hình $b,c$, diện tích phần tử $A$ và bán kính trung tâm $r_c$.
+Ma trận biên Convection với cân nặng bán kính tuyến tính kết quả
+$K_{\mathrm{edge}} = 2\pi h\,\tfrac{L}{12}
+\left(\begin{smallmatrix} 3r_a+r_b & r_a+r_b \\ r_a+r_b & r_a+3r_b\end{smallmatrix}\right)$.
+Trong \emph{vấn đề nhiệt} con, trục $r=0$ là một điều kiện đối xứng và vẫn là
+điều kiện biên tự nhiên chưa được áp dụng (các cạnh biên trên trục được bỏ qua
+trong lắp ráp Convection). Trong \emph{vấn đề điện từ} con, điều đó \textbf{không}
+được áp dụng: Ở đó $A_\varphi=0$ được đặt rõ ràng trên trục là điều kiện Dirichlet,
+vì thành phần phương vị của thế năng vectơ phải biến mất về mặt vật lý như $r\to0$.
+Cho phần tùy này kết quả tương tự một ma trận độ cứng từ Phương trình~\eqref{eq:em}.
+Số hạng $j\omega\sigma$ làm cho nó phức tạp; nó được lắp ráp như một ma trận
+phức tạp duy nhất và được phân tích trực tiếp trong số học phức tạp (không tách
+thành hệ thống bộ phận thực và tưởng tượng). Mật độ từ thông từ tính kết quả
+$B_r=-\partial A_\varphi/\partial z$, $B_z=\tfrac1r\,\partial(rA_\varphi)/\partial r$.
+
+Về mặt vật lý, Phương trình~\eqref{eq:em} mô tả trường AC: Số hạng $j\omega\sigma
+A_\varphi$ là phản ứng dòng xoáy trong mỗi cơ thể dẫn điện (đĩa, sắt); số hạng
+$\nu A_\varphi/r^2$ là hiệu ứng hình học của đối xứng trục và lý do tại sao 2D
+thay vì 3D là đủ. Ở $I_{\mathrm{rms}}=5\,\mathrm A$ qua cuộn quay $1000$-cuộn
+ngoài, $B_{\max}$ trong lõi sắt $0{,}663\,\mathrm T$ như một giá trị hiệu dụng,
+tương ứng một giá trị đỉnh $\approx0{,}94\,\mathrm T$ -- so với $B_{\mathrm{sat}}=1{,}5\,\mathrm T$
+do đó chưa bão hòa (so sánh Phần~\ref{sec:validation}).
+
+\section{Đường ống Phần mềm Đầy đủ}
+\label{app:software}
+
+Bảng~\ref{tab:modules} trả lời rõ ràng thư viện nào giải phương trình nào bằng
+phương pháp số nào -- bổ sung để Hình~\ref{fig:pipeline} (Luồng dữ liệu) và
+Phụ lục~\ref{app:derivation} (Bản sao của các phương trình tự chúng).
+
+\begin{table}[h]
+\centering\scriptsize
+\caption{Mô-đun cốt lõi của đường ống phần mềm: phương trình được giải và phương
+pháp số cho mỗi tệp.}
+\label{tab:modules}
+\begin{tabularx}{\linewidth}{@{}p{1.6cm} X X@{}}
+\toprule
+Tệp & Giải & Phương pháp \\
+\midrule
+\url{config.py} & Tham số tải/bình thường hóa (mm$\to$m), $I_{\mathrm{peak}}=I_{\mathrm{rms}}\sqrt2$ & PyYAML; Lớp dữ liệu, không giải phương trình \\
+\url{em_solver.py} & Eq.~\eqref{eq:em} $\to$ Eq.~\eqref{eq:loss}, Nâng lực & \url{scipy.sparse.linalg.spsolve} (phức tạp, LU) \\
+\url{thermal_solver.py} & Eq.~\eqref{eq:fourier}, ổn định & \url{scipy.sparse.linalg.spsolve} (thực, SPD) \\
+\url{rom.py} & $\tau{=}C/UA$ từ $\hat P,\Delta\hat T$; ODE xác thực & \url{scipy.integrate.solve_ivp} \\
+\url{twin_core.py} & Mạng RC (Cuộn dây/Sắt/Không khí); Lơ lửng & Euler rõ ràng, $n_{\mathrm{sub}}{=}\lceil\Delta t/(0{,}05\tau)\rceil$; Lơ lửng giải quyết gần \\
+\url{refit_hA.py} & Không của $T_{\mathrm{ss}}(hA)-T_{\mathrm{meas}}$ & \url{scipy.optimize.fsolve} \\
+\url{xval_twin.py} & -- (Xác minh phần mềm) & Playwright: Integrator Python- vs.\ JS, $|\Delta|{<}10^{-9}$ \\
+\url{build_twin_html_fem.py} & nướng: Công thức giống hệt nhau trong JavaScript & -- \\
+\url{data_io.py} & Cầu cảm biến $\to$ \url{TwinState.step(I,dt)} & Phân tích chuỗi/Mock-CSV (NumPy) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Theo thuật toán, đường ống chia chính xác thành hai bước từ Phần~\ref{sec:concept}:
+\textbf{Ngoại tuyến} \url{em_solver.py} và \url{thermal_solver.py} mỗi cái giải một
+hệ phương trình tuyến tính \emph{một lần trực tiếp} (Phân rã LU, không lặp lại) và
+cung cấp $\hat q(r,z)$, $\hat P_{\mathrm{Cu}}$ cũng như $\tau$. \textbf{Trực tuyến}
+\url{twin_core.py} tích hợp mạng RC kết quả với một thủ tục Euler rõ ràng được viết
+tay -- được chọn vì tự do thư viện (\texttt{numpy+stdlib only}) duy nhất cho phép
+xuất sang JavaScript sau; kích thước bước được chia tự động trên mỗi cuộc gọi thành
+$n_{\mathrm{sub}}$ bước con không quá $5\,\%$ của $\tau$, để giữ cho quy trình được
+ổn định về mặt số học ngay cả khi $\Delta t$ lớn (ví dụ: thời gian nhanh). Ngoại lệ
+duy nhất là động lực lơ lửng: phương trình chuyển động (Oscillator lò xo-khối lượng
+được giảm chấn) của nó có một giải pháp phân tích chính xác và do đó được đánh giá
+trực tiếp trên mỗi cuộc gọi, không được tích hợp lặp lại.
+
+\section{Thiết lập Đo lường cho Đầu vào Dòng điện}
+\label{app:sensor}
+
+Đặc tả của khoa là thiết kế một giải pháp đo lường nhỏ dựa trên Arduino. Được triển
+khai là cố ý \emph{chính xác một} đại lượng được đo: dòng điện cuộn dây. Thiết lập
+bao gồm một cảm biến dòng điện Hall ACS712-20A trên Arduino UNO (R3 hoặc R4;
+pincompatible, firmware giống nhau), gửi các dòng CSV \url{millis,I_rms_A} qua USB
+mỗi giây.
+
+\textbf{Tại sao chỉ dòng điện?} Vì dòng điện là \emph{đầu vào} của kỹ thuật số và
+nhiệt độ là \emph{đầu ra} của nó. Giá thử nghiệm không có cảm biến nhiệt độ được lắp
+đặt, và một nhiệt điện được gắn vào đĩa lơ lửng sẽ làm phiền một cách chính xác kích
+thước được đo lường. Phản ứng nhiệt độ do đó không tiếp xúc qua máy ảnh IR. Điểm yếu
+đã biết của nó -- nhôm trần có emissivity thấp không biết và cung cấp các giá trị
+không sử dụng được (xác nhận 2026-06-23) -- không được giải quyết bằng cảm biến liên
+hệ, mà là một mảng đo màu đen matte có emissivity đã biết trên phía dưới của đĩa.
+
+Danh sách hóa chất: Mô-đun ACS712-20A; Tụ điện gốm $0{,}1\,\mu$F (OUT$\to$GND, bộ
+lọc nhiễu); Các clamp vít hai cực cho phía điện áp mạng; Jumpers. \textbf{An toàn:}
+IP+/IP$-$ nằm trên mạch điện áp mạng $0$--$240\,\mathrm V$ và được cách ly từ
+phần tín hiệu $0$--$5\,\mathrm V$; cả hai phía không được bao giờ được cầu nối, và
+Variac phải được đặt trên $0$ trước bất kỳ thay đổi dây nào.
+
+Bắt đầu vận hành: (1) Kết nối Arduino mà không kết nối mạng -- dòng chẩn đoán phải
+báo cáo một sự sai lệch DC gần $2{,}5\,\mathrm V$ và một dòng điện gần $0\,\mathrm A$
+(cơ sở nhiễu); (2) Variac ở $0$, các hành động tại IP+/IP$-$ clamp; (3) Cách từ từ
+đến vị trí Dial $220^\circ$ (điểm hoạt động chính, $\approx5\,\mathrm A$) và kiểm tra
+giá trị dòng điện được báo cáo so với đồng hồ vôn kế, từ đó xác định hệ số $k$ từ
+Phương trình~\eqref{eq:irms}; (4) Ghi lại một lần chạy trong $\geq3\tau\approx20\,\mathrm{min}$
+và chạy kỹ thuật số với nó; (5) Đồng thời ghi lại ảnh IR ở các khoảng thời gian cố
+định như một ngành cơ sở độc lập của nhiệt độ được tính toán -- bao gồm một pha làm
+lạnh sau khi tắt, yêu cầu cho câu hỏi transient được đặt tên trong Phần~\ref{sec:limitations}.
+
+\bibliographystyle{IEEEtran}
+\bibliography{dt4tm_references}
+
+\end{document}

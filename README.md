@@ -42,6 +42,8 @@ python xval_twin.py                      # pin twin_core.py against the baked JS
 python refit_hA.py                       # WP-COOL T4: refit lumped_thermal.hA_inner/outer through the
                                           # actual nonlinear TwinState integrator (params.yaml stays SSOT)
 python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
+python digital_twin_live.py               # OPTIONAL live mode: twin driven by the Arduino-measured current
+                                          # (--port /dev/cu.usbmodem… | mock, --replay log.csv, --self-check)
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
 
 # Optional extension: PyVista desktop 3D twin (~400MB VTK dep, see extensions/README.md)
@@ -83,7 +85,7 @@ levitation_height_team28.csv    # Table I from the PDF (levitation height, valid
 mock_sensor_data.csv            # synthetic sensor log for testing data_io.py
 docs/               # LIVING docs: physics.md, ARCHITECTURE.md, CHANGELOG.md, HANDOFF.md,
                     #   SENSOR_PLAN.md, QUICK_START_FOR_AGENTS.md, math_formulation.md,
-                    #   REPORT_WHY_CUSTOM_CODE{,_DE}.md
+                    #   REPORT_WHY_CUSTOM_CODE{,_DE}.md, METHODS_SUMMARY.md
 docs/archive/       # COMPLETED plans + bug registers, named YYYY-MM-DD_TOPIC.md.
                     #   Historical record only — see docs/archive/README.md for the index.
 outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin_fem.html)

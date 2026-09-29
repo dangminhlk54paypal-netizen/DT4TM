@@ -2,7 +2,9 @@
 
 > Prepared 2026-07-10, answering professor's question. Detailed references:
 > `docs/physics.md` (formulas), `docs/ARCHITECTURE.md`, `docs/SENSOR_PLAN.md`,
-> `README.md` (roadmap), `docs/CHANGELOG.md` (session-by-session history).
+> `README.md` (roadmap), `docs/CHANGELOG.md` (session-by-session history),
+> `docs/METHODS_SUMMARY.md` (concrete numerical methods/algorithms + OSS libraries —
+> professor's Juli 2026 follow-up asking specifically for this).
 
 ---
 

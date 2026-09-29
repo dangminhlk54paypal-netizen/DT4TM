@@ -42,7 +42,11 @@ electrodynamic levitator (TEMF). Predict T(r,z,t), validate vs the rig, visualiz
   effects appear. (em_domain now ±500 mm in params.yaml.)
 - **Ambient temperature**: constant T_amb = 20°C. Do NOT integrate real lab sensor data
   yet. Upgrade only if results are inaccurate. ("Nehmt erst mal alles so einfach wie
-  möglich an.")
+  möglich an.") DEFAULT stays 20°C everywhere (HTML fallback = ROM.T_amb). User
+  decision 2026-09-27: for a REAL measurement only, `weather_api.py` records the live
+  Google Weather ambient into the log (data_io.py log / digital_twin_live.py serial,
+  refreshed every `weather_api.log_refresh_s`) and seeds the twin with it; key usable
+  through `weather_api.key_valid_until` (2026-10-15), fallback 20°C after.
 - **Excitation data**: measured constant values, main op point **190V→5A**. No real-time
   current measurement device yet (needs purchase). Use constant I=5A for Phase 1.
 - **Sensors for validation**: team designs own solution. Arduino + thermocouple/RTD +
@@ -145,7 +149,9 @@ All of these are done, verified, and have no open issues. Details → docs/CHANG
 | `refit_hA.py` | Refits `lumped_thermal.hA_inner/outer` through the real `TwinState` integrator. params.yaml stays SSOT. |
 | `visualize.py`, `sim_plates.py` | 2D→3D revolve/GLB export, cross-plate comparison. |
 | `data_io.py` + `arduino/thermal_sensor.ino` | SensorReader (serial/mock) → `calibrate_from_file()` → `rom.calibrate_UA()`. Tested vs `mock_sensor_data.csv`. |
+| `weather_api.py` | stdlib-only: the SINGLE key loader (`load_key`, also used by the builder), `key_active` (expiry), `ambient_now(fallback)` → {T_amb_degC, source, fetched_at}; never raises, never prints the key. `python weather_api.py` shows the current reading. |
 | `gen_qr.py` | QR → `outputs/qr_digital_twin.png`. Hosting URL still undecided. |
+| `digital_twin_live.py` | OPTIONAL separate live mode: ACS712 I_rms (serial/mock/replay) → reader thread → `LiveDriver` (ZOH, dead-band, gap/resync flags) → the same `TwinState`. Params: `live_sensor` block. `--self-check` 11/11. The HTML twin has the same feature as its `Sensor` excitation mode (Web Serial, Chrome/Edge). |
 
 **Cross-cutting invariant:** `twin_core.py` and the HTML's baked JS implement the same
 physics twice. Change one → change the other → `python xval_twin.py` must stay PASS.
@@ -171,8 +177,11 @@ physics twice. Change one → change the other → `python xval_twin.py` must st
       existing heat-up-only data, and the shared air node (T5) cannot be fitted without
       it. Also fits `coil_G_wind_W_per_K`/`convection_exponent` (order-of-magnitude
       only today). See docs/SENSOR_PLAN.md.
-- [ ] **NEXT: sensor hardware build** (Arduino + MAX31855×2, docs/SENSOR_PLAN.md), log a
-      real run, re-calibrate from it.
+- [ ] **NEXT: sensor hardware build** (Arduino + MAX31855×2 + ACS712-20A current
+      sensor, docs/SENSOR_PLAN.md / docs/archive/Stromsensor_.docx), log a real run,
+      re-calibrate from it. Firmware + `data_io.py` pipeline ready (4-column CSV incl.
+      `I_rms_A`, `calibrate_from_file` now uses measured I instead of fixed `current_A`);
+      physical install/wiring still pending.
 - [ ] PAUSED, not blocking: `run_benchmark_validation()` (original TEAM28, 20A, no iron)
       gives z_eq≈**14.5mm** vs 11.3mm expected (28% overshoot). Was 6.8mm/40% UNDERSHOOT
       until a missed WP-PEAK call site was fixed 2026-07-11 — that confirmed the RMS/peak

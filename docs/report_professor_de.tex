@@ -1,0 +1,553 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[ngerman]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{pifont}
+\usetikzlibrary{arrows.meta, positioning, fit, backgrounds}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, citecolor=black, urlcolor=blue!50!black}
+
+\title{\textbf{Digitaler Zwilling für die thermische Simulation \\
+eines elektrodynamischen Levitators (TEAM~28-Benchmark)} \\[0.3em]
+\large Konzept, Methodik und erwartete Ergebnisse}
+\author{Fachgebiet TEMF \\ Projektbericht: Thermal Digital Twin}
+\date{Stand: August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+Dieser Bericht beschreibt Idee, physikalische Methodik und Softwarearchitektur
+eines \emph{digitalen Zwillings} (Digital Twin) für die thermische Vorhersage
+am elektrodynamischen Levitator nach dem TEAM-28-Benchmark (COMPUMAG). Statt
+kommerzieller CAE-Software wurde ein selbst entwickelter Python-Löser gewählt,
+weil das eigentliche Ziel keine einmalige Simulation, sondern ein
+\emph{echtzeitfähiges} Vorhersagemodell ist, das auf einem Smartphone per
+AR-Ansicht läuft. Der Bericht erläutert die physikalische Modellkette
+(Elektromagnetik~$\to$~Joulsche Verlustwärme~$\to$~Wärmeleitung), die
+numerische Umsetzung (FEM-Offline-Lösung plus echtzeitfähiges Reduced-Order-Model),
+die Entwicklungsmethodik (KI-gestützte, agentische Softwareentwicklung mit
+strenger physikalischer Verifikation) sowie die bisherigen und erwarteten
+Ergebnisse. Offene Fragen und Grenzen des aktuellen Modells werden transparent
+benannt.
+\end{abstract}
+
+\tableofcontents
+\clearpage
+
+% ---------------------------------------------------------------------------
+\section{Einleitung und Motivation}
+% ---------------------------------------------------------------------------
+
+\subsection{Die Aufgabenstellung}
+Das TEAM-Problem~28 ist ein etablierter Benchmark der
+Computational-Electromagnetics-Gemeinschaft (COMPUMAG) zur Validierung
+selbst geschriebener elektromagnetischer Löser: eine leitfähige Aluminiumscheibe
+levitiert über einer Spulenanordnung, die mit Wechselstrom (hier $\hat{\imath}
+\approx 5\,\mathrm{A}$, $f = 50\,\mathrm{Hz}$) betrieben wird. Der zeitlich
+veränderliche magnetische Fluss induziert Wirbelströme in der Scheibe, die
+sowohl eine Hubkraft (Levitation) als auch eine Verlustwärme (Erwärmung)
+erzeugen. Der am Fachgebiet TEMF aufgebaute Versuchsstand entspricht diesem
+Benchmark strukturell, weist aber wesentliche Zusatzelemente auf, die im
+Originalproblem nicht vorkommen: einen ferromagnetischen Kern
+($\mu_r \approx 1000$) und einen ferromagnetischen Außenring, beide mit
+messbarer Eigenerwärmung.
+
+\subsection{Vom Simulationsmodell zum digitalen Zwilling}
+Die Aufgabe lautet nicht, \emph{einmal} ein Temperaturfeld zu berechnen,
+sondern ein Modell zu bauen, das
+\begin{itemize}[nosep]
+  \item das Temperaturfeld $T(r,z,t)$ \textbf{kontinuierlich} vorhersagt, während
+        Nutzerinnen und Nutzer den Betriebsstrom in Echtzeit ändern,
+  \item gegen den realen Versuchsstand \textbf{validiert} wird (IR-Kamera,
+        Thermoelemente),
+  \item am Ende über einen \textbf{QR-Code} auf einem Smartphone in
+        Augmented Reality (AR) betrachtet werden kann.
+\end{itemize}
+Diese drei Anforderungen zusammen definieren einen \emph{digitalen Zwilling}
+im eigentlichen Sinn -- nicht nur ein Simulationsergebnis, sondern ein
+laufendes, validiertes, interaktives Modell des physischen Systems. Genau
+diese Anforderung ist der Ausgangspunkt für alle in diesem Bericht
+begründeten methodischen Entscheidungen.
+
+% ---------------------------------------------------------------------------
+\section{Physikalisches Grundkonzept: Warum Echtzeit möglich ist}
+% ---------------------------------------------------------------------------
+
+Ein digitaler Zwilling, der bei jeder Stromänderung eine volle FEM-Simulation
+neu rechnet, wäre auf einem Smartphone nicht realisierbar (Rechenzeit:
+Sekunden bis Minuten pro Lauf). Die Lösung liegt in einer physikalischen
+Beobachtung, nicht in einer Software-Abkürzung:
+
+\begin{quote}
+\itshape
+Bei fester Frequenz ($50\,\mathrm{Hz}$) und linearen Materialeigenschaften
+skalieren alle Joulschen Verluste quadratisch mit dem Strom
+($P \propto \hat{\imath}^2$), während sich die \textbf{räumliche
+Verteilung} der Verluste \emph{nicht} ändert -- nur ihre Amplitude.
+\end{quote}
+
+Daraus folgt eine zweistufige Architektur:
+\begin{enumerate}[nosep]
+  \item \textbf{Offline (einmalig):} Die elektromagnetische FEM wird
+        \emph{einmal} bei einem Referenzstrom $\hat{\imath}_{\mathrm{ref}}$
+        gelöst. Ergebnis ist eine ortsaufgelöste Verlustkarte
+        $\hat{q}(r,z)$ (Wirbelstromverluste in Scheibe und Eisen) sowie
+        Spulenverluste $\hat{P}_{\mathrm{Cu}}$.
+  \item \textbf{Online (Echtzeit, Millisekunden):} Für einen beliebigen
+        Betriebsstrom $\hat{\imath}$ und die zuletzt bekannte
+        Körpertemperatur $\bar T$ wird die Verlustkarte nur noch
+        \textbf{skalar multipliziert}:
+        \[
+          q(r,z;\hat{\imath},\bar T) = \hat q(r,z)\cdot
+          \left(\frac{\hat{\imath}}{\hat{\imath}_{\mathrm{ref}}}\right)^{2}
+          \cdot \frac{\sigma(\bar T)}{\sigma(T_{\mathrm{ref}})}.
+        \]
+        Diese Verlustleistung speist ein reduziertes thermisches Modell
+        (Reduced-Order-Model, ROM), das ebenfalls nur mit einfacher
+        Vektor-/Skalar-Arithmetik arbeitet.
+\end{enumerate}
+
+Diese Zerlegung ist der eigentliche methodische Kern des Projekts: Die
+"`Intelligenz“" steckt vollständig im einmaligen Offline-Löser; die
+Echtzeitfähigkeit entsteht rein aus der physikalischen Struktur des Problems
+(Linearität, feste Frequenz), nicht aus einer vereinfachten oder
+"`gecheateten“" Physik.
+
+% ---------------------------------------------------------------------------
+\section{Physikalisches Modell}
+% ---------------------------------------------------------------------------
+
+Das Modell besteht aus einer Kette von drei gekoppelten Teilproblemen, die
+alle achsensymmetrisch sind und daher in der reduzierten 2D-Ebene $(r,z)$
+gelöst und für die Darstellung zu 3D rotiert werden.
+
+\subsection{Elektromagnetik (Phasor-Formulierung)}
+Da nur die \emph{zyklusgemittelte} Verlustwärme für die (im Vergleich zu
+$50\,\mathrm{Hz}$ sehr langsame) Thermik relevant ist, wird das
+elektromagnetische Feld nicht zeitschrittweise bei $50\,\mathrm{Hz}$
+simuliert, sondern als komplexer Phasor $A_\varphi(r,z)$ (azimutale
+Komponente des Vektorpotentials) gelöst:
+\[
+  -\nabla\!\cdot\!\left(\nu \nabla A_\varphi\right)
+  + \nu\,\frac{A_\varphi}{r^{2}}
+  + j\omega\sigma\, A_\varphi = J_s ,
+  \qquad \nu = \frac{1}{\mu_r \mu_0},\quad \omega = 2\pi f .
+\]
+Hierbei ist $J_s$ die eingeprägte Stromdichte in den Spulen (Innenspule und
+Außenspule mit entgegengesetztem Wicklungssinn), $\sigma$ die elektrische
+Leitfähigkeit (Aluminium, Kupfer, Eisen) und $\nu$ die magnetische
+Reluktivität, die im ferromagnetischen Kern/Ring stark abfällt und so den
+magnetischen Fluss bündelt.
+
+\subsection{Joulsche Verlustwärme (zyklusgemittelt)}
+Aus dem Phasorfeld folgt die induzierte Wirbelstromdichte
+$J_e = -j\omega\sigma A_\varphi$ und daraus die zeitlich gemittelte
+Verlustdichte
+\[
+  q(r,z) = \frac{|J_e|^{2}}{2\sigma}
+         = \tfrac{1}{2}\,\sigma\,\omega^{2}\,|A_\varphi|^{2}
+         \quad [\mathrm{W/m^3}].
+\]
+Der Faktor $\tfrac12$ folgt aus der Mittelung von $\sin^2(\omega t)$ über
+eine Periode. Diese quadratische Abhängigkeit von $|A_\varphi|$ ist die
+physikalische Grundlage der $I^2$-Skalierung aus Abschnitt~3.
+
+\subsection{Temperaturabhängige Leitfähigkeit}
+Da eine Erwärmung um $70\,\mathrm{K}$ den spezifischen Widerstand um rund
+$27\,\%$ ändert, wird dieser Effekt nicht vernachlässigt:
+\[
+  \sigma(T) = \frac{\sigma_0}{1+\alpha (T-T_0)}, \qquad
+  \alpha \approx 3.9\times 10^{-3}\,\mathrm{K^{-1}}.
+\]
+Bemerkenswert ist die \textbf{gegenläufige} Wirkung: Die Scheibenverluste
+sind proportional zu $\sigma_{\mathrm{Al}}$ (heißere Scheibe $\to$ geringere
+Verluste, negative Rückkopplung), während die Spulenverluste proportional
+zu $1/\sigma_{\mathrm{Cu}}$ sind (heißere Spule $\to$ höhere Verluste,
+positive Rückkopplung). Da beide Effekte nur die \emph{Amplitude} und nicht
+das \emph{räumliche Muster} ändern, bleibt die Zweistufenarchitektur aus
+Abschnitt~3 gültig -- $\sigma(T)$ wird als weiterer Laufzeit-Skalar
+eingerechnet, ohne die FEM neu zu lösen.
+
+\subsection{Wärmeleitung}
+Die Verlustdichte $q$ dient als Quellterm der instationären
+Fourier-Gleichung:
+\[
+  \rho c_p \frac{\partial T}{\partial t} = \nabla\!\cdot\!(k\nabla T) + q,
+\]
+mit Robin-Randbedingung für Konvektion,
+$-k\,\partial T/\partial n = h\,(T-T_\infty)$. Im stationären Fall muss die
+Energiebilanz exakt erfüllt sein:
+\[
+  \int_V q\,\mathrm dV \;=\; \oint_{\Gamma} h\,(T-T_\infty)\,\mathrm dA .
+\]
+Diese Bilanzgleichung ist der zentrale Verifikationstest des thermischen
+Lösers (siehe Abschnitt~7).
+
+% ---------------------------------------------------------------------------
+\section{Numerische Umsetzung und Softwarearchitektur}
+% ---------------------------------------------------------------------------
+
+\subsection{Diskretisierung}
+Beide Teilprobleme (Elektromagnetik, Wärmeleitung) werden mit der
+\textbf{Finite-Elemente-Methode (FEM)} in Galerkin-Formulierung diskretisiert,
+mit linearen Dreieckselementen (P1) auf einem strukturierten 2D-Netz
+$(r,z)$. Die achsensymmetrische Schwachform trägt das Volumengewicht
+$2\pi r$:
+\[
+  \int k\,\nabla T\!\cdot\!\nabla v \cdot 2\pi r \,\mathrm dA
+  + \oint_\Gamma h\,T\,v\cdot 2\pi r\,\mathrm ds
+  = \int p\,v\cdot 2\pi r\,\mathrm dA
+  + \oint_\Gamma h\,T_\infty\,v\cdot 2\pi r\,\mathrm ds .
+\]
+Für das elektromagnetische Teilproblem ergibt die Assemblierung eine
+\textbf{komplexe} dünnbesetzte Matrix (wegen des $j\omega\sigma$-Terms), die
+direkt mit \texttt{scipy.sparse.linalg.spsolve} gelöst wird. Bei
+$\sim\!10^{4}$ Unbekannten (2D, achsensymmetrisch) genügt ein direkter
+Löser -- ein iteratives Verfahren oder eine 3D-Vernetzung wäre für diese
+Problemgröße unnötiger Mehraufwand.
+
+Ein wichtiges Detail zur Netzauflösung: Die Skintiefe in Aluminium bei
+$50\,\mathrm{Hz}$ beträgt $\delta \approx 12\,\mathrm{mm}$, deutlich mehr als
+die Scheibendicke von $3\,\mathrm{mm}$. Der Wirbelstrom ist somit über die
+Dicke näherungsweise gleichverteilt -- eine feine Vernetzung in
+$z$-Richtung ist nicht erforderlich; die Netzverfeinerung konzentriert sich
+stattdessen auf den Spalt zwischen Spule und Scheibe sowie auf die
+Außenkanten.
+
+\subsection{Reduced-Order-Model (ROM) für Echtzeit}
+Aus der einmaligen FEM-Lösung wird ein niederdimensionales, echtzeitfähiges
+Modell abgeleitet:
+\begin{itemize}[nosep]
+  \item \textbf{$I^2$-Skalierung + Zeitkonstante erster Ordnung}
+        (\texttt{rom.py}) für die Scheibe, mit thermischer Zeitkonstante
+        $\tau \approx 4{,}07\,\mathrm{min}$ bei $R=80\,\mathrm{mm}$.
+  \item \textbf{Verteiltes RC-Netzwerk} (\texttt{twin\_core.py}) für Spulen,
+        Eisenkern/-ring und den gemeinsamen Luftknoten -- jeder Körper als
+        Wärmekapazität $C=\rho c_p V$, verbunden über Leitwerte $G$ bzw.
+        Konvektionsleitwerte $hA$. Dieses Netzwerk ist bewusst so gewählt,
+        weil es sich direkt an realen Sensordaten kalibrieren lässt
+        (Abschnitt~7).
+\end{itemize}
+Der gesamte Online-Schritt reduziert sich auf einfache Vektor-/
+Skalararithmetik ($O(n)$), lauffähig in Millisekunden im Browser eines
+Smartphones -- exakt die Voraussetzung für die AR-Anwendung.
+
+\subsection{Softwarepipeline}
+Die Implementierung folgt einer strikten Ein-Weg-Pipeline, wobei jede Datei
+genau eine Verantwortung trägt und alle physikalischen Parameter zentral in
+\texttt{params.yaml} liegen (\emph{single source of truth}, keine
+Konstante ist im Code fest verdrahtet):
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=6mm and 10mm,
+  box/.style={draw, rounded corners, align=center, minimum width=3.1cm,
+              minimum height=1.05cm, font=\footnotesize},
+  arr/.style={-Stealth, thick}
+]
+\node[box] (params) {\texttt{params.yaml}\\[-2pt]\tiny (SSOT aller Parameter)};
+\node[box, below=of params] (config) {\texttt{config.py}\\[-2pt]\tiny Einheiten, $I_{\mathrm{peak}}$};
+\node[box, below left=8mm and -3mm of config] (em) {\texttt{em\_solver.py}\\[-2pt]\tiny EM-FEM, Verlustkarte};
+\node[box, below right=8mm and -3mm of config] (th) {\texttt{thermal\_solver.py}\\[-2pt]\tiny Wärme-FEM, Bilanz};
+\node[box, below=16mm of config] (rom) {\texttt{rom.py} / \texttt{twin\_core.py}\\[-2pt]\tiny Echtzeit-ROM (SSOT-Integrator)};
+\node[box, below=of rom] (out) {\texttt{build\_twin\_html\_fem.py}\\[-2pt]\tiny Bake $\to$ AR-HTML + QR};
+\node[box, right=14mm of rom] (sensor) {\texttt{data\_io.py} + Arduino\\[-2pt]\tiny Sensor-Kalibrierung};
+
+\draw[arr] (params) -- (config);
+\draw[arr] (config) -- (em);
+\draw[arr] (config) -- (th);
+\draw[arr] (em) -- (rom);
+\draw[arr] (th) -- (rom);
+\draw[arr] (rom) -- (out);
+\draw[arr] (sensor) -- (rom);
+\end{tikzpicture}
+\captionof{figure}{Vereinfachte Softwarepipeline: von der Parameterdatei über
+die Offline-FEM-Löser zum echtzeitfähigen ROM und der finalen
+AR-Auslieferung. Der Sensorpfad speist die Kalibrierung des ROM.}
+\end{center}
+
+Eine \emph{Kreuzvalidierung} (\texttt{xval\_twin.py}, Playwright-basiert)
+stellt sicher, dass der in JavaScript "`gebackene“" Echtzeit-Integrator der
+AR-HTML-Datei exakt mit dem Python-Referenzintegrator (\texttt{twin\_core.py})
+übereinstimmt -- eine Fehlerklasse, die sonst leicht unbemerkt entsteht
+(Koeffizient im Python-Code korrigiert, aber die HTML-Datei nicht neu
+gebacken).
+
+% ---------------------------------------------------------------------------
+\section{Warum kein kommerzielles CAE-Werkzeug}
+% ---------------------------------------------------------------------------
+
+Werkzeuge wie SimScale, COMSOL/ANSYS Maxwell oder FEMM könnten das
+elektromagnetisch-thermische Teilproblem grundsätzlich lösen. Sie erfüllen
+jedoch nicht die eigentliche Anforderung -- ein echtzeitfähiges,
+sensor-kalibrierbares, auf einem Smartphone lauffähiges Modell:
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Kriterium & SimScale & COMSOL/Maxwell & FEMM & Elmer/FEniCS & \textbf{Python (gewählt)} \\
+\midrule
+Niederfrequenz-EM (Wirbelstrom) & begrenzt & \checkmark & \checkmark & \checkmark & \checkmark (validiert an TEAM~28) \\
+EM$\to$Thermik-Kopplung & schwierig & \checkmark & schwach & komplex & \checkmark direkt in-memory \\
+ROM / Echtzeitfähigkeit & \ding{55} & teilweise, teuer & \ding{55} & \ding{55} & \checkmark \textbf{Kernentwurf} \\
+Export nach Web/AR & \ding{55} & \ding{55} & \ding{55} & \ding{55} & \checkmark 1 HTML-Datei \\
+Sensor-Kalibrierung & \ding{55} & proprietär & \ding{55} & selbst zu bauen & \checkmark \texttt{data\_io.py} \\
+Läuft auf macOS & \checkmark & \checkmark (teuer) & \ding{55} nur Windows & \checkmark & \checkmark \\
+Kosten & Core-Hour-Limit & tausende~€ & kostenlos & kostenlos & kostenlos \\
+Black Box? & ja & ja & teilweise & nein & \textbf{nein -- volle Kontrolle} \\
+\bottomrule
+\end{tabular}
+\caption{Vergleich der Werkzeugoptionen gegen die Anforderungen des digitalen
+Zwillings (nicht gegen eine reine Einzelsimulation).}
+\end{table}
+
+Der entscheidende Punkt ist strukturell, nicht nur praktisch: Kommerzielle
+und viele Open-Source-FEM-Pakete kapseln den Löser als Black Box -- jede
+Stromänderung erfordert einen vollständigen Solver-Neustart. Um die in
+Abschnitt~3 beschriebene $I^2$-Struktur auszunutzen (FEM einmal lösen,
+danach nur noch skalieren), muss der Löser auf Quellcode-Ebene
+kontrollierbar sein: Zwischenergebnisse (die Verlustkarte $\hat q(r,z)$
+\emph{vor} der Multiplikation mit $I^2$) müssen gezielt herausgezogen und
+weiterverwendet werden können. FEMM entfällt zusätzlich aus einem rein
+praktischen Grund (nur Windows-nativ, Entwicklungsrechner ist macOS).
+
+% ---------------------------------------------------------------------------
+\section{Entwicklungsmethodik: KI-gestützte, agentische Softwareentwicklung}
+% ---------------------------------------------------------------------------
+
+\subsection{Ansatz}
+Für die Implementierung wurde bewusst ein \textbf{KI-gestützter, agentischer
+Entwicklungsprozess} gewählt: Ein KI-Coding-Agent (Claude Code) arbeitet als
+Pair-Programmer, der iterativ Code schreibt, physikalische
+Verifikationsläufe ausführt und die Ergebnisse interpretiert, während die
+inhaltliche und physikalische Verantwortung -- Modellannahmen,
+Parameterwerte, Validierungskriterien, Freigabe jeder Änderung -- vollständig
+beim studentischen Team verbleibt. Diese Arbeitsweise unterscheidet sich von
+klassischem "`Copy-Paste aus einem Chat-Fenster“": Der Agent hat Zugriff auf
+das gesamte Repository, führt Code tatsächlich aus, prüft Testkriterien und
+dokumentiert jede Änderung nachvollziehbar in der Versionsgeschichte (Git).
+
+\subsection{Warum dieser Ansatz für dieses Projekt passt}
+Das Projekt hat einen stark \textbf{explorativen} Charakter: Geometrie und
+Materialparameter des realen Aufbaus (z.\,B. die Permeabilität des
+Eisenkerns) waren zu Projektbeginn nicht bekannt und mussten schrittweise
+durch Messung, Nachrechnung und Kalibrierung eingegrenzt werden. Das führt
+zu vielen kurzen Iterationszyklen: Parameter ändern
+$\to$ FEM neu lösen $\to$ mit Messdaten vergleichen $\to$ Modell anpassen.
+Ein KI-gestützter Agent verkürzt genau diese Zyklen erheblich, weil er
+Routineaufgaben (Refactoring, Testläufe, Konsistenzprüfungen zwischen
+mehreren Dateien, Aktualisieren von Dokumentation) parallel zur inhaltlichen
+Arbeit der Studierenden übernimmt.
+
+\subsection{Wie die physikalische Korrektheit trotzdem sichergestellt wird}
+Ein KI-Agent kann -- wie jede Softwarequelle -- Fehler einführen. Die
+Qualitätssicherung basiert deshalb \textbf{nicht auf Vertrauen in den
+Agenten}, sondern auf harten, automatisch prüfbaren physikalischen
+Kriterien, die für jede Änderung erneut ausgeführt werden müssen:
+\begin{itemize}[nosep]
+  \item \textbf{Energiebilanz}: $\int q\,\mathrm dV = \oint h(T-T_\infty)\,\mathrm dA$
+        muss auf $0{,}000\,\%$ Abweichung stimmen.
+  \item \textbf{$I^2$-Konsistenz}: $P(2\hat\imath)/P(\hat\imath)$ muss exakt
+        $4{,}000000$ ergeben.
+  \item \textbf{Kreuzvalidierung} (\texttt{xval\_twin.py}): der in
+        JavaScript gebackene Echtzeit-Integrator muss bitgenau mit dem
+        Python-Referenzintegrator übereinstimmen.
+  \item \textbf{Kalibrierung gegen reale Messdaten}: IR-Kamera- und
+        Thermoelementdaten (Abschnitt~7) als externe, vom Code unabhängige
+        Wahrheitsquelle.
+  \item \textbf{Vollständige Versionsgeschichte}: jede Änderung, jede
+        Parameteranpassung und jede Fehlerkorrektur ist in Git und im
+        Projekt-Changelog nachvollziehbar dokumentiert -- inklusive
+        rückgängig gemachter oder als falsch erkannter Ansätze.
+\end{itemize}
+Dieses Vorgehen entspricht dem etablierten Prinzip \emph{"`Verifikation vor
+Fertigstellungsbehauptung“"}: Eine Änderung gilt erst dann als korrekt, wenn
+das zugehörige physikalische Kriterium nachweislich erfüllt ist -- nicht,
+weil der Code plausibel aussieht oder eine KI ihn produziert hat.
+
+\subsection{Vorteile der Gesamtmethodik}
+\begin{itemize}[nosep]
+  \item \textbf{Geschwindigkeit bei gleichbleibender Nachvollziehbarkeit}:
+        Iterationszyklen (Messung $\to$ Modellanpassung $\to$ erneute
+        Validierung) verkürzen sich deutlich, ohne die physikalische
+        Kontrolle zu verlieren, da jede Iteration weiterhin an den harten
+        Kriterien aus 6.3 gemessen wird.
+  \item \textbf{Konsistenz über viele gekoppelte Dateien}: Physik wird an
+        zwei Stellen implementiert (Python-Referenz und gebackenes
+        JavaScript für die AR-Ansicht); Änderungen an beiden Stellen
+        synchron zu halten ist eine Routineaufgabe, die sich gut delegieren
+        lässt, solange die Kreuzvalidierung als Prüfinstanz bestehen bleibt.
+  \item \textbf{Dokumentationsdisziplin}: Jede Kalibrierungsrunde,
+        jede Parameteränderung und jede offene Frage wird laufend
+        mitgeschrieben (\texttt{CHANGELOG.md}) -- eine Nebenwirkung des
+        agentischen Arbeitsablaufs, die für die spätere Nachvollziehbarkeit
+        des Projekts wertvoll ist.
+  \item \textbf{Kein Zielkonflikt mit dem Kursziel}: Da alle physikalischen
+        Annahmen, Gleichungen und Kalibrierungen von den Studierenden
+        definiert, geprüft und verantwortet werden, bleibt der
+        Lernanspruch des Kurses -- Verständnis von der schwachen Form bis
+        zur Matrix -- vollständig erhalten; die KI übernimmt Schreibarbeit,
+        nicht physikalisches Verständnis.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Validierung und bisherige Ergebnisse}
+% ---------------------------------------------------------------------------
+
+\subsection{Interne Konsistenzprüfungen}
+\begin{itemize}[nosep]
+  \item Energiebilanz des thermischen Lösers: Abweichung $0{,}000\,\%$.
+  \item $I^2$-Skalierungstest: $P(2\hat\imath)/P(\hat\imath) = 4{,}000000$
+        (exakt).
+  \item Gebietsgrößenvalidierung (nach Vorgabe des Fachgebiets): Vergleich
+        Dirichlet- vs.\ Neumann-Randbedingung auf einem $1\times1\,\mathrm m$
+        Rechengebiet -- alle Abweichungen $<1\,\%$ (größte: Scheibenverlust
+        $0{,}767\,\%$), Gebiet somit ausreichend groß gewählt.
+  \item Sättigungsprüfung im Eisen: $B_{\max}\approx 0{,}66\,\mathrm T$,
+        deutlich unterhalb der Sättigungsgrenze ($\approx 1{,}5\,\mathrm T$)
+        -- die Annahme eines linearen $\mu_r$ ist im Betriebspunkt gültig.
+\end{itemize}
+
+\subsection{Aktuelles quantitatives Ergebnis (î\,=\,5\,A, $T_\infty=20\,^\circ$C)}
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lr@{}}
+\toprule
+Verlustquelle & $P$\,[W] \\
+\midrule
+Wirbelstromverlust Scheibe (Al) & 25{,}81 \\
+Wirbelstromverlust Eisenkern + -ring & 5{,}86 \\
+Ohmscher Spulenverlust (innen 52{,}32 + außen 54{,}12) & 106{,}44 \\
+\midrule
+\textbf{Gesamt} & \textbf{138{,}11} \\
+\bottomrule
+\end{tabular}
+\caption{Verlustleistungen bei Nennbetrieb, reproduziert nach der
+Neuvermessung der Geometrie vom Juli 2026.}
+\end{table}
+
+\subsection{Kalibrierung gegen reale Messdaten}
+Zwei reale Betriebspunkte wurden per IR-Kamera (HIKMICRO) vermessen
+($190\,\mathrm V\to5\,\mathrm A$ als Hauptbetriebspunkt,
+$270\,\mathrm V\to7{,}8\,\mathrm A$ als Kalibrieranker). Das
+RC-Netzwerkmodell der Spulen wurde durch Rückwärtsrechnung
+(\texttt{refit\_hA.py}) direkt gegen den vollständigen, nichtlinearen
+Zeitintegrator kalibriert und trifft den stationären Zustand exakt
+($T_{\mathrm{innen}}=79{,}00\,^\circ$C, $T_{\mathrm{außen}}=74{,}00\,^\circ$C
+bei $7{,}8\,\mathrm A$). Die Scheiben- und Kerntemperaturen aus der
+IR-Aufnahme gelten aufgrund unbekannter Emissivität von blankem Aluminium
+als nicht belastbar -- nur die dunkel lackierten Spulen liefern verlässliche
+IR-Werte; die verbleibende Validierung von Scheibe und Kern ist Aufgabe der
+geplanten Kontaktsensorik (Abschnitt~7.4).
+
+\subsection{Sensorpfad für zukünftige Kalibrierung}
+Der Software-seitige Kalibrierpfad
+(\texttt{arduino/thermal\_sensor.ino}~$\to$~\texttt{data\_io.py}~$\to$
+\texttt{rom.calibrate\_UA()}) ist vollständig implementiert und mit einer
+synthetischen Messreihe (\texttt{mock\_sensor\_data.csv}) durchgehend
+getestet. Es fehlt ausschließlich der reale Sensoraufbau (Arduino +
+2$\times$ MAX31855-Thermoelement-Wandler + IR-Referenzmessung), dessen
+Einkaufsliste dem Fachgebiet zur Beschaffung vorliegt.
+
+% ---------------------------------------------------------------------------
+\section{Erwartete Ergebnisse und Ausblick}
+% ---------------------------------------------------------------------------
+
+\subsection{Kurzfristig erwartete Ergebnisse}
+\begin{itemize}[nosep]
+  \item Ein vollständig kalibrierter, echtzeitfähiger digitaler Zwilling,
+        dessen Spulentemperaturen mit realer IR-Messung übereinstimmen
+        (bereits erreicht, RMS-Fehler $\approx 2{,}5$--$3\,^\circ$C).
+  \item Eine reale Aufheiz- \emph{und} Abkühlkurve von Spule und Scheibe
+        (bislang liegt nur eine Aufheizkurve vor), womit das bislang nicht
+        eindeutig bestimmbare RC-Netzwerk (insbesondere der gemeinsame
+        Luftknoten) vollständig identifizierbar wird.
+  \item Eine erste belastbare Kontaktmessung der Scheibenunterseite, die
+        klärt, ob im stationären Zustand tatsächlich die Spule oder die
+        Scheibe die höhere Temperatur erreicht (im Modell aktuell nur
+        unentschieden abgebildet).
+  \item Eine veröffentlichte AR-Ansicht (\texttt{digital\_twin\_fem.html})
+        mit zugehörigem QR-Code, aufrufbar ohne Installation auf einem
+        Smartphone.
+\end{itemize}
+
+\subsection{Mittelfristig}
+\begin{itemize}[nosep]
+  \item Eine dichtere Kalibriertabelle Stelldrehwinkel~$\to$~Strom (aktuell
+        nur drei Ankerpunkte).
+  \item Eine reale Strommessvorrichtung, sodass der digitale Zwilling einen
+        tatsächlich gemessenen Zeitverlauf $I(t)$ statt eines konstanten
+        Werts verarbeitet.
+  \item Eine belastbarere Bestimmung der Eisenpermeabilität (aktuell ein
+        Platzhalterwert $\mu_r=1000$ ohne gemessene B-H-Kurve), um die unten
+        genannte offene Frage zur Levitationshöhe zu klären.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Offene Fragen und Grenzen des aktuellen Modells}
+% ---------------------------------------------------------------------------
+
+Im Sinne wissenschaftlicher Transparenz werden die derzeit ungelösten Punkte
+explizit benannt, statt sie zu verschweigen:
+
+\begin{itemize}[nosep]
+  \item \textbf{Levitationshöhe (Hubkraft) stimmt nicht mit der Beobachtung
+        überein.} Das Modell sagt eine Hubkraft voraus, die deutlich größer
+        ist als die Gewichtskraft, mit einer rechnerischen
+        Gleichgewichtshöhe von $\approx 11{,}7$--$14{,}7\,\mathrm{mm}$,
+        während der reale, sichtbare Spalt nur $7$--$8\,\mathrm{mm}$
+        beträgt. Magnetische Sättigung wurde als Ursache
+        ausgeschlossen (Kraftänderung $<0{,}1\,\%$ bei nichtlinearer
+        Rechnung); wahrscheinlichste Ursache ist der unvermessene
+        $\mu_r$-Platzhalterwert des Eisens. Eine willkürliche
+        Rückwärtsanpassung von $\mu_r$ an die beobachtete Höhe wurde
+        bewusst \emph{nicht} vorgenommen, um die Messdaten nicht zu
+        verfälschen.
+  \item \textbf{Eisenparameter unvermessen}: $\mu_r=1000$ und
+        $\sigma\approx1{,}0\times10^6\,\mathrm{S/m}$ sind plausible
+        Platzhalter für "`weichstahlähnliches“" Material, keine gemessenen
+        Werte.
+  \item \textbf{Original-TEAM-28-Benchmark (ohne Eisen, 20\,A)} liefert
+        aktuell $z_{\mathrm{eq}}\approx14{,}5\,\mathrm{mm}$ gegenüber
+        $11{,}3\,\mathrm{mm}$ laut Referenztabelle ($\approx28\,\%$
+        Abweichung) -- pausiert, da nicht blockierend für den realen
+        Versuchsstand, aber ebenfalls offen.
+  \item \textbf{RC-Netzwerk teilweise unteridentifiziert}: Ohne eine reale
+        Abkühlkurve lässt sich der gemeinsame Luftknoten nicht eindeutig
+        von den übrigen Parametern trennen (siehe Abschnitt~8.1).
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Zusammenfassung}
+% ---------------------------------------------------------------------------
+
+Das Projekt verfolgt einen physikalisch begründeten Weg zu einem
+echtzeitfähigen digitalen Zwilling: eine einmalige, hochauflösende FEM-Lösung
+der Elektromagnetik- und Wärmeleitungsgleichungen wird über die
+$I^2$-Skalierung und ein kalibrierbares Reduced-Order-Model auf
+Millisekunden-Laufzeit reduziert. Diese Struktur ist mit gekapselten
+kommerziellen CAE-Werkzeugen nicht realisierbar und rechtfertigt die
+Entscheidung für eine selbst kontrollierte Python-Implementierung. Die
+Entwicklung wurde durch einen KI-gestützten, agentischen Arbeitsablauf
+beschleunigt, dessen Ergebnisse jedoch ausschließlich über harte,
+automatisierte physikalische Kriterien (Energiebilanz, $I^2$-Konsistenz,
+Kreuzvalidierung, Abgleich mit realen Sensordaten) freigegeben werden --
+nicht über Vertrauen in die KI selbst. Erste Kalibrierungsergebnisse an der
+Spulentemperatur bestätigen die Tragfähigkeit des Modells; die
+Levitationshöhe bleibt als offene physikalische Frage bestehen und wird mit
+der geplanten Sensorhardware weiter untersucht.
+
+\end{document}

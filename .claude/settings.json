@@ -10,7 +10,8 @@
       "Bash(python build_twin_html_fem.py 3D_model.stl)",
       "Bash(python3 -c ' *)",
       "Bash(python build_twin_html_fem.py)",
-      "Bash(python3 -c \"import docx; print\\('python-docx OK', docx.__version__ if hasattr\\(docx,'__version__'\\) else ''\\)\")"
+      "Bash(python3 -c \"import docx; print\\('python-docx OK', docx.__version__ if hasattr\\(docx,'__version__'\\) else ''\\)\")",
+      "Bash(python3 -c \"import docx; print\\('python-docx OK', docx.__file__\\)\")"
     ]
   },
   "hooks": {
