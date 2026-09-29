@@ -151,6 +151,7 @@ All of these are done, verified, and have no open issues. Details → docs/CHANG
 | `data_io.py` + `arduino/thermal_sensor.ino` | SensorReader (serial/mock) → `calibrate_from_file()` → `rom.calibrate_UA()`. Tested vs `mock_sensor_data.csv`. |
 | `weather_api.py` | stdlib-only: the SINGLE key loader (`load_key`, also used by the builder), `key_active` (expiry), `ambient_now(fallback)` → {T_amb_degC, source, fetched_at}; never raises, never prints the key. `python weather_api.py` shows the current reading. |
 | `gen_qr.py` | QR → `outputs/qr_digital_twin.png`. Hosting URL still undecided. |
+| `build_ar_twin.py` (+ `gen_ar_marker.py`, `serve_ar.py`, `compile_mind.py`) | Teammate's WebAR channel (branch `ar_simulation`, merged 2026-09-29) → `outputs/ar_twin.html`. Reads PARAMS + mesh from `digital_twin_fem.html` by regex (keep that filename + the `const PARAMS = {...};\nconst ROM` shape). Own display physics (τ≈2.5 s), NOT twin_core — not xval-pinned; leave it to the teammate. `PARAMS.display_channel` = "HTML"/"AR". Rebuild AR after every HTML re-bake. |
 | `digital_twin_live.py` | OPTIONAL separate live mode: ACS712 I_rms (serial/mock/replay) → reader thread → `LiveDriver` (ZOH, dead-band, gap/resync flags) → the same `TwinState`. Params: `live_sensor` block. `--self-check` 11/11. The HTML twin has the same feature as its `Sensor` excitation mode (Web Serial, Chrome/Edge). |
 
 **Cross-cutting invariant:** `twin_core.py` and the HTML's baked JS implement the same

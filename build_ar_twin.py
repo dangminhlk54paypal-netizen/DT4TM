@@ -1,0 +1,1650 @@
+"""build_ar_twin.py — Build mobile-optimized WebAR Digital Twin for TEAM 28 Levitator.
+
+Uses:
+  - Three.js for 3D physics rendering (thermal field + EM flux lines)
+  - Direct HTML5 WebRTC camera stream (reliable on iOS Safari, Android Chrome & PC)
+  - jsQR for real-time camera QR-code tracking with 6-DoF pose estimation (no external .mind files needed!)
+  - Touch controls, interactive 3D preview, and instant AR mode.
+
+Outputs:
+  outputs/ar_twin.html
+"""
+from __future__ import annotations
+import base64
+import json
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FEM_HTML = os.path.join(HERE, "outputs", "digital_twin_fem.html")
+OUT_HTML = os.path.join(HERE, "outputs", "ar_twin.html")
+MARKER_PNG = os.path.join(HERE, "outputs", "ar_marker.png")
+
+
+STL_DIR = os.path.join(os.path.dirname(HERE), "stl_export_separate_files")
+if not os.path.exists(STL_DIR):
+    STL_DIR = r"C:\Users\Maria\Documents\Uni\TUD\Master\ElektromagnetischesCAD\stl_export_separate_files"
+# Optional override for other machines (e.g. macOS): AR_STL_DIR=/path/to/stl_export_separate_files
+STL_DIR = os.environ.get("AR_STL_DIR", STL_DIR)
+
+# Display channel tag. The same PARAMS block feeds two front-ends:
+#   "HTML" -> outputs/digital_twin_fem.html (web twin, twin_core engine, pinned by xval_twin.py)
+#   "AR"   -> outputs/ar_twin.html          (this WebAR view, own display approximation)
+DISPLAY_CHANNEL = "AR"
+
+
+def load_stl_geometries(stl_dir: str) -> dict:
+    import trimesh
+    import numpy as np
+    stl_map = {
+        "housing": "3D_model_wooden_housing.stl",
+        "inner_copper": "3D_model_inner_copper.stl",
+        "outer_copper": "3D_model_outer_copper.stl",
+        "inner_iron": "3D_model_inner_iron.stl",
+        "outer_iron": "3D_model_outer_iron.stl",
+        "cork": "3D_model_cork.stl"
+    }
+    parts = {}
+    if not os.path.exists(stl_dir):
+        print(f"[build_ar_twin] Warning: STL directory {stl_dir} not found.")
+        return parts
+    print(f"[build_ar_twin] Loading detailed STLs from {stl_dir} ...")
+    for key, fn in stl_map.items():
+        fp = os.path.join(stl_dir, fn)
+        if not os.path.exists(fp):
+            print(f"[build_ar_twin] Warning: {fp} not found.")
+            continue
+        m = trimesh.load(fp)
+        m.apply_scale(10.0) # cm to mm
+        verts = m.vertices.astype(np.float32)
+        faces = m.faces.astype(np.uint16)
+        parts[key] = {
+            "verts": base64.b64encode(verts.tobytes()).decode('ascii'),
+            "faces": base64.b64encode(faces.tobytes()).decode('ascii')
+        }
+    return parts
+
+
+def _reuse_stl_parts(ar_html_path: str) -> dict:
+    """Fallback: reuse the STL parts already embedded in a previous ar_twin.html."""
+    if not os.path.exists(ar_html_path):
+        return {}
+    with open(ar_html_path, "r", encoding="utf-8") as f:
+        m = re.search(r"const STL_PARTS = (\{.*?\});\n", f.read(), re.DOTALL)
+    if not m:
+        return {}
+    try:
+        parts = json.loads(m.group(1))
+    except ValueError:
+        return {}
+    if parts:
+        print(f"[build_ar_twin] Reusing {len(parts)} STL parts embedded in {ar_html_path}")
+    return parts
+
+
+def extract_data_from_fem_html(html_path: str):
+    """Extract pre-baked PARAMS and base64 geometric arrays from digital_twin_fem.html."""
+    print(f"[build_ar_twin] Extracting data from {html_path} ...")
+    with open(html_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 1. Extract PARAMS
+    m_params = re.search(r"const PARAMS\s*=\s*(\{.*?\});\s*const ROM", content, re.DOTALL)
+    if not m_params:
+        raise RuntimeError("Could not find 'const PARAMS = {...}' in digital_twin_fem.html")
+    params_json = m_params.group(1)
+
+    # 2. Extract base64 mesh strings
+    def get_b64(var_name: str) -> str:
+        pattern = rf'const\s+{var_name}\s*=\s*new\s+\w+\s*\(b64Buf\("([^"]+)"\)\);'
+        m = re.search(pattern, content)
+        if not m:
+            raise RuntimeError(f"Could not extract {var_name} from digital_twin_fem.html")
+        return m.group(1)
+
+    positions_b64 = get_b64("positions")
+    regions_b64 = get_b64("regions")
+    dt_vtx_b64 = get_b64("dT_ref_vtx")
+    dtair_vtx_b64 = get_b64("dT_air_vtx")
+    je_vtx_b64 = get_b64("Je_vtx")
+
+    marker_b64 = ""
+    if os.path.exists(MARKER_PNG):
+        with open(MARKER_PNG, "rb") as mf:
+            marker_b64 = "data:image/png;base64," + base64.b64encode(mf.read()).decode("ascii")
+
+    stl_parts = load_stl_geometries(STL_DIR)
+    if not stl_parts:
+        stl_parts = _reuse_stl_parts(OUT_HTML)
+    stl_parts_json = json.dumps(stl_parts)
+
+    # Tag the channel: PARAMS comes from the HTML twin, this bundle is the AR view.
+    params = json.loads(params_json)
+    params["display_channel"] = DISPLAY_CHANNEL
+    params_json = json.dumps(params)
+
+    return {
+        "params_json": params_json,
+        "positions_b64": positions_b64,
+        "regions_b64": regions_b64,
+        "dt_vtx_b64": dt_vtx_b64,
+        "dtair_vtx_b64": dtair_vtx_b64,
+        "je_vtx_b64": je_vtx_b64,
+        "marker_b64": marker_b64,
+        "stl_parts_json": stl_parts_json,
+    }
+
+
+def generate_ar_html(data: dict, out_path: str):
+    """Generate the complete mobile WebAR HTML file."""
+    html_template = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>TEAM 28 — WebAR Digitaler Zwilling</title>
+
+<!-- Error overlay for mobile debugging -->
+<script>
+window.addEventListener('error', function(e) {
+  var b = document.getElementById('msgBox');
+  if (b) {
+    document.getElementById('msgTitle').innerHTML = '⚠️ JavaScript Hinweis';
+    document.getElementById('msgBody').innerHTML = '<p style="color:#ff6b6b;font-weight:600;">' + (e.message || 'Skriptfehler') + '</p><p style="font-size:0.75rem;color:#a4b4d4;">' + (e.filename ? e.filename.split('/').pop() : '') + (e.lineno ? (':' + e.lineno) : '') + '</p>';
+    b.style.display = 'block';
+  }
+});
+</script>
+<!-- Three.js + OrbitControls + jsQR (Tested standalone UMD scripts) -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+<style>
+:root {
+  --bg: #0b0d19;
+  --accent: #00d2ff;
+  --accent-glow: rgba(0, 210, 255, 0.4);
+  --panel-bg: rgba(13, 17, 34, 0.88);
+  --panel-border: rgba(54, 72, 120, 0.55);
+  --text: #f0f4fc;
+  --text-dim: #8ba0c8;
+  --danger: #ff4757;
+  --success: #2ed573;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+body, html {
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  overflow: hidden; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  user-select: none;
+}
+
+/* Background Camera Feed */
+#webcam {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  object-fit: cover; z-index: 0; display: none;
+}
+
+/* Three.js 3D WebGL Canvas */
+#arCanvas {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  z-index: 2; pointer-events: auto;
+}
+
+/* Header bar */
+#topBar {
+  position: fixed; top: 0; left: 0; right: 0; height: 50px;
+  background: linear-gradient(180deg, rgba(8,10,20,0.95) 0%, rgba(8,10,20,0.7) 80%, transparent 100%);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px; z-index: 100; pointer-events: auto;
+}
+
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 0.95rem; }
+.brand span.badge {
+  background: rgba(0, 210, 255, 0.15); border: 1px solid var(--accent);
+  color: var(--accent); font-size: 0.65rem; padding: 2px 6px; border-radius: 6px;
+}
+
+#trackingBadge {
+  font-size: 0.72rem; padding: 4px 10px; border-radius: 12px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(255, 170, 0, 0.18); border: 1px solid #ffa502; color: #ffa502;
+  transition: all 0.3s ease;
+}
+#trackingBadge.tracked {
+  background: rgba(46, 213, 115, 0.2); border-color: var(--success); color: var(--success);
+}
+#trackingBadge.camera-on {
+  background: rgba(0, 210, 255, 0.2); border-color: var(--accent); color: var(--accent);
+}
+
+/* Mini Telemetry Bar */
+#telemetryBar {
+  position: fixed; top: 52px; left: 10px; right: 10px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+  background: var(--panel-bg); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 6px; backdrop-filter: blur(10px);
+  z-index: 90; text-align: center;
+}
+
+.t-item { display: flex; flex-direction: column; }
+.t-label { font-size: 0.6rem; color: var(--text-dim); text-transform: uppercase; }
+.t-val { font-size: 0.82rem; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+
+/* Dynamic Thermal Scale Bar */
+#thermalScaleBar {
+  position: fixed; top: 105px; left: 10px; right: 10px;
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(14, 18, 36, 0.88); border: 1px solid var(--panel-border);
+  border-radius: 8px; padding: 4px 10px; backdrop-filter: blur(8px);
+  z-index: 90;
+}
+.scale-label { font-size: 0.64rem; color: var(--text-dim); font-weight: 700; white-space: nowrap; }
+.scale-gradient {
+  flex: 1; height: 8px; border-radius: 4px;
+  background: linear-gradient(to right, #1a4cd8, #00d2ff, #2ed573, #ffa502, #ff4757, #c0142b);
+  position: relative;
+}
+#scaleNeedle {
+  position: absolute; top: -3px; width: 4px; height: 14px;
+  background: #ffffff; border-radius: 2px; box-shadow: 0 0 5px #000;
+  transform: translateX(-50%); transition: left 0.1s linear;
+}
+
+/* Action Banner / Prompt */
+#startBanner {
+  position: fixed; top: 142px; left: 50%; transform: translateX(-50%);
+  width: calc(100% - 28px); max-width: 380px;
+  background: linear-gradient(135deg, rgba(20, 45, 95, 0.96), rgba(10, 25, 60, 0.96));
+  border: 1px solid #5aa0ff; border-radius: 14px; padding: 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6); z-index: 110; text-align: center;
+}
+#startBanner h3 { margin: 0 0 6px 0; font-size: 1rem; color: #fff; }
+#startBanner p { margin: 0 0 12px 0; font-size: 0.78rem; color: #d0e2ff; line-height: 1.35; }
+.btn-primary {
+  background: #00d2ff; color: #051026; border: none; font-weight: 700;
+  border-radius: 8px; padding: 10px 18px; font-size: 0.9rem; cursor: pointer;
+  box-shadow: 0 4px 14px var(--accent-glow); width: 100%; display: inline-block;
+}
+.btn-primary:active { transform: scale(0.98); }
+
+/* Bottom Control Panel */
+#bottomCard {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--panel-bg); border-top: 1px solid var(--panel-border);
+  border-radius: 18px 18px 0 0; padding: 12px 16px 18px;
+  backdrop-filter: blur(14px); z-index: 100;
+  box-shadow: 0 -8px 30px rgba(0,0,0,0.5);
+  max-height: 85vh; overflow-y: auto;
+}
+
+.slider-row {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;
+}
+.slider-title { font-size: 0.82rem; font-weight: 600; color: #fff; }
+.slider-val { font-size: 0.9rem; font-weight: 700; color: var(--accent); }
+
+input[type=range] {
+  width: 100%; height: 8px; border-radius: 4px;
+  background: #1c2646; outline: none; -webkit-appearance: none;
+  margin: 6px 0 10px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent); cursor: pointer;
+}
+
+/* Toggle Pills */
+.pills { display: flex; gap: 6px; justify-content: space-between; margin-top: 4px; }
+.pill-btn {
+  flex: 1; padding: 8px 4px; border-radius: 8px; font-size: 0.72rem; font-weight: 600;
+  background: rgba(255,255,255,0.06); border: 1px solid var(--panel-border);
+  color: var(--text-dim); text-align: center; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 3px;
+}
+.pill-btn.active {
+  background: rgba(0, 210, 255, 0.18); border-color: var(--accent); color: #fff;
+}
+
+/* Calibration Panel */
+#calibPanel {
+  margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.15);
+  display: none; flex-direction: column; gap: 8px;
+}
+.calib-row {
+  display: flex; align-items: center; justify-content: space-between; font-size: 0.76rem;
+}
+.calib-title { color: var(--text-dim); }
+.calib-controls { display: flex; align-items: center; gap: 5px; }
+.btn-mini {
+  background: rgba(255,255,255,0.08); border: 1px solid var(--panel-border);
+  color: #fff; min-width: 28px; height: 26px; padding: 0 5px; border-radius: 6px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 0.72rem;
+}
+.btn-mini:active { background: rgba(0,210,255,0.3); }
+.calib-val { font-weight: 700; color: var(--accent); min-width: 50px; text-align: center; }
+
+/* Reticle / Marker Guide Overlay */
+#targetGuide {
+  position: fixed; top: 45%; left: 50%; transform: translate(-50%, -50%);
+  width: 180px; height: 180px; border: 2px dashed rgba(0, 210, 255, 0.6);
+  border-radius: 14px; pointer-events: none; z-index: 50; display: none;
+  box-shadow: 0 0 20px rgba(0, 210, 255, 0.2);
+}
+#targetGuide::after {
+  content: "Kamera auf QR-Code richten"; position: absolute; bottom: -28px; left: -20px; right: -20px;
+  text-align: center; font-size: 0.72rem; font-weight: 600; color: #00d2ff;
+  background: rgba(11, 13, 25, 0.75); padding: 3px 6px; border-radius: 6px;
+}
+
+/* Error / Info Notice Box */
+#msgBox {
+  position: fixed; top: 142px; left: 50%; transform: translateX(-50%);
+  width: calc(100% - 28px); max-width: 380px;
+  background: rgba(18, 22, 40, 0.98); border: 1px solid var(--panel-border);
+  border-radius: 14px; padding: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.85);
+  z-index: 250; display: none; text-align: left;
+}
+#msgBox h3 { margin: 0 0 8px 0; font-size: 0.98rem; display: flex; align-items: center; gap: 6px; }
+#msgBox p { font-size: 0.8rem; line-height: 1.45; color: #d0d8ea; margin: 0 0 12px 0; }
+#msgBox .help-list { font-size: 0.76rem; color: #a4b4d4; margin: 0 0 12px 0; padding-left: 18px; }
+#msgBox .help-list li { margin-bottom: 6px; }
+#msgBox button { margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- Background Camera Video -->
+<video id="webcam" playsinline autoplay muted></video>
+
+<!-- Three.js Canvas -->
+<div id="arCanvas"></div>
+
+<!-- Reticle Guide -->
+<div id="targetGuide"></div>
+
+<!-- Message Box -->
+<div id="msgBox">
+  <h3 id="msgTitle">Hinweis</h3>
+  <div id="msgBody"></div>
+  <button class="btn-primary" id="btnCloseMsg">Verstanden</button>
+</div>
+
+<!-- Header -->
+<div id="topBar">
+  <div class="brand">
+    <span>🧲 DT4TM</span>
+    <span class="badge">WebAR</span>
+  </div>
+  <div id="trackingBadge">🟡 3D-Vorschau</div>
+</div>
+
+<!-- Telemetry -->
+<div id="telemetryBar">
+  <div class="t-item">
+    <span class="t-label">Strom I</span>
+    <span class="t-val" id="valCurrent">0.00 A</span>
+  </div>
+  <div class="t-item">
+    <span class="t-label">Platte T</span>
+    <span class="t-val" id="valTPlate">20.0 °C</span>
+  </div>
+  <div class="t-item">
+    <span class="t-label">Spule T</span>
+    <span class="t-val" id="valTCoil">20.0 °C</span>
+  </div>
+  <div class="t-item">
+    <span class="t-label">Schwebe z</span>
+    <span class="t-val" id="valZLev">0.0 mm</span>
+  </div>
+</div>
+
+<!-- Dynamic Thermal Color Scale Legend -->
+<div id="thermalScaleBar">
+  <span class="scale-label">29°C</span>
+  <div class="scale-gradient">
+    <div id="scaleNeedle" style="left: 0%;"></div>
+  </div>
+  <span class="scale-label" id="lblScaleMax">~72°C</span>
+</div>
+
+<!-- Banner -->
+<div id="startBanner">
+  <h3>Kamera-Überlagerung (AR)</h3>
+  <p>Starte die Kamera und richte sie auf den ausgedruckten QR-Code. Die thermische Simulation und die 3D-Magnetfeldlinien rasten millimetergenau auf dem Prüfstand ein.</p>
+  <button class="btn-primary" id="btnStartAR">📷 Kamera starten</button>
+</div>
+
+<!-- Bottom Control Card -->
+<div id="bottomCard">
+  <div class="slider-row">
+    <span class="slider-title">Erregerstrom (RMS)</span>
+    <span class="slider-val" id="lblCurrent">0.00 A (0V - Stillstand)</span>
+  </div>
+  <input type="range" id="sliderCurrent" min="0" max="7.8" step="0.05" value="0.0">
+
+  <div class="pills">
+    <div class="pill-btn active" id="btnToggleBField">⚡ B-Feld</div>
+    <div class="pill-btn active" id="btnToggleThermal">🌡️ Temp</div>
+    <div class="pill-btn" id="btnToggleAlpha">👁️ Röntgen</div>
+    <div class="pill-btn" id="btnPreset5A">🚀 5.0A</div>
+    <div class="pill-btn" id="btnToggleCalib">⚙️ Anpassen</div>
+  </div>
+
+  <!-- Calibration Dropdown Panel -->
+  <div id="calibPanel">
+    <div class="calib-row">
+      <span class="calib-title">Auto-Ausrichten</span>
+      <div class="calib-controls">
+        <button class="pill-btn active" id="btnAutoAlign" style="padding: 5px 12px; font-size: 0.74rem;">
+          📐 Kante zu mir einrasten
+        </button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Drehwinkel (Ecken)</span>
+      <div class="calib-controls">
+        <button class="btn-mini" id="btnYawDec">-1°</button>
+        <span class="calib-val" id="lblYaw">+22.5°</span>
+        <button class="btn-mini" id="btnYawInc">+1°</button>
+        <button class="btn-mini" id="btnYawSnap" style="min-width:44px;" title="Winkel umschalten">⟲ 22.5°</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Neigung (Pitch)</span>
+      <div class="calib-controls">
+        <button class="btn-mini" id="btnPitchDec">-1°</button>
+        <span class="calib-val" id="lblPitch">0.0°</span>
+        <button class="btn-mini" id="btnPitchInc">+1°</button>
+        <button class="btn-mini" id="btnPitchReset" style="min-width:32px;" title="Zurücksetzen">0°</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Modellgröße</span>
+      <div class="calib-controls">
+        <button class="btn-mini" id="btnScaleDec">-1%</button>
+        <span class="calib-val" id="lblScale">100%</span>
+        <button class="btn-mini" id="btnScaleInc">+1%</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Position X (seitlich)</span>
+      <div class="calib-controls">
+        <button class="btn-mini" id="btnXDec">◀</button>
+        <span class="calib-val" id="lblXOffset">0 mm</span>
+        <button class="btn-mini" id="btnXInc">▶</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Position Y (Tiefe)</span>
+      <div class="calib-controls">
+        <button class="btn-mini" id="btnYDec">▼</button>
+        <span class="calib-val" id="lblYOffset">0 mm</span>
+        <button class="btn-mini" id="btnYInc">▲</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">AR-Deckkraft</span>
+      <div class="calib-controls">
+        <button class="btn-mini" id="btnAlphaDec">-</button>
+        <span class="calib-val" id="lblAlpha">38%</span>
+        <button class="btn-mini" id="btnAlphaInc">+</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Platten-Overlay</span>
+      <div class="calib-controls">
+        <button class="pill-btn active" id="btnTogglePlate" style="padding: 4px 8px; font-size: 0.72rem;">Sichtbar</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Holzgehäuse</span>
+      <div class="calib-controls">
+        <button class="pill-btn active" id="btnToggleHousing" style="padding: 4px 8px; font-size: 0.72rem;">Sichtbar</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">QR-Code Größe</span>
+      <div class="calib-controls">
+        <button class="btn-mini" id="btnSizeDec">-</button>
+        <span class="calib-val" id="lblMarkerSize">45 mm</span>
+        <button class="btn-mini" id="btnSizeInc">+</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Höhentrimmung (Z)</span>
+      <div class="calib-controls">
+        <button class="btn-mini" id="btnZDec">-</button>
+        <span class="calib-val" id="lblZOffset">0 mm</span>
+        <button class="btn-mini" id="btnZInc">+</button>
+      </div>
+    </div>
+    <div class="calib-row">
+      <span class="calib-title">Levitation simulieren</span>
+      <div class="calib-controls">
+        <button class="pill-btn" id="btnToggleLev" style="padding: 4px 8px; font-size: 0.72rem;">Aus (0mm)</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Baked Data ────────────────────────────────────────────────────────────────
+const PARAMS = __PARAMS_JSON__;
+const ROM = PARAMS.rom;
+const LUMPED = PARAMS.lumped;
+const FIELD_LINES = PARAMS.field_lines;
+const LEV = PARAMS.lev;
+
+function b64Buf(b64) {
+  const s = atob(b64), a = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+  return a.buffer;
+}
+
+const positions = new Float32Array(b64Buf("__POSITIONS_B64__"));
+const regions = new Uint8Array(b64Buf("__REGIONS_B64__"));
+const dT_ref_vtx = new Float32Array(b64Buf("__DT_VTX_B64__"));
+const dT_air_vtx = new Float32Array(b64Buf("__DTAIR_VTX_B64__"));
+const Je_vtx = new Float32Array(b64Buf("__JE_VTX_B64__"));
+
+// ── Three.js Scene Setup ──────────────────────────────────────────────────────
+const container = document.getElementById('arCanvas');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 2000);
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+container.appendChild(renderer.domElement);
+
+// Lighting
+const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xfff5e6, 2.0);
+dirLight.position.set(100, 300, 200);
+scene.add(dirLight);
+
+// OrbitControls for 3D preview
+let controls = null;
+if (typeof THREE !== 'undefined' && typeof THREE.OrbitControls === 'function') {
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.target.set(0, 0, -35);
+}
+camera.position.set(0, -220, 180);
+camera.up.set(0, 0, 1);
+
+// Root Group for Digital Twin Model
+const twinRoot = new THREE.Group();
+scene.add(twinRoot);
+
+// ── STL Geometry Parser ───────────────────────────────────────────────────────
+const STL_PARTS = __STL_PARTS_JSON__;
+
+function makeStlMesh(partKey, mat, addEdges=false, edgeColor=0x00d2ff, edgeAngle=25) {
+  if (!STL_PARTS || !STL_PARTS[partKey]) return null;
+  const vBuf = b64Buf(STL_PARTS[partKey].verts);
+  const fBuf = b64Buf(STL_PARTS[partKey].faces);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vBuf), 3));
+  geo.setIndex(new THREE.BufferAttribute(new Uint16Array(fBuf), 1));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, mat);
+  let edges = null;
+  if (addEdges) {
+    const eg = new THREE.EdgesGeometry(geo, edgeAngle);
+    edges = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({
+      color: edgeColor, transparent: true, opacity: 0.85, depthWrite: false
+    }));
+    mesh.add(edges);
+  }
+  return { mesh, geo, mat, edges };
+}
+
+// 1. Octagonal Wooden Housing matching cardboard base
+const housingM = makeStlMesh('housing', new THREE.MeshStandardMaterial({
+  color: 0xd2b48c, roughness: 0.85, metalness: 0.05,
+  transparent: true, opacity: 0.16, depthWrite: false
+}), true, 0x4da6ff, 15);
+
+// 2. Copper Windings (translucent with glowing copper wire contour)
+const coilInnerM = makeStlMesh('inner_copper', new THREE.MeshStandardMaterial({
+  color: 0xdf7840, roughness: 0.35, metalness: 0.85,
+  transparent: true, opacity: 0.28, depthWrite: false
+}), true, 0xff9944, 20);
+const coilOuterM = makeStlMesh('outer_copper', new THREE.MeshStandardMaterial({
+  color: 0xdf7840, roughness: 0.35, metalness: 0.85,
+  transparent: true, opacity: 0.28, depthWrite: false
+}), true, 0xff9944, 20);
+
+// 3. Iron Cores (translucent steel finish with subtle contours)
+const ironInnerM = makeStlMesh('inner_iron', new THREE.MeshStandardMaterial({
+  color: 0x4a5568, roughness: 0.60, metalness: 0.65,
+  transparent: true, opacity: 0.22, depthWrite: false
+}), true, 0x718096, 20);
+const ironOuterM = makeStlMesh('outer_iron', new THREE.MeshStandardMaterial({
+  color: 0x4a5568, roughness: 0.60, metalness: 0.65,
+  transparent: true, opacity: 0.22, depthWrite: false
+}), true, 0x718096, 20);
+
+// 4. Cork Spacer Ring
+const corkM = makeStlMesh('cork', new THREE.MeshStandardMaterial({
+  color: 0xa87948, roughness: 0.9, metalness: 0.0,
+  transparent: true, opacity: 0.22, depthWrite: false
+}));
+
+// 5. Aluminium Disc (from FEM data, carries thermal heatmap)
+function buildSub(keepFn) {
+  const P = [], DT = [], DTA = [], JE = [], G = [];
+  for (let tri = 0; tri < regions.length; tri++) {
+    if (!keepFn(regions[tri])) continue;
+    for (let v = 0; v < 3; v++) {
+      const i = (tri * 3 + v) * 3;
+      P.push(positions[i], positions[i+1], positions[i+2]);
+      DT.push(dT_ref_vtx[tri * 3 + v]);
+      DTA.push(dT_air_vtx[tri * 3 + v]);
+      JE.push(Je_vtx ? Je_vtx[tri * 3 + v] : 0.0);
+    }
+    G.push(regions[tri]);
+  }
+  return {
+    pos: new Float32Array(P),
+    reg: new Uint8Array(G),
+    dT: new Float32Array(DT),
+    dTa: new Float32Array(DTA),
+    je: new Float32Array(JE)
+  };
+}
+
+function makeMesh(sub, roughness=0.35, metalness=0.65) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(sub.pos, 3));
+  g.computeVertexNormals();
+  const col = new Float32Array(sub.pos.length);
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness, metalness, side: THREE.DoubleSide,
+    transparent: true, opacity: 0.72, depthWrite: false
+  }));
+  return { mesh: m, geo: g, reg: sub.reg, dT: sub.dT, dTa: sub.dTa, je: sub.je, col };
+}
+
+const plateM = makeMesh(buildSub(r => r === 0));
+const plateEdges = new THREE.LineSegments(
+  new THREE.EdgesGeometry(plateM.geo, 25),
+  new THREE.LineBasicMaterial({ color: 0x00e1ff, transparent: true, opacity: 0.85, depthWrite: false })
+);
+plateM.mesh.add(plateEdges);
+
+const baseGroup = new THREE.Group();
+if (housingM) baseGroup.add(housingM.mesh);
+if (coilInnerM) baseGroup.add(coilInnerM.mesh);
+if (coilOuterM) baseGroup.add(coilOuterM.mesh);
+if (ironInnerM) baseGroup.add(ironInnerM.mesh);
+if (ironOuterM) baseGroup.add(ironOuterM.mesh);
+if (corkM) baseGroup.add(corkM.mesh);
+
+const plateGroup = new THREE.Group();
+plateGroup.add(plateM.mesh);
+
+const twinModel = new THREE.Group();
+twinRoot.add(twinModel);
+
+// ── 3D Magnetic Field Lines Group ─────────────────────────────────────────────
+const N_THETA_FIELD = 24;
+const fieldLineGroup = new THREE.Group();
+
+twinModel.add(baseGroup);
+twinModel.add(plateGroup);
+twinModel.add(fieldLineGroup);
+
+// Plate top in FEM is at Z = 67.0 mm -> offset by -67.0 brings top to Z=0 in marker space.
+// Coils top in STLs is at Z = 66.0 mm -> offset by -72.0 brings top to Z=-6.0 in marker space (directly touching bottom of plate).
+// EM field lines have coil top at z = 0.0 -> offset by -6.0 places top of coils precisely at Z=-6.0.
+const Z_PLATE_TOP_FEM = 67.0;
+const Z_COILS_TOP_STL = 72.0;
+
+plateGroup.position.set(0, 0, -Z_PLATE_TOP_FEM);
+baseGroup.position.set(0, 0, -Z_COILS_TOP_STL);
+fieldLineGroup.position.set(0, 0, -6.0);
+
+let manualXOffset = 0.0;
+let manualYOffset = 0.0;
+let manualZOffset = 0.0;
+let manualYawDeg = 22.5; // 22.5 deg rotation brings STL flat edge into front alignment!
+let manualPitchDeg = 0.0; // Pitch angle (tilt forward/backward)
+let manualScale = 1.0;
+
+function updateModelTransform() {
+  twinModel.position.set(manualXOffset, manualYOffset, manualZOffset);
+  const yawRad = manualYawDeg * (Math.PI / 180.0);
+  const pitchRad = manualPitchDeg * (Math.PI / 180.0);
+  twinModel.rotation.set(pitchRad, 0, yawRad, 'ZYX');
+  twinModel.scale.set(manualScale, manualScale, manualScale);
+  const lblYaw = document.getElementById('lblYaw');
+  if (lblYaw) lblYaw.textContent = `${manualYawDeg > 0 ? '+' : ''}${manualYawDeg.toFixed(1)}°`;
+  const lblPitch = document.getElementById('lblPitch');
+  if (lblPitch) lblPitch.textContent = `${manualPitchDeg > 0 ? '+' : ''}${manualPitchDeg.toFixed(1)}°`;
+  const lblScale = document.getElementById('lblScale');
+  if (lblScale) lblScale.textContent = `${Math.round(manualScale * 100)}%`;
+  const lblX = document.getElementById('lblXOffset');
+  if (lblX) lblX.textContent = `${manualXOffset > 0 ? '+' : ''}${manualXOffset.toFixed(0)} mm`;
+  const lblY = document.getElementById('lblYOffset');
+  if (lblY) lblY.textContent = `${manualYOffset > 0 ? '+' : ''}${manualYOffset.toFixed(0)} mm`;
+  const lblZ = document.getElementById('lblZOffset');
+  if (lblZ) lblZ.textContent = `${manualZOffset > 0 ? '+' : ''}${manualZOffset.toFixed(0)} mm`;
+}
+updateModelTransform();
+
+const fieldLineMats = [];
+const _flCol = new THREE.Color();
+
+function flColor(t, out) {
+  t = Math.max(0, Math.min(1, t));
+  if (t < 0.45) {
+    const k = t / 0.45;
+    out.setRGB(0.0, 0.90 + 0.10 * k, 1.0); // Vibrant electric cyan
+  } else {
+    const k = (t - 0.45) / 0.55;
+    out.setRGB(k * 0.9, 1.0, 1.0 - k * 0.75); // Electric neon lime / gold
+  }
+}
+
+function buildFieldLines() {
+  for (const fl of FIELD_LINES) {
+    const n = fl.r.length;
+    // Skip massive far-field loops that extend far into the ceiling/ground and cause perspective distortion
+    let maxZ = 0, maxR = 0, ampSum = 0;
+    for (let i = 0; i < n; i++) {
+      if (Math.abs(fl.z[i]) > maxZ) maxZ = Math.abs(fl.z[i]);
+      if (fl.r[i] > maxR) maxR = fl.r[i];
+      ampSum += fl.amp[i];
+    }
+    if (maxZ > 120.0 || maxR > 180.0) continue; // Focus on realistic near-device magnetic lines
+
+    const avgAmp = ampSum / n;
+
+    for (let t = 0; t < N_THETA_FIELD; t++) {
+      const theta = (t / N_THETA_FIELD) * Math.PI * 2;
+      const ct = Math.cos(theta), st = Math.sin(theta);
+      const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+
+      for (let i = 0; i < n; i++) {
+        const r = fl.r[i], z = fl.z[i];
+        pos[i*3]   = r * ct;
+        pos[i*3+1] = r * st;
+        pos[i*3+2] = z; // Z is axial height, matching CAD mesh!
+        flColor(fl.amp[i], _flCol);
+        col[i*3] = _flCol.r; col[i*3+1] = _flCol.g; col[i*3+2] = _flCol.b;
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+
+      const mat = new THREE.LineDashedMaterial({
+        vertexColors: true, transparent: true, opacity: 0.95,
+        depthTest: false, dashSize: 8.0, gapSize: 3.0,
+        blending: THREE.AdditiveBlending
+      });
+
+      const line = new THREE.Line(geo, mat);
+      line.computeLineDistances();
+      fieldLineGroup.add(line);
+      fieldLineMats.push({ mat, line, amp: avgAmp });
+    }
+  }
+}
+buildFieldLines();
+
+// ── Physical Color Ramps ───────────────────────────────────────────────────────
+function writeThermalRamp(col, idx, tnorm) {
+  let t = Math.max(0.0, Math.min(1.0, tnorm));
+  let r, g, b;
+  if (t < 0.20) {
+    // Cool Slate Blue to Cyan: [0.15, 0.35, 0.85] -> [0.0, 0.85, 0.90]
+    const k = t / 0.20;
+    r = 0.15 * (1.0 - k);
+    g = 0.35 + 0.50 * k;
+    b = 0.85 + 0.05 * k;
+  } else if (t < 0.45) {
+    // Cyan to Vibrant Lime Green: [0.0, 0.85, 0.90] -> [0.20, 0.95, 0.15]
+    const k = (t - 0.20) / 0.25;
+    r = 0.20 * k;
+    g = 0.85 + 0.10 * k;
+    b = 0.90 * (1.0 - k) + 0.15 * k;
+  } else if (t < 0.70) {
+    // Lime Green to Warm Yellow/Gold: [0.20, 0.95, 0.15] -> [1.0, 0.85, 0.0]
+    const k = (t - 0.45) / 0.25;
+    r = 0.20 + 0.80 * k;
+    g = 0.95 - 0.10 * k;
+    b = 0.15 * (1.0 - k);
+  } else if (t < 0.90) {
+    // Warm Yellow/Gold to Fiery Orange: [1.0, 0.85, 0.0] -> [1.0, 0.35, 0.0]
+    const k = (t - 0.70) / 0.20;
+    r = 1.0;
+    g = 0.85 - 0.50 * k;
+    b = 0.0;
+  } else {
+    // Fiery Orange to Deep Crimson/Red: [1.0, 0.35, 0.0] -> [0.95, 0.10, 0.05]
+    const k = (t - 0.90) / 0.10;
+    r = 1.0 - 0.05 * k;
+    g = 0.35 - 0.25 * k;
+    b = 0.05 * k;
+  }
+  col[idx]   = r;
+  col[idx+1] = g;
+  col[idx+2] = b;
+}
+
+function ramp1(t) {
+  if (t < 1/6) return 6 * t;
+  if (t < 1/2) return 1;
+  if (t < 2/3) return (2/3 - t) * 6;
+  return 0;
+}
+function writeRamp(col, idx, tnorm) {
+  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  const h = (1 - t) * 240 / 360;
+  const tc0 = h + 1/3, tc1 = h, tc2 = h - 1/3;
+  col[idx]   = ramp1(tc0 > 1 ? tc0 - 1 : tc0);
+  col[idx+1] = ramp1(tc1);
+  col[idx+2] = ramp1(tc2 < 0 ? tc2 + 1 : tc2);
+}
+const COPPER_COLD = [0.30, 0.14, 0.08], COPPER_HOT = [1.00, 0.80, 0.22];
+function writeRampCopper(col, idx, tnorm) {
+  let t = Math.pow(Math.max(0, Math.min(1, tnorm)), 0.65);
+  col[idx]   = COPPER_COLD[0] + (COPPER_HOT[0] - COPPER_COLD[0]) * t;
+  col[idx+1] = COPPER_COLD[1] + (COPPER_HOT[1] - COPPER_COLD[1]) * t;
+  col[idx+2] = COPPER_COLD[2] + (COPPER_HOT[2] - COPPER_COLD[2]) * t;
+}
+const METAL_COLD = [0.70, 0.72, 0.75], METAL_HOT = [0.95, 0.62, 0.18];
+function writeRampMetal(col, idx, tnorm) {
+  let t = Math.sqrt(Math.max(0, Math.min(1, tnorm)));
+  col[idx]   = METAL_COLD[0] + (METAL_HOT[0] - METAL_COLD[0]) * t;
+  col[idx+1] = METAL_COLD[1] + (METAL_HOT[1] - METAL_COLD[1]) * t;
+  col[idx+2] = METAL_COLD[2] + (METAL_HOT[2] - METAL_COLD[2]) * t;
+}
+
+// ── Physics Integrator ────────────────────────────────────────────────────────
+let curI = 0.0;
+let markerSizeMm = 45.0;
+let enableLevitation = false; // Disabled by default so virtual plate stays firmly seated on physical mockup
+let globalAlpha = 0.38;
+let showThermal = true;
+// Channel "AR" vs "HTML" (set by build_ar_twin.py). Ambient follows the shared
+// params.yaml default (ROM.T_amb = 20 °C) so both front-ends start from the same value.
+const DISPLAY_CHANNEL = PARAMS.display_channel || "AR";
+const T_AMB_DISP = (typeof ROM.T_amb === "number") ? ROM.T_amb : 20.0;
+const sim = {
+  t_s: 0.0,
+  beta_eddy: 0.0,
+  beta_air: 0.0,
+  T_inner: T_AMB_DISP,
+  T_outer: T_AMB_DISP,
+  T_iron: T_AMB_DISP,
+  T_plate: T_AMB_DISP,
+  z_lev_mm: 0.0,
+  jit_mm: 0.0
+};
+const T_COIL_HOT = 80.0;
+const COIL_GLOW_RGB = new THREE.Color(1.0, 0.45, 0.1);
+if (coilInnerM) coilInnerM.mesh.material.emissive.copy(COIL_GLOW_RGB);
+if (coilOuterM) coilOuterM.mesh.material.emissive.copy(COIL_GLOW_RGB);
+
+function stepPhysics(dt) {
+  sim.t_s += dt;
+  const I_ratio = curI / ROM.I_ref;
+  const target_beta = I_ratio * I_ratio;
+
+  // Responsive AR display integration (smooth 2.5s time constant for instant mobile feedback)
+  const tauDisp = 2.5;
+  sim.beta_eddy += (target_beta - sim.beta_eddy) * (dt / tauDisp);
+  sim.beta_air  += (target_beta - sim.beta_air)  * (dt / (tauDisp * 1.8));
+
+  const T_inner_target = T_AMB_DISP + (LUMPED.nodes.inner.dT_cal || 21.2) * target_beta;
+  const T_outer_target = T_AMB_DISP + (LUMPED.nodes.outer.dT_cal || 18.7) * target_beta;
+  const T_iron_target  = T_AMB_DISP + (LUMPED.nodes.iron.dT_cal || 15.0) * target_beta;
+
+  sim.T_inner += (T_inner_target - sim.T_inner) * (dt / 2.5);
+  sim.T_outer += (T_outer_target - sim.T_outer) * (dt / 2.5);
+  sim.T_iron  += (T_iron_target  - sim.T_iron)  * (dt / 3.0);
+
+  const z_target = enableLevitation ? (LEV.z_gap_5A_mm * Math.sqrt(Math.max(0, curI / 5.0))) : 0.0;
+  sim.z_lev_mm += (z_target - sim.z_lev_mm) * (dt / 0.25);
+  sim.jit_mm = (enableLevitation && curI > 1.5) ? (Math.sin(sim.t_s * 27.0) * 0.25 * LEV.jit_mm) : 0.0;
+
+  const dTh = Math.max(1.0, T_COIL_HOT - T_AMB_DISP);
+  const glowI = Math.min(1.0, Math.max(0, (sim.T_inner - T_AMB_DISP) / dTh));
+  const glowO = Math.min(1.0, Math.max(0, (sim.T_outer - T_AMB_DISP) / dTh));
+  if (coilInnerM) coilInnerM.mesh.material.emissiveIntensity = Math.pow(glowI, 1.4) * 1.6;
+  if (coilOuterM) coilOuterM.mesh.material.emissiveIntensity = Math.pow(glowO, 1.4) * 1.6;
+
+  if (showThermal) {
+    const cols = plateM.col, jes = plateM.je;
+    const dT_max = (ROM.dT_max_ref || 43.34);
+    const dT_mean = (ROM.dT_mean_ref || 43.03);
+    let maxT = T_AMB_DISP;
+    const isHeating = curI > 0.05 || sim.beta_eddy > 0.005;
+    for (let i = 0; i < jes.length; i++) {
+      const jeVal = jes[i];
+      // Eddy current induction heat profile: bright thermal donut ring over coils
+      const dTv = sim.beta_eddy * (0.35 * dT_mean + 0.65 * dT_max * Math.pow(jeVal, 1.25));
+      const T = T_AMB_DISP + dTv;
+      if (T > maxT) maxT = T;
+      const tn = isHeating ? Math.max(0, Math.min(1, dTv / (dT_max + 0.1))) : 0.0;
+      writeThermalRamp(cols, i * 3, tn);
+    }
+    sim.T_plate = maxT;
+    plateM.geo.attributes.color.needsUpdate = true;
+    plateM.mesh.material.opacity = Math.max(0.68, globalAlpha * 1.6);
+    plateM.mesh.material.emissive.setRGB(1.0, 0.4, 0.05);
+    plateM.mesh.material.emissiveIntensity = Math.min(0.5, (maxT - T_AMB_DISP) / 45.0 * 0.65);
+  } else {
+    const cols = plateM.col;
+    for (let i = 0; i < cols.length; i += 3) {
+      cols[i] = 0.72; cols[i+1] = 0.76; cols[i+2] = 0.82;
+    }
+    plateM.geo.attributes.color.needsUpdate = true;
+    plateM.mesh.material.opacity = Math.min(0.35, globalAlpha * 0.75);
+    plateM.mesh.material.emissiveIntensity = 0.0;
+  }
+
+  const levZ_mm = enableLevitation ? (sim.z_lev_mm + sim.jit_mm) : 0.0;
+  baseGroup.position.z = -Z_COILS_TOP_STL;
+  fieldLineGroup.position.z = -6.0;
+  plateGroup.position.z = -Z_PLATE_TOP_FEM + levZ_mm;
+}
+
+// ── Field Lines Pulse ─────────────────────────────────────────────────────────
+let flDashOffset = 0.0;
+function updateFieldLines(dt) {
+  const normI = curI / 5.0;
+  const speed = Math.max(16.0, 45.0 * normI);
+  flDashOffset -= speed * dt;
+  // Dynamic opacity proportional to excitation current
+  const baseOp = curI > 0.05 ? Math.min(0.95, 0.50 + 0.45 * normI) : 0.15;
+  for (const o of fieldLineMats) {
+    o.mat.dashOffset = flDashOffset;
+    o.mat.opacity = baseOp * Math.min(1.0, 0.4 + 0.6 * o.amp);
+  }
+}
+
+// ── Telemetry Refresh ─────────────────────────────────────────────────────────
+const valCurEl = document.getElementById('valCurrent');
+const valTPlEl = document.getElementById('valTPlate');
+const valTCoEl = document.getElementById('valTCoil');
+const valZLvEl = document.getElementById('valZLev');
+const scaleNeedle = document.getElementById('scaleNeedle');
+let lastUiUpdate = 0;
+
+function updateTelemetry(time) {
+  if (time - lastUiUpdate < 60) return;
+  lastUiUpdate = time;
+  valCurEl.textContent = curI.toFixed(2) + ' A';
+  valTPlEl.textContent = sim.T_plate.toFixed(1) + ' °C';
+  valTCoEl.textContent = Math.max(sim.T_inner, sim.T_outer).toFixed(1) + ' °C';
+  valZLvEl.textContent = (enableLevitation ? sim.z_lev_mm : 0.0).toFixed(1) + ' mm';
+  if (scaleNeedle) {
+    const pct = Math.min(100, Math.max(0, (sim.T_plate - T_AMB_DISP) / (ROM.dT_max_ref || 43.34) * 100));
+    scaleNeedle.style.left = `${pct.toFixed(1)}%`;
+  }
+}
+
+// ── 6-DoF Pose Solver from 4 Quadrilateral Points ──────────────────────────────
+function solve8x8(A, b) {
+  for (let i = 0; i < 8; i++) {
+    let maxRow = i;
+    for (let k = i + 1; k < 8; k++) {
+      if (Math.abs(A[k][i]) > Math.abs(A[maxRow][i])) maxRow = k;
+    }
+    const tmpA = A[i]; A[i] = A[maxRow]; A[maxRow] = tmpA;
+    const tmpB = b[i]; b[i] = b[maxRow]; b[maxRow] = tmpB;
+
+    const pivot = A[i][i];
+    if (Math.abs(pivot) < 1e-12) return null;
+    for (let k = i + 1; k < 8; k++) {
+      const f = A[k][i] / pivot;
+      for (let j = i; j < 8; j++) A[k][j] -= f * A[i][j];
+      b[k] -= f * b[i];
+    }
+  }
+  const x = new Array(8);
+  for (let i = 7; i >= 0; i--) {
+    let s = b[i];
+    for (let j = i + 1; j < 8; j++) s -= A[i][j] * x[j];
+    x[i] = s / A[i][i];
+  }
+  return x;
+}
+
+function estimatePoseFromCorners(pts, viewW, viewH, markerSize, f) {
+  const halfS = markerSize / 2.0;
+  // pts: TL, TR, BR, BL
+  const objPts = [
+    [-halfS,  halfS],
+    [ halfS,  halfS],
+    [ halfS, -halfS],
+    [-halfS, -halfS]
+  ];
+
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const x = objPts[i][0], y = objPts[i][1];
+    const u = pts[i].x, v = pts[i].y;
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
+    b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
+    b.push(v);
+  }
+
+  const sol = solve8x8(A, b);
+  if (!sol) return null;
+
+  const cx = viewW / 2.0, cy = viewH / 2.0;
+
+  // H matrix
+  const H = [
+    [sol[0], sol[1], sol[2]],
+    [sol[3], sol[4], sol[5]],
+    [sol[6], sol[7], 1.0]
+  ];
+
+  // H' = K^-1 * H
+  const h1 = [(H[0][0] - cx * H[2][0]) / f, (H[1][0] - cy * H[2][0]) / f, H[2][0]];
+  const h2 = [(H[0][1] - cx * H[2][1]) / f, (H[1][1] - cy * H[2][1]) / f, H[2][1]];
+  const h3 = [(H[0][2] - cx * 1.0) / f,     (H[1][2] - cy * 1.0) / f,     1.0];
+
+  const norm1 = Math.hypot(h1[0], h1[1], h1[2]);
+  const norm2 = Math.hypot(h2[0], h2[1], h2[2]);
+  let scale = 1.0 / Math.sqrt(norm1 * norm2);
+  if (h3[2] < 0) scale = -scale;
+
+  // Symmetric Gram-Schmidt orthonormalization to eliminate single-axis tilt bias
+  let r1 = [h1[0] * scale, h1[1] * scale, h1[2] * scale];
+  let r2 = [h2[0] * scale, h2[1] * scale, h2[2] * scale];
+
+  const dot = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2];
+  const r1_s = [r1[0] - 0.5 * dot * r2[0], r1[1] - 0.5 * dot * r2[1], r1[2] - 0.5 * dot * r2[2]];
+  const r2_s = [r2[0] - 0.5 * dot * r1[0], r2[1] - 0.5 * dot * r1[1], r2[2] - 0.5 * dot * r1[2]];
+
+  const l1 = Math.hypot(r1_s[0], r1_s[1], r1_s[2]);
+  const l2 = Math.hypot(r2_s[0], r2_s[1], r2_s[2]);
+  r1 = [r1_s[0] / l1, r1_s[1] / l1, r1_s[2] / l1];
+  r2 = [r2_s[0] / l2, r2_s[1] / l2, r2_s[2] / l2];
+
+  // r3 = r1 x r2
+  const r3 = [
+    r1[1] * r2[2] - r1[2] * r2[1],
+    r1[2] * r2[0] - r1[0] * r2[2],
+    r1[0] * r2[1] - r1[1] * r2[0]
+  ];
+
+  const t = [h3[0] * scale, h3[1] * scale, h3[2] * scale];
+
+  return { r1, r2, r3, t };
+}
+
+// ── QR Scanner & Tracking Loop ────────────────────────────────────────────────
+const video = document.getElementById('webcam');
+const scanCanvas = document.createElement('canvas');
+const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+
+let isArActive = false;
+let isTracking = false;
+let trackingLostCount = 0;
+let trackedCorners = null;
+
+// Smoothed target matrix & quaternion
+const targetMatrix = new THREE.Matrix4();
+const targetPos = new THREE.Vector3();
+const targetQuat = new THREE.Quaternion();
+
+let lastVw = 0, lastVh = 0;
+function syncCanvasToVideo(vw, vh) {
+  if (vw === lastVw && vh === lastVh) return;
+  lastVw = vw; lastVh = vh;
+  const winW = window.innerWidth, winH = window.innerHeight;
+  const scale = Math.max(winW / vw, winH / vh);
+  const dispW = Math.round(vw * scale);
+  const dispH = Math.round(vh * scale);
+  const offX = Math.round((winW - dispW) / 2);
+  const offY = Math.round((winH - dispH) / 2);
+
+  renderer.setSize(dispW, dispH, false);
+  const el = renderer.domElement;
+  el.style.position = 'fixed';
+  el.style.width = dispW + 'px';
+  el.style.height = dispH + 'px';
+  el.style.left = offX + 'px';
+  el.style.top = offY + 'px';
+
+  // Synchronize Three.js camera projection to video intrinsics (f ~ 1.05 * vh for phone wide cameras)
+  const f = vh * 1.05;
+  camera.fov = 2.0 * Math.atan((vh / 2.0) / f) * (180.0 / Math.PI);
+  camera.aspect = vw / vh;
+  camera.updateProjectionMatrix();
+}
+
+function updateCameraTracking() {
+  if (!isArActive || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (vw === 0 || vh === 0) return;
+
+  syncCanvasToVideo(vw, vh);
+  const f = vh * 1.05;
+
+  // Higher scan resolution (768px) minimizes corner quantization noise
+  const sw = Math.min(768, vw);
+  const scale = sw / vw;
+  const sh = Math.round(vh * scale);
+
+  scanCanvas.width = sw;
+  scanCanvas.height = sh;
+  scanCtx.drawImage(video, 0, 0, sw, sh);
+
+  const imgData = scanCtx.getImageData(0, 0, sw, sh);
+  const code = (window.jsQR) ? jsQR(imgData.data, sw, sh, { inversionAttempts: "dontInvert" }) : null;
+
+  if (code && code.location) {
+    const loc = code.location;
+    // Rescale corners to video coordinates
+    const rawCorners = [
+      { x: loc.topLeftCorner.x / scale,     y: loc.topLeftCorner.y / scale },
+      { x: loc.topRightCorner.x / scale,    y: loc.topRightCorner.y / scale },
+      { x: loc.bottomRightCorner.x / scale, y: loc.bottomRightCorner.y / scale },
+      { x: loc.bottomLeftCorner.x / scale,  y: loc.bottomLeftCorner.y / scale }
+    ];
+
+    // Temporal corner low-pass filter: kills discrete pixel quantization noise
+    if (!trackedCorners) {
+      trackedCorners = rawCorners.map(p => ({ x: p.x, y: p.y }));
+    } else {
+      let maxDelta = 0;
+      for (let i = 0; i < 4; i++) {
+        const d = Math.hypot(rawCorners[i].x - trackedCorners[i].x, rawCorners[i].y - trackedCorners[i].y);
+        if (d > maxDelta) maxDelta = d;
+      }
+      // If motion is fast (> 35px), adapt quickly (0.80) to follow hand movements without lag
+      // If motion is small (< 10px), smooth aggressively (0.22) to filter out camera noise
+      const cornerAlpha = maxDelta > 35 ? 0.80 : (maxDelta > 10 ? 0.45 : 0.22);
+      for (let i = 0; i < 4; i++) {
+        trackedCorners[i].x += (rawCorners[i].x - trackedCorners[i].x) * cornerAlpha;
+        trackedCorners[i].y += (rawCorners[i].y - trackedCorners[i].y) * cornerAlpha;
+      }
+    }
+
+    const pose = estimatePoseFromCorners(trackedCorners, vw, vh, markerSizeMm, f);
+    if (pose) {
+      isTracking = true;
+      trackingLostCount = 0;
+      trackingBadge.textContent = "🟢 Prüfstand getrackt";
+      trackingBadge.className = "tracked";
+      targetGuide.style.display = "none";
+
+      // Build 4x4 matrix
+      // In Three.js: X_th = X_cv, Y_th = -Y_cv, Z_th = -Z_cv
+      const mat = new THREE.Matrix4();
+      mat.set(
+         pose.r1[0],  pose.r2[0],  pose.r3[0],  pose.t[0],
+        -pose.r1[1], -pose.r2[1], -pose.r3[1], -pose.t[1],
+        -pose.r1[2], -pose.r2[2], -pose.r3[2], -pose.t[2],
+         0,           0,           0,           1
+      );
+
+      targetPos.setFromMatrixPosition(mat);
+      targetQuat.setFromRotationMatrix(mat);
+
+      if (twinRoot.position.lengthSq() < 1e-3) {
+        // Initial snap on first detection
+        twinRoot.position.copy(targetPos);
+        twinRoot.quaternion.copy(targetQuat);
+      } else {
+        const posDist = twinRoot.position.distanceTo(targetPos);
+        const rotAngle = twinRoot.quaternion.angleTo(targetQuat);
+
+        // Adaptive filtering with deadband:
+        // When stationary, alpha is tiny (0.035) to eliminate jitter/wobble completely.
+        // When camera is moving, alpha increases up to 0.40 for zero-lag tracking.
+        let posAlpha = 0.10;
+        if (posDist < 3.0) posAlpha = 0.035;
+        else if (posDist > 25.0) posAlpha = 0.40;
+
+        let rotAlpha = 0.10;
+        if (rotAngle < 0.03) rotAlpha = 0.035;
+        else if (rotAngle > 0.20) rotAlpha = 0.40;
+
+        twinRoot.position.lerp(targetPos, posAlpha);
+        twinRoot.quaternion.slerp(targetQuat, rotAlpha);
+      }
+      twinRoot.visible = true;
+    }
+  } else {
+    if (isTracking) {
+      trackingLostCount++;
+      if (trackingLostCount > 25) { // Keep steady for ~0.8s during brief occlusions
+        isTracking = false;
+        trackedCorners = null;
+        trackingBadge.textContent = "🟡 Suche Marker...";
+        trackingBadge.className = "camera-on";
+        targetGuide.style.display = "block";
+      }
+    }
+  }
+}
+
+// ── Main Render Loop ──────────────────────────────────────────────────────────
+let lastTime = performance.now();
+
+function animate(time) {
+  const dt = Math.min(0.1, (time - lastTime) / 1000.0);
+  lastTime = time;
+
+  stepPhysics(dt);
+  updateFieldLines(dt);
+  updateTelemetry(time);
+
+  if (isArActive) {
+    updateCameraTracking();
+  } else {
+    if (controls) controls.update();
+    twinRoot.rotation.y += 0.004;
+  }
+
+  renderer.render(scene, camera);
+}
+renderer.setAnimationLoop(animate);
+
+// ── Start Camera Button & Dialogs ─────────────────────────────────────────────
+const btnStartAR = document.getElementById('btnStartAR');
+const startBanner = document.getElementById('startBanner');
+const trackingBadge = document.getElementById('trackingBadge');
+const targetGuide = document.getElementById('targetGuide');
+
+function showMessage(title, htmlContent) {
+  const msgBox = document.getElementById('msgBox');
+  document.getElementById('msgTitle').innerHTML = title;
+  document.getElementById('msgBody').innerHTML = htmlContent;
+  msgBox.style.display = 'block';
+}
+
+document.getElementById('btnCloseMsg').addEventListener('click', () => {
+  document.getElementById('msgBox').style.display = 'none';
+});
+
+btnStartAR.addEventListener('click', async () => {
+  // Verify WebRTC camera API support
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    const isLocal = window.location.protocol === 'file:';
+    showMessage(
+      "🔒 Kamera nicht verfügbar",
+      isLocal
+        ? `<p>Du hast die Datei als <b>lokale Datei oder im Datei-Viewer</b> geöffnet.</p>
+           <p>Apple Safari und Android Chrome verlangen aus Sicherheitsgründen eine <b>verschlüsselte HTTPS-Adresse</b> für den Kamerazugriff.</p>
+           <ul class="help-list">
+             <li><b>Dauerhafte Lösung:</b> Auf <b>GitHub Pages</b> hosten: <code>https://&lt;user&gt;.github.io/DT4TM/outputs/ar_twin.html</code></li>
+             <li><b>WLAN-Test:</b> Am PC <code>python serve_ar.py</code> starten und QR-Code scannen.</li>
+             <li><b>Hinweis:</b> Im 3D-Vorschaumodus kannst du die gesamte Simulation hier bereits interaktiv mit Touch bedienen!</li>
+           </ul>`
+        : `<p>Dieser Browser unterstützt keinen Kamerazugriff oder die Berechtigung wurde blockiert.</p>
+           <p>Bitte überprüfe in den Browser-Einstellungen, ob der Kamerazugriff erlaubt ist.</p>`
+    );
+    return;
+  }
+
+  btnStartAR.disabled = true;
+  btnStartAR.textContent = "⌛ Kamera wird gestartet...";
+
+  try {
+    // Request environment camera with ideal 1280x720 resolution
+    const constraints = {
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      audio: false
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
+
+    // Switch view to Camera AR
+    video.style.display = 'block';
+    if (controls) controls.enabled = false;
+    isArActive = true;
+    startBanner.style.display = 'none';
+    targetGuide.style.display = 'block';
+    trackingBadge.textContent = "🟡 Suche Marker...";
+    trackingBadge.className = "camera-on";
+
+    // Set camera projection for AR
+    camera.up.set(0, 1, 0);
+    camera.position.set(0, 0, 0);
+    camera.rotation.set(0, 0, 0);
+    lastVw = 0; lastVh = 0;
+    if (video.videoWidth && video.videoHeight) {
+      syncCanvasToVideo(video.videoWidth, video.videoHeight);
+    }
+
+  } catch (err) {
+    console.error("Camera error:", err);
+    btnStartAR.disabled = false;
+    btnStartAR.textContent = "📷 Kamera starten";
+    showMessage(
+      "⚠️ Kamera-Zugriff fehlgeschlagen",
+      `<p>Fehlermeldung: <b>${err.message || err.name}</b></p>
+       <p>Mögliche Ursachen:</p>
+       <ul class="help-list">
+         <li>Kamera-Berechtigung im Browser abgelehnt (in den Website-Einstellungen auf "Erlauben" setzen).</li>
+         <li>Die Kamera wird bereits von einer anderen App blockiert.</li>
+         <li>Keine sichere HTTPS-Verbindung (z. B. <code>http://</code> statt <code>https://</code>).</li>
+       </ul>`
+    );
+  }
+});
+
+// ── Interactive UI Controls ───────────────────────────────────────────────────
+const sliderCur = document.getElementById('sliderCurrent');
+const lblCur = document.getElementById('lblCurrent');
+
+sliderCur.addEventListener('input', (e) => {
+  curI = parseFloat(e.target.value);
+  const vApprox = (curI / 5.0) * 190.0;
+  lblCur.textContent = `${curI.toFixed(2)} A (~${vApprox.toFixed(0)}V)`;
+});
+
+const btnToggleB = document.getElementById('btnToggleBField');
+btnToggleB.addEventListener('click', () => {
+  fieldLineGroup.visible = !fieldLineGroup.visible;
+  btnToggleB.classList.toggle('active', fieldLineGroup.visible);
+});
+
+const btnToggleT = document.getElementById('btnToggleThermal');
+btnToggleT.addEventListener('click', () => {
+  showThermal = !showThermal;
+  btnToggleT.classList.toggle('active', showThermal);
+  updateOpacities();
+});
+
+function updateOpacities() {
+  const lblAlpha = document.getElementById('lblAlpha');
+  if (lblAlpha) lblAlpha.textContent = Math.round(globalAlpha * 100) + '%';
+  plateM.mesh.material.opacity = showThermal ? Math.max(0.68, globalAlpha * 1.6) : Math.min(0.40, globalAlpha * 0.75);
+  if (plateEdges) plateEdges.material.opacity = Math.min(1.0, globalAlpha * 2.5);
+
+  if (housingM) {
+    housingM.mesh.material.opacity = Math.min(0.20, globalAlpha * 0.40);
+    if (housingM.edges) housingM.edges.material.opacity = Math.min(1.0, globalAlpha * 2.2);
+  }
+
+  // Significantly more transparent for inner copper coils and iron cores
+  const coilAlpha = Math.min(0.35, globalAlpha * 0.70);
+  const ironAlpha = Math.min(0.28, globalAlpha * 0.55);
+  if (coilInnerM) {
+    coilInnerM.mesh.material.opacity = coilAlpha;
+    if (coilInnerM.edges) coilInnerM.edges.material.opacity = Math.min(1.0, globalAlpha * 2.2);
+  }
+  if (coilOuterM) {
+    coilOuterM.mesh.material.opacity = coilAlpha;
+    if (coilOuterM.edges) coilOuterM.edges.material.opacity = Math.min(1.0, globalAlpha * 2.2);
+  }
+  if (ironInnerM) {
+    ironInnerM.mesh.material.opacity = ironAlpha;
+    if (ironInnerM.edges) ironInnerM.edges.material.opacity = Math.min(0.8, globalAlpha * 1.8);
+  }
+  if (ironOuterM) {
+    ironOuterM.mesh.material.opacity = ironAlpha;
+    if (ironOuterM.edges) ironOuterM.edges.material.opacity = Math.min(0.8, globalAlpha * 1.8);
+  }
+  if (corkM) corkM.mesh.material.opacity = Math.min(0.25, globalAlpha * 0.45);
+}
+
+let isXray = false;
+const btnToggleAlpha = document.getElementById('btnToggleAlpha');
+btnToggleAlpha.addEventListener('click', () => {
+  isXray = !isXray;
+  btnToggleAlpha.classList.toggle('active', isXray);
+  globalAlpha = isXray ? 0.16 : 0.38;
+  updateOpacities();
+});
+
+const btnAlphaDec = document.getElementById('btnAlphaDec');
+const btnAlphaInc = document.getElementById('btnAlphaInc');
+if (btnAlphaDec) {
+  btnAlphaDec.addEventListener('click', () => {
+    globalAlpha = Math.max(0.10, Math.round((globalAlpha - 0.05) * 100) / 100);
+    updateOpacities();
+  });
+}
+if (btnAlphaInc) {
+  btnAlphaInc.addEventListener('click', () => {
+    globalAlpha = Math.min(1.00, Math.round((globalAlpha + 0.05) * 100) / 100);
+    updateOpacities();
+  });
+}
+
+const btnTogglePlate = document.getElementById('btnTogglePlate');
+if (btnTogglePlate) {
+  btnTogglePlate.addEventListener('click', () => {
+    plateGroup.visible = !plateGroup.visible;
+    btnTogglePlate.classList.toggle('active', plateGroup.visible);
+    btnTogglePlate.textContent = plateGroup.visible ? 'Sichtbar' : 'Aus';
+  });
+}
+
+const btnToggleHousing = document.getElementById('btnToggleHousing');
+if (btnToggleHousing && housingM) {
+  btnToggleHousing.addEventListener('click', () => {
+    housingM.mesh.visible = !housingM.mesh.visible;
+    btnToggleHousing.classList.toggle('active', housingM.mesh.visible);
+    btnToggleHousing.textContent = housingM.mesh.visible ? 'Sichtbar' : 'Aus';
+  });
+}
+
+const btnPreset5A = document.getElementById('btnPreset5A');
+btnPreset5A.addEventListener('click', () => {
+  curI = 5.0;
+  sliderCur.value = 5.0;
+  lblCur.textContent = "5.00 A (~190V)";
+});
+
+// Calibration Controls
+const btnToggleCalib = document.getElementById('btnToggleCalib');
+const calibPanel = document.getElementById('calibPanel');
+btnToggleCalib.addEventListener('click', () => {
+  const isShown = calibPanel.style.display === 'flex';
+  calibPanel.style.display = isShown ? 'none' : 'flex';
+  btnToggleCalib.classList.toggle('active', !isShown);
+});
+
+// Auto-Align: Snaps virtual octagonal flat edge to face the user's camera
+const btnAutoAlign = document.getElementById('btnAutoAlign');
+if (btnAutoAlign) {
+  btnAutoAlign.addEventListener('click', () => {
+    const camLocal = twinRoot.worldToLocal(new THREE.Vector3(0, 0, 0));
+    let phiDeg = Math.atan2(camLocal.y, camLocal.x) * (180.0 / Math.PI);
+    if (phiDeg < 0) phiDeg += 360.0;
+
+    let delta = (phiDeg - 22.5) % 45.0;
+    if (delta > 22.5) delta -= 45.0;
+    if (delta < -22.5) delta += 45.0;
+
+    manualYawDeg = Math.round(delta * 10) / 10;
+    updateModelTransform();
+
+    btnAutoAlign.textContent = `✅ Eingerastet (${manualYawDeg > 0 ? '+' : ''}${manualYawDeg.toFixed(1)}°)`;
+    setTimeout(() => {
+      btnAutoAlign.textContent = "📐 Kante zu mir einrasten";
+    }, 2200);
+  });
+}
+
+// Drehwinkel (Yaw) Buttons - 1 deg step
+const btnYawDec = document.getElementById('btnYawDec');
+if (btnYawDec) {
+  btnYawDec.addEventListener('click', () => {
+    manualYawDeg = Math.round((manualYawDeg - 1.0) * 10) / 10;
+    updateModelTransform();
+  });
+}
+const btnYawInc = document.getElementById('btnYawInc');
+if (btnYawInc) {
+  btnYawInc.addEventListener('click', () => {
+    manualYawDeg = Math.round((manualYawDeg + 1.0) * 10) / 10;
+    updateModelTransform();
+  });
+}
+const btnYawSnap = document.getElementById('btnYawSnap');
+if (btnYawSnap) {
+  btnYawSnap.addEventListener('click', () => {
+    manualYawDeg = (Math.abs(manualYawDeg - 22.5) < 0.5) ? 0.0 : 22.5;
+    updateModelTransform();
+  });
+}
+
+// Neigung (Pitch) Buttons - 1 deg step
+const btnPitchDec = document.getElementById('btnPitchDec');
+if (btnPitchDec) {
+  btnPitchDec.addEventListener('click', () => {
+    manualPitchDeg = Math.round((manualPitchDeg - 1.0) * 10) / 10;
+    updateModelTransform();
+  });
+}
+const btnPitchInc = document.getElementById('btnPitchInc');
+if (btnPitchInc) {
+  btnPitchInc.addEventListener('click', () => {
+    manualPitchDeg = Math.round((manualPitchDeg + 1.0) * 10) / 10;
+    updateModelTransform();
+  });
+}
+const btnPitchReset = document.getElementById('btnPitchReset');
+if (btnPitchReset) {
+  btnPitchReset.addEventListener('click', () => {
+    manualPitchDeg = 0.0;
+    updateModelTransform();
+  });
+}
+
+// Modell-Skalierung Buttons - 1% step
+const btnScaleDec = document.getElementById('btnScaleDec');
+if (btnScaleDec) {
+  btnScaleDec.addEventListener('click', () => {
+    manualScale = Math.max(0.70, Math.round((manualScale - 0.01) * 100) / 100);
+    updateModelTransform();
+  });
+}
+const btnScaleInc = document.getElementById('btnScaleInc');
+if (btnScaleInc) {
+  btnScaleInc.addEventListener('click', () => {
+    manualScale = Math.min(1.40, Math.round((manualScale + 0.01) * 100) / 100);
+    updateModelTransform();
+  });
+}
+
+// Position X Buttons
+const btnXDec = document.getElementById('btnXDec');
+if (btnXDec) {
+  btnXDec.addEventListener('click', () => {
+    manualXOffset -= 1.0;
+    updateModelTransform();
+  });
+}
+const btnXInc = document.getElementById('btnXInc');
+if (btnXInc) {
+  btnXInc.addEventListener('click', () => {
+    manualXOffset += 1.0;
+    updateModelTransform();
+  });
+}
+
+// Position Y Buttons
+const btnYDec = document.getElementById('btnYDec');
+if (btnYDec) {
+  btnYDec.addEventListener('click', () => {
+    manualYOffset -= 1.0;
+    updateModelTransform();
+  });
+}
+const btnYInc = document.getElementById('btnYInc');
+if (btnYInc) {
+  btnYInc.addEventListener('click', () => {
+    manualYOffset += 1.0;
+    updateModelTransform();
+  });
+}
+
+const lblMarkerSize = document.getElementById('lblMarkerSize');
+document.getElementById('btnSizeDec').addEventListener('click', () => {
+  markerSizeMm = Math.max(25, markerSizeMm - 2);
+  lblMarkerSize.textContent = `${markerSizeMm} mm`;
+});
+document.getElementById('btnSizeInc').addEventListener('click', () => {
+  markerSizeMm = Math.min(80, markerSizeMm + 2);
+  lblMarkerSize.textContent = `${markerSizeMm} mm`;
+});
+
+document.getElementById('btnZDec').addEventListener('click', () => {
+  manualZOffset -= 1.0;
+  updateModelTransform();
+});
+document.getElementById('btnZInc').addEventListener('click', () => {
+  manualZOffset += 1.0;
+  updateModelTransform();
+});
+
+const btnToggleLev = document.getElementById('btnToggleLev');
+btnToggleLev.addEventListener('click', () => {
+  enableLevitation = !enableLevitation;
+  btnToggleLev.classList.toggle('active', enableLevitation);
+  btnToggleLev.textContent = enableLevitation ? 'Ein (+12mm)' : 'Aus (0mm)';
+});
+
+window.addEventListener('resize', () => {
+  if (isArActive && video.videoWidth && video.videoHeight) {
+    lastVw = 0; lastVh = 0;
+    syncCanvasToVideo(video.videoWidth, video.videoHeight);
+  } else {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+});
+</script>
+</body>
+</html>
+"""
+    # Replace template placeholders
+    html = html_template.replace("__PARAMS_JSON__", data["params_json"])
+    html = html.replace("__POSITIONS_B64__", data["positions_b64"])
+    html = html.replace("__REGIONS_B64__", data["regions_b64"])
+    html = html.replace("__DT_VTX_B64__", data["dt_vtx_b64"])
+    html = html.replace("__DTAIR_VTX_B64__", data["dtair_vtx_b64"])
+    html = html.replace("__JE_VTX_B64__", data["je_vtx_b64"])
+    html = html.replace("__STL_PARTS_JSON__", data["stl_parts_json"])
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    size_kb = os.path.getsize(out_path) / 1024
+    print(f"[build_ar_twin] Generated WebAR app -> {out_path} ({size_kb:.1f} KB)")
+
+
+if __name__ == "__main__":
+    if not os.path.exists(FEM_HTML):
+        print(f"[build_ar_twin] Error: {FEM_HTML} not found.")
+        print("Run 'python build_twin_html_fem.py' first.")
+        sys.exit(1)
+
+    extracted = extract_data_from_fem_html(FEM_HTML)
+    generate_ar_html(extracted, OUT_HTML)

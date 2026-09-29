@@ -1042,6 +1042,9 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     psup = power_supply_params(cfg)
     params = {"rom": rom_params, "lumped": lumped, "field_lines": field_lines, "lev": lev,
               "power_supply": psup,
+              # 2026-09-29: front-end tag. build_ar_twin.py reads this PARAMS block
+              # from the baked HTML and re-tags it "AR" for outputs/ar_twin.html.
+              "display_channel": "HTML",
               # 2026-09-27: T_amb selector presets + Sensor-mode conditioning.
               "ambient_presets": ambient_presets(cfg),
               "live_sensor": live_sensor_params(cfg),

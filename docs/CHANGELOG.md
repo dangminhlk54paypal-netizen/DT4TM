@@ -1568,3 +1568,17 @@ physics/baked-data change; `xval_twin.py` PASS against the rebuilt HTML.
 - Verified with Playwright in Chromium + WebKit: 28/28 checks (ambient switch/reset,
   demo drive, locks, dead-band/clamp, parser, STALE, mode switch). Real Arduino over Web
   Serial NOT yet tested (no hardware attached).
+
+## 2026-09-29 — WP-AR-MERGE: teammate's WebAR channel merged from `ar_simulation`
+- Merged `origin/ar_simulation` (de1570e, 2026-09-28: `build_ar_twin.py`, `gen_ar_marker.py`,
+  `serve_ar.py`, `compile_mind.py`, `docs/WEBAR_GUIDE.md`, `outputs/ar_twin.html`,
+  `outputs/ar_marker.png`). Only conflict: README.md — both sides kept (the dropped
+  `data_io.py --mode calibrate` line restored), README brought up to date.
+- Her pipeline, tracking and display physics kept as written. Light fixes only:
+  `T_AMB_DISP` 29.0 → `ROM.T_amb` (20 °C, same default as the HTML twin);
+  `AR_STL_DIR` env override; if no STL folder is found, reuse the STL parts already
+  embedded in `outputs/ar_twin.html` (a Mac rebuild no longer drops the geometry).
+- New `PARAMS.display_channel`: `"HTML"` baked by build_twin_html_fem.py, re-tagged `"AR"`
+  by build_ar_twin.py. Metadata only — engine untouched; HTML diff = that one line.
+- Verified: twin_core 6/6 PASS, xval_twin A+B PASS, both pages load headless with no
+  JS errors, AR starts at 20.0 °C with all 6 STL parts identical to her build.

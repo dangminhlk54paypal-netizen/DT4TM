@@ -3,7 +3,18 @@
 A digital twin that predicts the **temperature field in real time** for the
 aluminium plate of the TEAM 28 electrodynamic levitation device (at TEMF).
 It is validated against the real physical setup, then visualized in 3D, and
-finally delivered through an **AR app + QR code**. Operating current ≤ 5 A.
+finally delivered through an **AR app + QR code**. Operating current ≤ 5 A
+(main operating point 190 V → 5 A, measured; ambient default 20 °C).
+
+Two front-ends read the **same** baked FEM data (`outputs/digital_twin_fem.html`):
+| Channel | Output | Built by | Physics |
+|---|---|---|---|
+| **HTML** (web twin) | `outputs/digital_twin_fem.html` | `build_twin_html_fem.py` | `twin_core.py` engine, pinned by `xval_twin.py` |
+| **AR** (WebAR, phone camera) | `outputs/ar_twin.html` | `build_ar_twin.py` | own fast display approximation (τ ≈ 2.5 s) for mobile feedback |
+
+`PARAMS.display_channel` (`"HTML"` / `"AR"`) tells each page which front-end it is.
+The AR builder extracts PARAMS + mesh arrays from the HTML twin, so **re-bake the HTML
+first, then rebuild the AR** (`python build_twin_html_fem.py && python build_ar_twin.py`).
 
 ## Why real-time is possible
 At a fixed frequency with linear materials, **Joule losses scale as I²** while
@@ -44,7 +55,17 @@ python refit_hA.py                       # WP-COOL T4: refit lumped_thermal.hA_i
 python data_io.py --mode calibrate --csv mock_sensor_data.csv   # calibrate UA from a sensor log (no hardware needed)
 python digital_twin_live.py               # OPTIONAL live mode: twin driven by the Arduino-measured current
                                           # (--port /dev/cu.usbmodem… | mock, --replay log.csv, --self-check)
+python weather_api.py                     # current ambient from Google Weather (key in local/, fallback 20°C)
+python RUN.py                             # one-click: re-bake HTML if stale, open it (macOS: double-click RUN.command)
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
+
+# WebAR twin (AR channel, see docs/WEBAR_GUIDE.md)
+python gen_ar_marker.py <hosted-url>     # Generate printable WebAR tracking marker -> outputs/ar_marker.png
+python build_ar_twin.py                  # Generate mobile WebAR twin -> outputs/ar_twin.html
+                                          # STL parts: AR_STL_DIR=<folder> overrides the STL folder; without it,
+                                          # the parts already embedded in outputs/ar_twin.html are reused
+python serve_ar.py [--tunnel] [--port 8000]   # local server + QR for phone testing (--tunnel: ngrok HTTPS)
+python compile_mind.py                   # OPTIONAL: ar_marker.png -> outputs/targets.mind (MindAR, headless Edge)
 
 # Optional extension: PyVista desktop 3D twin (~400MB VTK dep, see extensions/README.md)
 python extensions/digital_twin_pyvista.py --self-check          # sanity check, no VTK needed
@@ -74,21 +95,31 @@ sim_plates.py       # compare thermal response across plate_library
 build_twin_html_fem.py  # FEM-based bake  -> outputs/digital_twin_fem.html
 refit_hA.py          # WP-COOL T4: solve lumped_thermal.hA_inner/outer through the actual
                      # TwinState integrator instead of a hand-derived linear formula
-data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA()
+data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA(); logs T_amb
+digital_twin_live.py # OPTIONAL live mode: ACS712 I_rms (serial/mock/replay) -> same TwinState
+weather_api.py      # stdlib-only Google Weather ambient reader (single key loader, never raises)
+RUN.py / RUN.command # one-click launcher for the HTML twin
 gen_qr.py           # QR code for the hosted digital_twin_fem.html (URL via CLI arg)
+gen_ar_marker.py    # Printable WebAR tracking marker with embedded QR code
+build_ar_twin.py    # Mobile WebAR app builder -> outputs/ar_twin.html (reads digital_twin_fem.html)
+serve_ar.py         # local dev server + QR / optional ngrok HTTPS tunnel for the WebAR page
+compile_mind.py     # optional: compile ar_marker.png -> outputs/targets.mind (MindAR)
 extensions/         # OPTIONAL add-ons — heavy deps the core avoids; nothing in the root
                     #   imports them, so the pipeline runs with this folder deleted.
                     #   digital_twin_pyvista.py (PyVista/VTK 3D twin). See its README.md.
-arduino/thermal_sensor/thermal_sensor.ino  # MAX31855x2 firmware, 1Hz CSV over serial
+arduino/thermal_sensor/thermal_sensor.ino  # ACS712-20A current logger (I_rms @1Hz CSV over serial)
 3D_model.stl                    # colleague's CAD (source, meters, axisymmetric)
 levitation_height_team28.csv    # Table I from the PDF (levitation height, validation)
 mock_sensor_data.csv            # synthetic sensor log for testing data_io.py
 docs/               # LIVING docs: physics.md, ARCHITECTURE.md, CHANGELOG.md, HANDOFF.md,
                     #   SENSOR_PLAN.md, QUICK_START_FOR_AGENTS.md, math_formulation.md,
-                    #   REPORT_WHY_CUSTOM_CODE{,_DE}.md, METHODS_SUMMARY.md
+                    #   REPORT_WHY_CUSTOM_CODE{,_DE}.md, METHODS_SUMMARY.md, WEBAR_GUIDE.md
+docs/DT4TM_report/  # project report (faculty IEEE template, .tex + .bib) for ShareLaTeX
+docs/DT4TM_presentation/  # German slides (.pptx) + talk script and defense Q&A
 docs/archive/       # COMPLETED plans + bug registers, named YYYY-MM-DD_TOPIC.md.
                     #   Historical record only — see docs/archive/README.md for the index.
-outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin_fem.html)
+outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin_fem.html,
+                    #   ar_twin.html, ar_marker.png)
 ```
 
 ## Roadmap
@@ -99,7 +130,11 @@ outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin
 - [x] **Phase 2** — Real-time ROM (I² + first-order transient + σ(T) correction).
 - [x] **Phase 3** — Twin loop (interactive). Measured-data ingestion: pending real sensors.
 - [x] **Phase 4** — Revolve 2D→3D, export GLB/OBJ.
-- [x] **Phase 5** — Standalone interactive AR twin (`digital_twin.html`). QR: optional.
+- [x] **Phase 5** — Standalone interactive web twin (`outputs/digital_twin_fem.html`). QR: optional.
+- [x] **Phase 5b** — WebAR twin on the phone camera (`build_ar_twin.py` → `outputs/ar_twin.html`,
+      QR marker tracking, STL housing/coils/iron, field lines). Added 2026-09-28 on branch
+      `ar_simulation`, merged 2026-09-29. Uses its own display approximation, not the
+      `twin_core` engine — numbers are indicative; the HTML twin is the reference.
 - [x] **Phase 6a** — Domain validation: Dirichlet vs Neumann BC comparison (1×1m box).
       See `validate_domain_size()` in `em_solver.py` — PASS, all diffs <1% at the ±500mm
       domain (largest: P_plate 0.767%), re-checked after the 2026-07-10 geometry
@@ -110,8 +145,13 @@ outputs/            # generated PNG/GLB/OBJ/HTML (gitignored except digital_twin
       outputs regenerated.
 - [x] **Phase 8** — `data_io.py` + `arduino/thermal_sensor.ino`: `SensorReader` (serial or
   mock) -> `calibrate_from_file()` -> `rom.calibrate_UA()`. Tested against `mock_sensor_data.csv`.
-- [ ] **Phase 7** — Sensor hardware: build the real Arduino rig (Arduino + thermocouple +
-  IR thermometer, see `docs/SENSOR_PLAN.md`), then re-run Phase 8 calibration on real data.
+- [x] **Phase 8b** — Ambient logging (2026-09-27): real measurements record the live Google
+  Weather ambient (`weather_api.py`, refreshed every `weather_api.log_refresh_s`); the key is
+  usable until `weather_api.key_valid_until` (2026-10-15), then the 20 °C default applies.
+- [ ] **Phase 7** — Sensor hardware: ACS712-20A current logger on an Arduino UNO R4 Minima —
+  bench step 1 done 2026-09-28 (noise floor 0.25 A → dead-band 0.5 A). Next: mains wiring +
+  one-point calibration at 190 V → 5 A, then a real cooldown/heat-up log and re-run of the
+  Phase 8 calibration (see `docs/SENSOR_PLAN.md`).
 
 ## Axisymmetric FEM math (reference)
 Weak form with volume weight `2πr dr dz`:
