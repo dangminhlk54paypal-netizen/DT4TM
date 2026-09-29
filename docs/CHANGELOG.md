@@ -1582,3 +1582,63 @@ physics/baked-data change; `xval_twin.py` PASS against the rebuilt HTML.
   by build_ar_twin.py. Metadata only — engine untouched; HTML diff = that one line.
 - Verified: twin_core 6/6 PASS, xval_twin A+B PASS, both pages load headless with no
   JS errors, AR starts at 20.0 °C with all 6 STL parts identical to her build.
+
+## 2026-09-29 — WP-VIEW: HTML twin framing, part callouts, field-line placement, smooth colours
+Display-only (build_twin_html_fem.py template); twin_core/romStep/levStep untouched,
+xval_twin PASS, twin_core 6/6.
+- **Framing:** camera fits the device's bounding sphere into 50 % of the free area between
+  the panels (centred, small), free zoom (min/max distance, zoom-to-cursor); `Fit view`
+  button, `F` key, double-click. Fog density follows camera distance.
+- **Callouts** replace the CSS2D labels: anchor ON each part, re-placed every frame on the
+  camera-facing side; tag = name · live T (and W / gap) + role; leader line into a column
+  beside the device; dashed leader when the part is hidden (raycast). Hidden on ≤760 px.
+- **Field lines — bug fix:** FIELD_LINES are in the EM frame (coil top z=0) but were drawn
+  in the display frame (coil top z=61 mm) → every line sat 61 mm too low, below the
+  housing. New `PARAMS.field_view` maps them; the gap part stretches with the live lift,
+  lines above the disc ride along (display mapping of the baked contours).
+- **Why it floats:** F_mag up / m·g down arrows on the disc and a live strip in B-field/Both
+  modes. F(I,z) = m·g·(I/5)²·e^{−(z−z5)/z0} — the same law whose root is levGapEqMm();
+  per-variant `F_grav_N` baked. 5 A: 1.60 N = 1.60 N at 11.9 mm; 2 A: 0.70 N → rests.
+- **Smooth colours:** Auto used to flip absolute→relative at 0.3 K spread (whole disc
+  jumped to a rainbow). Now the disc window blends continuously (smoothstep 0.3–3 K,
+  min span 4 K, eased τ=1.2 s) and all vertex colours + coil glow ease (τ=0.35 s).
+- **Colour scales per material:** disc (aluminium, window ticks), coils (copper, markers
+  inner/outer), core + separator (iron, ×1.8 boost → 20–53 °C) — bars sampled from the
+  same ramp functions the mesh uses.
+- **HiDPI bug (same day, found on Safari/Retina):** `renderer.domElement.style.cssText = …`
+  ran after `renderer.setSize()` and wiped its CSS width/height, so at DPR=2 the canvas
+  showed at buffer size (2880×1800 CSS px in a 1440×900 window): model 2× and pushed to the
+  bottom-right, callouts correct. Pre-existing; invisible at DPR=1 and "healed" by any
+  window resize. Now only the positioning props are set. Verified at DPR=2 in Chromium +
+  WebKit: canvas 1440×900 CSS / 2880×1800 buffer, device centred.
+- **Colour bars moved into the telemetry sections (user layout request):** each bar sits on
+  its section header line — `DISC ▬` (+ Range / Scale button), `COILS ▬` (Inner, Outer),
+  `IRON ▬` (Core + separator ring); the separate "Colour scale" block is gone (its note is
+  now the header tooltip). Row swatches now use the material ramps (they used the disc's
+  rainbow `tcol()` for coils/iron too, so a 60 °C coil showed cyan next to an orange coil).
+
+## 2026-09-29 — WP-SS: steady-state targets from the engine's own fixed point (HTML display)
+- **Problem (user question "disc 87 °C but coil 43 →80?"):** `plateTss()` / `coilTss_*()`
+  were linear closed forms, exact only at I_ref=5 A. They ignored the two negative feedbacks
+  romStep() integrates: σ_Al(T) (δ≈12 mm ≫ 3 mm → eddy loss ∝ σ; −13 % at 57 °C, −24 % at
+  100 °C) and natural convection h ∝ ΔT^0.25. At 7.9 A/20 °C they showed disc 128.2 /
+  inner 79.8 °C; the engine actually settles at 102.9 / 71.1 °C.
+- **Fix (display only, engine untouched):** `engineSteadyState(I)` snapshots the live state,
+  drives the SAME romStep() at constant I (dt=min(30 s, 0.1·τ), stable) until the per-step
+  change < 1e-5 K, reads coils/iron/air + disc T_max over the real vertices, restores the
+  snapshot. Cached per (I, T_amb, disc), warm-started, throttled to 4 Hz. 0.4–1.3 ms/solve.
+  New iron arrow (→76° at 7.9 A; τ≈1.9 h, so it takes hours). `twinDebug.steadyState(I)`.
+- **Verified:** matches a 22 h twin_core integration to 0.01 K at 2/5/7.9 A; reproduces the
+  IR calibration exactly (7.8 A/29 °C → 79.00/74.00 °C). 5 A/20 °C: disc T_ss max 59.1 °C
+  (was 63.3; report mean 57.5 unchanged). xval PASS, twin_core 6/6, sine scenario 16.6 ms/frame.
+- **WebAR:** unaffected — PARAMS unchanged, `ar_twin.html` rebuilds byte-identical. Its own
+  display model still uses the linear targets (7.9 A: disc 128 / inner 73 / iron 79 °C,
+  reached in ~10 s via τ_disp=2.5 s) — left to the teammate.
+- Physics review notes (no change made): disc C=147 J/K = ROM UA·τ ✓, Biot 3e-4 ✓, h_top=10
+  vs correlation 7.5–9 W/m²K ✓, Al ε≈0.05 → h_rad≈0.4 (emissivity 0 OK); h_bottom=25 is a
+  plume guess (free face-down ≈4). Coil ε≈0.9 → h_rad 6–8 W/m²K, lumped into the IR-fitted
+  hA (hA_inner=2.47 W/K ≫ what the exposed top alone could give → it is an effective
+  conductance incl. conduction paths). Copper R(T) (+20 % at 71 °C) is NOT in romStep
+  (absorbed by the 7.8 A calibration). `twin_core.LumpedCoeffs.coil_Tss` docstring still
+  describes the old JS formula (left as-is: engine file).
+- Talk script Stolperstein #3 updated (63 → 59.1 °C, why).

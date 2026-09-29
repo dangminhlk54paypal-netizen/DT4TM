@@ -1045,6 +1045,19 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
               # 2026-09-29: front-end tag. build_ar_twin.py reads this PARAMS block
               # from the baked HTML and re-tags it "AR" for outputs/ar_twin.html.
               "display_channel": "HTML",
+              # 2026-09-29 (display only): FIELD_LINES are in the EM solve's (r,z) frame
+              # (coil top at coils.z_top_mm, disc bottom at plate_material.z_bottom_mm);
+              # the display mesh puts the coil top at z_coil_top with the disc resting on
+              # it. These four numbers let the JS map one frame onto the other and let the
+              # gap part of each line stretch with the live levitation lift.
+              "field_view": {
+                  "coil_top_em_mm":   float(cfg.coils.get("z_top_mm", 0.0)),
+                  "coil_top_disp_mm": float(z_coil_top),
+                  "gap_em_mm": float(cfg.plate["z_bottom_mm"]) - float(cfg.coils.get("z_top_mm", 0.0)),
+                  "t_em_mm":   float(cfg.plate["thickness_mm"]),
+                  "t_disp_mm": float(cfg.plate["thickness_mm"])
+                               * float(cfg.raw["levitating_disc"].get("display_z_exaggeration", 1.0)),
+              },
               # 2026-09-27: T_amb selector presets + Sensor-mode conditioning.
               "ambient_presets": ambient_presets(cfg),
               "live_sensor": live_sensor_params(cfg),
@@ -1103,6 +1116,10 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
             "lev":       data["lev"],
             "P_plate_W": data["P_plate_W"],
             "field_lines": data["field_lines"],
+            # Disc weight m·g [N] (ρ·πR²·t·g, same formula as _lev_anchor) -- the
+            # force panel shows F_mag against it. Display only.
+            "F_grav_N":  round(float(cfg.plate["rho_kg_per_m3"]) * math.pi * (r * 1e-3) ** 2
+                               * float(cfg.plate["thickness_mm"]) * 1e-3 * 9.81, 4),
         })
     active_idx = next(i for i, r in enumerate(variant_radii)
                        if abs(r - active_radius_mm) < 0.5)
@@ -1289,20 +1306,53 @@ button#reset:hover{background:rgba(255,122,122,.08)}
   border:1px solid #456;font-variant-numeric:tabular-nums}
 #scaleBar{margin-top:4px;height:8px;border-radius:4px;position:relative;
   background:linear-gradient(to right,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000)}
-#scaleBar .marker{position:absolute;top:-3px;width:2px;height:14px;background:#fff;
-  box-shadow:0 0 2px #000}
+#scaleBar .marker,.matBar .marker{position:absolute;top:-3px;width:2px;height:14px;background:#fff;
+  box-shadow:0 0 2px #000;transition:left .25s linear}
+.matBar{margin-top:4px;height:8px;border-radius:4px;position:relative}
+.matBar .marker.o{background:#ffe2b8}
+/* Section header with its material's colour bar on the same line: "DISC ▬▬▬" */
+.secbar{display:flex;align-items:flex-start;gap:10px}
+.secbar .secname{flex:none;min-width:38px;line-height:14px}
+.secbar .barwrap{flex:1;min-width:0;text-transform:none;letter-spacing:0;font-weight:400}
+.secbar #scaleBar,.secbar .matBar{margin-top:3px}
+.scale-foot.tight{margin-top:0;margin-bottom:4px}
 .scaleLabel{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);
   margin-top:3px;font-variant-numeric:tabular-nums}
 .scale-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px}
 .scale-foot .sc-btn{flex:none;padding:3px 10px}
 hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
 
-/* ── 3D labels (CSS2DRenderer) ───────────────────────────────────────────── */
-.label3d{font-family:var(--font);font-size:10.5px;color:#d6e4ff;
-  background:rgba(10,14,28,.62);padding:2px 8px;border-radius:9px;
-  border:1px solid rgba(143,182,255,.28);white-space:nowrap;
-  transform:translate(-50%,-100%);pointer-events:none}
-.label3d.iron{color:#ffdcb0;border-color:rgba(255,170,80,.35)}
+/* ── Part callouts: tag + leader line to a camera-facing anchor on the part ── */
+#calloutSvg{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none;overflow:visible}
+#calloutSvg .ld{fill:none;stroke:rgba(160,196,255,.75);stroke-width:1.1}
+#calloutSvg .ld.hid{stroke-dasharray:3 3;stroke:rgba(160,196,255,.45)}
+#calloutSvg .dot{fill:#9cc3ff;stroke:rgba(10,14,28,.9);stroke-width:1}
+#calloutSvg .iron .ld{stroke:rgba(255,190,120,.75)}
+#calloutSvg .iron .ld.hid{stroke:rgba(255,190,120,.45)}
+#calloutSvg .iron .dot{fill:#ffc58a}
+#calloutLayer{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none;overflow:hidden}
+.callout{position:absolute;left:0;top:0;font-family:var(--font);color:#d6e4ff;
+  background:rgba(10,14,28,.72);border:1px solid rgba(143,182,255,.30);border-radius:7px;
+  padding:3px 8px 4px;white-space:nowrap;line-height:1.25;will-change:transform}
+.callout .nm{font-size:10.5px;font-weight:600}
+.callout .lv{font-size:10.5px;margin-left:8px;color:#fff;font-variant-numeric:tabular-nums}
+.callout .rl{display:block;font-size:9.5px;color:rgba(214,228,255,.62)}
+.callout.iron{color:#ffdcb0;border-color:rgba(255,170,80,.38)}
+.callout.iron .rl{color:rgba(255,220,176,.62)}
+.callout.hid{opacity:.72}
+.callout.force{font-size:10px;padding:1px 6px;border-radius:5px}
+.callout.force.up{color:#7fe7ff;border-color:rgba(127,231,255,.45)}
+.callout.force.dn{color:#ffb070;border-color:rgba(255,176,112,.45)}
+/* "Why does the disc float?" strip -- B-field / Both modes only */
+#forcePanel{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:5;
+  background:rgba(10,14,28,.80);border:1px solid rgba(127,231,255,.30);border-radius:9px;
+  padding:6px 12px;font-size:11px;color:#d6e4ff;max-width:min(560px,calc(100vw - 32px));
+  display:none;pointer-events:none;line-height:1.45}
+#forcePanel b{color:#fff;font-weight:600}
+#forcePanel .up{color:#7fe7ff}
+#forcePanel .dn{color:#ffb070}
+#forcePanel .st{display:inline-block;margin-left:6px;padding:0 6px;border-radius:5px;
+  background:rgba(127,231,255,.12);color:#bff3ff}
 
 #pausedBadge{position:fixed;top:58px;left:50%;transform:translateX(-50%);
   background:rgba(255,122,122,.12);color:var(--c-warn);border:1px solid rgba(255,122,122,.45);
@@ -1317,6 +1367,8 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
   .ui-col,#uiLeft,#uiRight{position:relative;top:auto;left:auto;right:auto;max-height:none;overflow:visible;
     margin:10px;align-items:stretch;pointer-events:auto}
   .panel{width:100%}
+  /* the canvas sits behind the stacked panels here -> callouts would only peek out */
+  #calloutSvg,#calloutLayer,#forcePanel{display:none!important}
 }
 </style></head><body>
 
@@ -1407,7 +1459,8 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       <label><span>Field line opacity</span><span id="vFLO" class="val">70%</span></label>
       <input type="range" id="sFLO" min="0" max="100" step="1" value="70">
     </div>
-    <p class="note">Space pause · R reset · 1–5 scenario · +/− speed</p>
+    <div class="export-row"><button class="sc-btn" id="btnFitView">Fit view</button></div>
+    <p class="note">Space pause · R reset · 1–5 scenario · +/− speed · F / double-click fit view · scroll zoom</p>
     </div>
   </div>
 </div>
@@ -1423,27 +1476,48 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       <div><span class="k">Heat in</span><span class="val" id="vP">0.0 W</span></div>
       <div><span class="k">T<sub>amb</sub></span><span class="val" id="vTambInit">— °C</span></div>
     </div>
-    <div class="sec">Disc</div>
+    <div class="sec secbar" title="Disc colour ramp (aluminium). The window eases between absolute (T_amb to hot) and relative (within the disc); the bottom face runs hotter as the coils' hot air builds up.">
+      <span class="secname">Disc</span>
+      <div class="barwrap">
+        <div id="scaleBar"><div class="marker" id="scaleMarkerLo"></div><div class="marker" id="scaleMarkerHi"></div></div>
+        <div class="scaleLabel" id="scaleTicks"></div>
+      </div></div>
+    <div class="scale-foot tight">
+      <span class="row" style="padding:0"><span>Range&nbsp;</span><span class="val" id="scaleCurRange">—</span></span>
+      <button class="sc-btn" id="scaleModeBtn">Scale: Auto</button>
+    </div>
     <div class="hero">
       <span class="lbl"><span class="box" id="bPl" style="background:#2255aa"></span>T<sub>max</sub></span>
       <span class="valbig" id="tPmax">25.0 °C</span></div>
     <div class="row"><span>T<sub>mean</sub></span><span class="val" id="tPmean">25.0 °C</span></div>
-    <div class="row"><span>T<sub>ss</sub> target</span>
+    <div class="row" title="Hottest disc point once everything has settled at this current — computed by the twin's own engine (includes σ(T) and nonlinear convection)."><span>T<sub>ss</sub> target</span>
       <span class="val" id="tPss" style="color:var(--c-ok)">25.0 °C</span></div>
     <div class="row"><span>Bottom air</span>
       <span class="val" id="tAirBot" style="color:var(--c-air)">—</span></div>
     <div class="row"><span>Levitation gap</span>
       <span class="val" id="tLevGap" style="color:var(--c-gap)">0.0 mm</span></div>
-    <div class="sec">Coils &amp; iron</div>
+    <div class="sec secbar" title="Coil colour ramp (varnished copper): T_amb to the hottest IR reading. Markers: inner (white) / outer (cream).">
+      <span class="secname">Coils</span>
+      <div class="barwrap">
+        <div class="matBar" id="scaleBarCopper"><div class="marker" id="mkInner" title="inner coil"></div><div class="marker o" id="mkOuter" title="outer coil"></div></div>
+        <div class="scaleLabel" id="scaleTicksCopper"></div>
+      </div></div>
     <div class="row">
       <span><span class="box" id="bIn"></span>Inner · <span id="lblInnerTurns">1000</span> t</span>
       <span><span class="val" id="tIn">25.0 °C</span> <span class="sub" id="tInSS"></span></span></div>
     <div class="row">
       <span><span class="box" id="bOut"></span>Outer · <span id="lblOuterTurns">500</span> t</span>
       <span><span class="val" id="tOut">25.0 °C</span> <span class="sub" id="tOutSS"></span></span></div>
+    <div class="sec secbar" title="Iron colour ramp (center core + separator ring share one thermal node).">
+      <span class="secname">Iron</span>
+      <div class="barwrap">
+        <div class="matBar" id="scaleBarIron"><div class="marker" id="mkIron"></div></div>
+        <div class="scaleLabel" id="scaleTicksIron"></div>
+      </div></div>
     <div class="row">
-      <span><span class="box" id="bFe"></span>Iron core</span>
-      <span class="val" id="tFe">25.0 °C</span></div>
+      <span><span class="box" id="bFe"></span>Core + separator ring</span>
+      <span><span class="val" id="tFe">25.0 °C</span> <span class="sub" id="tFeSS"
+        title="Steady state at this current. The iron is the slowest part (C/hA ≈ 1.9 h), so it takes hours to get there."></span></span></div>
     <div class="sec">Field</div>
     <div class="row" id="satRow"><span>Iron B<sub>max</sub> / B<sub>sat</sub></span>
       <span class="val" id="tBmax" style="color:var(--c-ok)">—</span></div>
@@ -1451,15 +1525,6 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       <span class="val" id="tBplate" style="color:var(--c-b)">—</span></div>
     <div class="row"><span>Disc |J<sub>e</sub>|<sub>max</sub></span>
       <span class="val" id="tJmax" style="color:var(--c-j)">—</span></div>
-    <div class="sec">Colour scale</div>
-    <div id="scaleBar"><div class="marker" id="scaleMarkerLo"></div><div class="marker" id="scaleMarkerHi"></div></div>
-    <div class="scaleLabel" id="scaleTicks"></div>
-    <div class="scale-foot">
-      <span class="row" style="padding:0"><span>Range&nbsp;</span><span class="val" id="scaleCurRange">—</span></span>
-      <button class="sc-btn" id="scaleModeBtn">Scale: Auto</button>
-    </div>
-    <p class="note">Disc colours are relative (cool→hot within the disc); the bottom face runs
-      hotter as the coils' hot air builds up.</p>
     </div>
   </div>
 
@@ -1496,7 +1561,6 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 // ── Baked data ────────────────────────────────────────────────────────────────
 const PARAMS = __PARAMS__;
@@ -2011,18 +2075,29 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.9;
 document.body.appendChild(renderer.domElement);
-renderer.domElement.style.cssText = 'position:absolute;top:0;left:0;z-index:0;';
+// Set ONLY the positioning props. Assigning style.cssText here wiped the
+// width/height that setSize() just wrote, so on a HiDPI screen (Retina, DPR=2)
+// the canvas showed at its BUFFER size (2× the window) — model huge and pushed to
+// the bottom-right, while the screen-space callouts stayed correctly placed.
+Object.assign(renderer.domElement.style, {position: 'absolute', top: '0', left: '0', zIndex: '0'});
 
 // Studio HDR-like environment (PMREM of a simple lit room) — gives the metallic
 // coil/iron materials soft reflections instead of flat shading. Cosmetic only.
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-// CSS2DRenderer overlay for floating 3D part labels (HTML, not WebGL geometry).
-const labelRenderer = new CSS2DRenderer();
-labelRenderer.setSize(innerWidth, innerHeight);
-labelRenderer.domElement.style.cssText = 'position:absolute;top:0;left:0;z-index:1;pointer-events:none;';
-document.body.appendChild(labelRenderer.domElement);
+// Part callouts: an SVG layer for leader lines + an HTML layer for the tags
+// (both screen-space, redrawn every frame from projected 3D anchors -- see
+// "Part callouts" below). Sit above the canvas, below the UI panels.
+const calloutSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+calloutSvg.id = 'calloutSvg';
+document.body.appendChild(calloutSvg);
+const calloutLayer = document.createElement('div');
+calloutLayer.id = 'calloutLayer';
+document.body.appendChild(calloutLayer);
+const forcePanel = document.createElement('div');
+forcePanel.id = 'forcePanel';
+document.body.appendChild(forcePanel);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.dampingFactor = 0.08;
@@ -2095,8 +2170,9 @@ function updateCoilGlow() {
   const dTh = T_COIL_HOT - T_AMB_JS;
   const gi = Math.max(0, Math.min(1, (sim.T.inner - T_AMB_JS) / dTh));
   const go = Math.max(0, Math.min(1, (sim.T.outer - T_AMB_JS) / dTh));
-  coilInnerM.mesh.material.emissiveIntensity = 0.9 * Math.pow(gi, 1.4);
-  coilOuterM.mesh.material.emissiveIntensity = 0.9 * Math.pow(go, 1.4);
+  const mi = coilInnerM.mesh.material, mo = coilOuterM.mesh.material;
+  mi.emissiveIntensity += (0.9 * Math.pow(gi, 1.4) - mi.emissiveIntensity) * colorEaseK;
+  mo.emissiveIntensity += (0.9 * Math.pow(go, 1.4) - mo.emissiveIntensity) * colorEaseK;
 }
 
 // Live min/max of the disc temperature field (radial + top/bottom gradient).
@@ -2169,6 +2245,41 @@ function flColor(t, out) {   // blue(0) -> cyan(0.5) -> white(1)
 const fieldLineMats = [];   // {mat, line, amp, rankFrac} — amp = this line's average |B|/B_max
 const _flCol = new THREE.Color();
 const FL_GAP_BASE = size * 0.012;   // dash gap at I ≤ I_em_ref (shrinks above → denser flow)
+// 2026-09-29: EM frame -> display frame. FIELD_LINES z is measured in the EM solve's
+// frame (coil top at coil_top_em_mm, disc bottom gap_em_mm above it); the display
+// mesh has its coil top at coil_top_disp_mm with the disc resting on it and lifted
+// at runtime by levLiftY(). Without this map every line sat ~61 mm too low (below
+// the housing). Above the coil top the line is also STRETCHED with the live lift:
+// the gap part scales with the gap, everything above the disc moves with the disc
+// -- so a rising disc visibly pulls the flux "cushion" open. Display-only mapping;
+// the line SHAPES are still the baked FEM contours.
+const FV = PARAMS.field_view;
+const flSources = [];   // per baked 2D line: {r, z, zd, copies:[THREE.Line x N_THETA_FIELD]}
+let flLiftY = 0;
+function flDisplayZ(z, liftY) {
+  const zr = z - FV.coil_top_em_mm;
+  let zd;
+  if (zr <= 0) zd = zr;                                              // coils / iron: fixed
+  else if (zr <= FV.gap_em_mm) zd = zr * (liftY / FV.gap_em_mm);     // gap: stretches
+  else if (zr <= FV.gap_em_mm + FV.t_em_mm)                          // inside the disc
+    zd = liftY + (zr - FV.gap_em_mm) * (FV.t_disp_mm / FV.t_em_mm);
+  else zd = liftY + FV.t_disp_mm + (zr - FV.gap_em_mm - FV.t_em_mm); // above: rides along
+  return zd + FV.coil_top_disp_mm;
+}
+function layoutFieldLines(liftY) {
+  flLiftY = liftY;
+  for (const src of flSources) {
+    const n = src.r.length;
+    for (let i = 0; i < n; i++) src.zd[i] = flDisplayZ(src.z[i], liftY);
+    for (const line of src.copies) {
+      const pa = line.geometry.attributes.position, arr = pa.array;
+      for (let i = 0; i < n; i++) arr[i*3+1] = src.zd[i];
+      pa.needsUpdate = true;
+      line.geometry.computeBoundingSphere();
+      line.computeLineDistances();
+    }
+  }
+}
 function applyFieldLineOpacity() {
   for (const o of fieldLineMats) o.mat.opacity = fieldLineOpacityPct * (0.15 + 0.85 * o.amp);
 }
@@ -2180,17 +2291,21 @@ function buildFieldLines(linesData) {
   for (const o of fieldLineMats) { o.line.geometry.dispose(); o.mat.dispose(); }
   fieldLineGroup.clear();
   fieldLineMats.length = 0;
+  flSources.length = 0;
   for (const fl of linesData) {
     const n = fl.r.length;
     let ampSum = 0;
     for (let i = 0; i < n; i++) ampSum += fl.amp[i];
     const avgAmp = ampSum / n;
+    const src = {r: Float32Array.from(fl.r), z: Float32Array.from(fl.z),
+                 zd: new Float32Array(n), copies: []};
+    flSources.push(src);
     for (let t = 0; t < N_THETA_FIELD; t++) {
       const theta = t / N_THETA_FIELD * Math.PI * 2;
       const ct = Math.cos(theta), st = Math.sin(theta);
       const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
       for (let i = 0; i < n; i++) {
-        const r = fl.r[i], z = fl.z[i];
+        const r = fl.r[i], z = flDisplayZ(fl.z[i], flLiftY);
         pos[i*3] = r * ct; pos[i*3+1] = z; pos[i*3+2] = -r * st;
         flColor(fl.amp[i], _flCol);
         col[i*3] = _flCol.r; col[i*3+1] = _flCol.g; col[i*3+2] = _flCol.b;
@@ -2211,6 +2326,7 @@ function buildFieldLines(linesData) {
       line.computeLineDistances();
       fieldLineGroup.add(line);
       fieldLineMats.push({mat, line, amp: avgAmp});
+      src.copies.push(line);
     }
   }
   // Rank lines by field strength so line DENSITY responds to I, not just
@@ -2233,9 +2349,47 @@ let flFlowPhase = 0;   // accumulated dash offset — advances with I so speed c
 // half of the viewport, and pull back enough to keep the disc fully visible.
 // Frame the camera on where the disc will SETTLE at the initial current (the live
 // spring state starts at z=0, so use the equilibrium gap, not levLiftY()).
-const plateTopY = (bb.max.y - ctr.y) + levGapEqMm(targetI) * Z_GAP_EXAG;
-camera.position.set(size*0.70, size*0.42, size*0.70);
-controls.target.set(0, plateTopY*0.55, 0); controls.update();
+// 2026-09-29: open with the WHOLE device small and centred in the free area
+// between the two UI panels, then let the user zoom freely. Fit the device's
+// bounding sphere (base + disc at its equilibrium lift for the initial current)
+// into FIT_FILL of the free viewport, from the same 3/4 view direction as before.
+const FIT_FILL = 0.50;                       // fraction of the free viewport the device spans
+const FIT_DIR  = new THREE.Vector3(0.70, 0.42, 0.70).normalize();
+const fitCenter = new THREE.Vector3();
+let fitRadius = size * 0.5, fitDist = size;
+function freeViewportWidth() {
+  // Desktop layout: panels float over the canvas on both sides -> only the gap
+  // between them is usable. Mobile (<=760px): panels stack below the canvas.
+  if (innerWidth <= 760) return innerWidth;
+  const l = document.getElementById('uiLeft'), r = document.getElementById('uiRight');
+  const lw = l ? l.getBoundingClientRect().right : 0;
+  const rw = r ? innerWidth - r.getBoundingClientRect().left : 0;
+  return Math.max(260, innerWidth - 2 * Math.max(lw, rw));   // symmetric -> stays centred
+}
+function fitView() {
+  const lift = levGapEqMm(targetI) * Z_GAP_EXAG;
+  const yLo = bb.min.y - ctr.y, yHi = bb.max.y - ctr.y + lift;
+  fitCenter.set(0, 0.5 * (yLo + yHi), 0);
+  // Radius of the device's horizontal footprint (axisymmetric/octagonal -> use
+  // max |x|,|z|, not the box corner) combined with the half-height.
+  const rFoot = Math.max(bb.max.x - ctr.x, ctr.x - bb.min.x, bb.max.z - ctr.z, ctr.z - bb.min.z);
+  fitRadius = Math.hypot(rFoot, 0.5 * (yHi - yLo));
+  const tanV = Math.tan(camera.fov * Math.PI / 360);
+  const tanH = tanV * freeViewportWidth() / innerHeight;
+  fitDist = fitRadius / (FIT_FILL * Math.min(tanV, tanH));
+  camera.position.copy(fitCenter).addScaledVector(FIT_DIR, fitDist);
+  controls.target.copy(fitCenter);
+  controls.minDistance = fitRadius * 0.35;   // close-up on a single part
+  controls.maxDistance = fitDist * 3.0;
+  controls.update();
+}
+controls.zoomToCursor = true;                // zoom toward the part under the cursor (three r153+)
+controls.zoomSpeed = 0.9;
+fitView();
+renderer.domElement.addEventListener('dblclick', fitView);
+document.getElementById('btnFitView').onclick = fitView;
+// Fog density follows the camera distance, so zooming out never fogs the device away.
+const FOG_BASE = scene.fog.density, FOG_REF_DIST = size * 1.08;
 // Exposed for headless (Playwright) verification — lets tests reposition the view.
 window.twinDebug = {camera, controls, size, plateM, coilInnerM, coilOuterM,
   coilM: coilInnerM,   // back-compat alias for existing headless tests
@@ -2246,6 +2400,7 @@ window.twinDebug = {camera, controls, size, plateM, coilInnerM, coilOuterM,
   fieldLineGroup, get fieldLineMats() { return fieldLineMats; },   // per-variant B-field verification
   get PARAMS() { return PARAMS; }, get T_AMB_JS() { return T_AMB_JS; },
   setAmbient: (...a) => setAmbient(...a), get sensor() { return sensorDebug; },
+  steadyState: (I) => { ssCache.at = 0; return engineSteadyState(I); },   // engine fixed point behind T_ss / → (no throttle)
   // Headless Python<->JS numeric cross-check (WP-DEBUG/WP-XVAL): drives
   // romStep/levStep directly, bypassing the render loop (so this never
   // substeps -- loop()'s nSub chopping, :2718, is a separate concern from the
@@ -2295,96 +2450,229 @@ dl.position.set(1, 1.5, 0.8); scene.add(dl);
 const gridHelper = new THREE.GridHelper(size*2, 40, 0x333344, 0x1a1a28);
 scene.add(gridHelper);
 
-// ── 3D annotation labels (CSS2DObject) ────────────────────────────────────────
-// Centroid of all vertices belonging to a region, in the SAME local frame the
-// meshes use (model-space minus ctr) — purely a label-placement helper, no
-// physics involved.
-function regionCentroid(regIdx) {
-  let sx = 0, sy = 0, sz = 0, n = 0;
+// ── Part callouts (2026-09-29) ────────────────────────────────────────────────
+// Replaces the floating CSS2D labels. Every part has a 3D anchor ON the part that
+// is re-placed each frame on the side of the device FACING the camera (camera
+// azimuth + a fixed per-part offset), so orbiting never hides it behind the model.
+// Its tag (name · live value / role) sits in a column just left or right of the
+// device's screen footprint, joined by a leader line; parts covered by the disc
+// (core, inner coil, separator ring) get a dashed leader so the eye still finds
+// them. Pure display -- reads sim/lev state, never writes it.
+function regionStats(regIdx) {
+  let rMin = Infinity, rMax = 0, yTop = -Infinity;
   for (let tri = 0; tri < regions.length; tri++) {
     if (regions[tri] !== regIdx) continue;
     for (let v = 0; v < 3; v++) {
       const i = (tri * 3 + v) * 3;
-      sx += positions[i]; sy += positions[i+1]; sz += positions[i+2]; n++;
-    }
-  }
-  return n ? new THREE.Vector3(sx/n - ctr.x, sy/n - ctr.y, sz/n - ctr.z) : new THREE.Vector3();
-}
-const labelDivs = [];   // for the screen-space de-overlap pass below
-function addLabel(text, pos, cls) {
-  const div = document.createElement('div');
-  div.className = 'label3d' + (cls ? ' ' + cls : '');
-  div.textContent = text;
-  labelDivs.push(div);
-  const obj = new CSS2DObject(div);
-  obj.position.copy(pos);
-  scene.add(obj);
-  return obj;
-}
-// Screen-space label de-overlap: the 3D anchors are spread out, but an arbitrary
-// camera angle can still project two labels onto the same spot. Every ~200ms,
-// nudge the later label downward until it clears (margin-top applies before the
-// CSS2D transform, so it stacks cleanly with the renderer's own positioning).
-let labelDeOverlapTimer = 0;
-function deOverlapLabels(dt) {
-  labelDeOverlapTimer -= dt;
-  if (labelDeOverlapTimer > 0) return;
-  labelDeOverlapTimer = 0.2;
-  // Greedy stacking, stable in one pass: measure the un-shifted rects, walk the
-  // labels top-to-bottom, and push each one below every x-overlapping label
-  // already placed above it. (A naive pairwise push oscillated between frames.)
-  for (const d of labelDivs) d.style.marginTop = '0px';
-  const rects = labelDivs.map(d => d.getBoundingClientRect());
-  const order = labelDivs.map((_, k) => k).sort((p, q) => rects[p].top - rects[q].top);
-  const shift = new Array(labelDivs.length).fill(0);
-  for (let oi = 1; oi < order.length; oi++) {
-    const k = order[oi];
-    for (let oj = 0; oj < oi; oj++) {
-      const m = order[oj];
-      const ox = Math.min(rects[m].right, rects[k].right)
-               - Math.max(rects[m].left,  rects[k].left);
-      if (ox <= 0) continue;
-      const mBot = rects[m].bottom + shift[m];
-      const kTop = rects[k].top    + shift[k];
-      const kBot = rects[k].bottom + shift[k];
-      if (kTop < mBot + 2 && kBot > rects[m].top + shift[m] - 2)
-        shift[k] = mBot + 4 - rects[k].top;
-    }
-  }
-  labelDivs.forEach((d, k) => { if (shift[k]) d.style.marginTop = shift[k] + 'px'; });
-}
-const plateCentroid = regionCentroid(0);
-const plateLabelObj = addLabel('Aluminium Plate',
-  new THREE.Vector3(plateCentroid.x, plateCentroid.y + levLiftY() + size*0.05, plateCentroid.z));
-// Ring labels anchor on each ring's OUTER TOP EDGE at its own azimuth θ — the naive
-// full-revolve centroid collapses to (≈0, y_mid, ≈0) for EVERY ring (x,z average out
-// over 2π and the coil assembly shares one z-band), which stacked all four labels
-// onto the same screen point. Distinct radii + distinct azimuths keep them apart
-// from any camera angle; small y-stagger breaks the remaining near-ties.
-function regionAnchor(regIdx, thetaDeg, yPad) {
-  let rMax = 0, yTop = -Infinity, n = 0;
-  for (let tri = 0; tri < regions.length; tri++) {
-    if (regions[tri] !== regIdx) continue;
-    for (let v = 0; v < 3; v++) {
-      const i = (tri * 3 + v) * 3;
-      const r = Math.hypot(positions[i], positions[i+2]);
+      const r = Math.hypot(positions[i] - ctr.x, positions[i+2] - ctr.z);
+      if (r < rMin) rMin = r;
       if (r > rMax) rMax = r;
       if (positions[i+1] > yTop) yTop = positions[i+1];
-      n++;
     }
   }
-  if (!n) return new THREE.Vector3();
-  const th = thetaDeg * Math.PI / 180;
-  return new THREE.Vector3(rMax * Math.cos(th) - ctr.x,
-                           yTop + (yPad || 0) - ctr.y,
-                           -rMax * Math.sin(th) - ctr.z);
+  return {rMin, rMax, yTop: yTop - ctr.y};
 }
-addLabel(`Inner Coil (${PARAMS.coils_inner_turns} turns)`, regionAnchor(1,  25, size*0.030));
-addLabel(`Outer Coil (${PARAMS.coils_outer_turns} turns)`,  regionAnchor(2, -40, size*0.015));
-addLabel('Center Core',    regionAnchor(3,  90, size*0.008), 'iron');
-// Separator: keep LOW (yPad 0) and well left (θ=190°) — a back-side ring label
-// projects toward screen centre-height, where it collided with the plate label.
-addLabel('Separator Ring', regionAnchor(5, 190, 0), 'iron');
+const CALLOUTS = [
+  {key: 'plate', reg: 0, name: 'Aluminium Plate', rFrac: 0.62, az: -34, side: -1},
+  {key: 'sep',   reg: 5, name: 'Separator Ring',  rFrac: 0.50, az: -62, side: -1, cls: 'iron',
+   role: 'iron · flux return path'},
+  {key: 'core',  reg: 3, name: 'Center Core',     rFrac: 0.00, az:   0, side: -1, cls: 'iron',
+   role: 'iron · guides flux up the axis'},
+  {key: 'inner', reg: 1, name: `Inner Coil · ${PARAMS.coils_inner_turns} turns`, rFrac: 0.50, az: 22, side: 1},
+  {key: 'outer', reg: 2, name: `Outer Coil · ${PARAMS.coils_outer_turns} turns`, rFrac: 0.50, az: 50, side: 1},
+];
+const SVG_NS = 'http://www.w3.org/2000/svg';
+for (const c of CALLOUTS) {
+  if (c.reg !== 0) c.st = regionStats(c.reg);
+  c.el = document.createElement('div');
+  c.el.className = 'callout' + (c.cls ? ' ' + c.cls : '');
+  c.el.innerHTML = `<span class="nm">${c.name}</span><span class="lv"></span><span class="rl">${c.role || ''}</span>`;
+  c.lvEl = c.el.querySelector('.lv'); c.rlEl = c.el.querySelector('.rl');
+  calloutLayer.appendChild(c.el);
+  c.g = document.createElementNS(SVG_NS, 'g');
+  if (c.cls) c.g.setAttribute('class', c.cls);
+  c.path = document.createElementNS(SVG_NS, 'polyline'); c.path.setAttribute('class', 'ld');
+  c.dot = document.createElementNS(SVG_NS, 'circle');    c.dot.setAttribute('class', 'dot'); c.dot.setAttribute('r', '3');
+  c.g.append(c.path, c.dot); calloutSvg.appendChild(c.g);
+  c.anchor = new THREE.Vector3(); c.hidden = false; c.w = 0; c.h = 0;
+}
+function plateTopLocalY() { return FV.coil_top_disp_mm + FV.t_disp_mm - ctr.y; }
+function placeAnchor(c, phi, liftY) {
+  let r, y;
+  if (c.reg === 0) {
+    r = c.rFrac * PLATE_VARIANTS[activePlateIdx].radius_mm;
+    y = plateTopLocalY() + liftY;
+  } else {
+    r = c.st.rMin + c.rFrac * (c.st.rMax - c.st.rMin);
+    y = c.st.yTop;
+  }
+  const a = phi + c.az * Math.PI / 180;
+  c.anchor.set(r * Math.sin(a), y, r * Math.cos(a));
+}
+
+// Free-body arrows on the disc (B field / Both modes): F_mag up, m·g down.
+const forceGroup = new THREE.Group();
+forceGroup.visible = false;
+scene.add(forceGroup);
+function makeForceArrow(color) {
+  const a = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 1, color);
+  for (const m of [a.line.material, a.cone.material]) { m.depthTest = false; m.transparent = true; }
+  a.line.renderOrder = a.cone.renderOrder = 20;
+  forceGroup.add(a);
+  return a;
+}
+const arrUp = makeForceArrow(0x7fe7ff), arrDn = makeForceArrow(0xffb070);
+const F_ARROW_L0 = size * 0.09;   // on-screen length of m·g; F_mag scales against it
+const forceTags = {up: null, dn: null};
+for (const k of ['up', 'dn']) {
+  const el = document.createElement('div');
+  el.className = 'callout force ' + k;
+  calloutLayer.appendChild(el);
+  forceTags[k] = el;
+}
+// Lift force of the SAME levitation law the disc dynamics use: z_eq(I) =
+// z5 + 2·z0·ln(I/5) is exactly where F(I,z) = m·g·(I/5)²·exp(−(z−z5)/z0)
+// equals m·g. Display only (levStep() is untouched).
+function liftForceN(I, zMm) {
+  const mg = PLATE_VARIANTS[activePlateIdx].F_grav_N;
+  if (!(I > 0)) return 0;
+  return mg * (I / 5.0) ** 2 * Math.exp(-(zMm - Z_GAP_5A_MM) / Z_DECAY_MM);
+}
+
+const _raycaster = new THREE.Raycaster();
+const _v = new THREE.Vector3(), _dir = new THREE.Vector3();
+let calloutTextTimer = 0, calloutOccTimer = 0;
+function toScreen(v3, out) {
+  _v.copy(v3).project(camera);
+  out.x = (_v.x + 1) * 0.5 * innerWidth;
+  out.y = (1 - _v.y) * 0.5 * innerHeight;
+  out.behind = _v.z > 1;
+  return out;
+}
+function updateCallouts(dt) {
+  const liftY = levLiftY();
+  const I = getI();
+  _dir.subVectors(camera.position, controls.target);
+  const phi = Math.atan2(_dir.x, _dir.z);
+  for (const c of CALLOUTS) placeAnchor(c, phi, liftY);
+
+  // Live text, ~5 Hz (numbers flicker if rewritten every frame).
+  calloutTextTimer -= dt;
+  if (calloutTextTimer <= 0) {
+    calloutTextTimer = 0.2;
+    const s2 = (I / ROM.I_ref) ** 2;
+    for (const c of CALLOUTS) {
+      if (c.key === 'plate') {
+        c.lvEl.textContent = plateTmax().toFixed(1) + ' °C';
+        c.rlEl.textContent = lev.z > 0.05
+          ? `levitating ${lev.z.toFixed(1)} mm · eddy-current heating`
+          : 'resting on the coils · eddy-current heating';
+      } else if (c.key === 'inner') {
+        c.lvEl.textContent = sim.T.inner.toFixed(1) + ' °C';
+        c.rlEl.textContent = `${(LUMPED.nodes.inner.P_ref * s2).toFixed(0)} W · main field source`;
+      } else if (c.key === 'outer') {
+        c.lvEl.textContent = sim.T.outer.toFixed(1) + ' °C';
+        c.rlEl.textContent = `${(LUMPED.nodes.outer.P_ref * s2).toFixed(0)} W · counter-wound, shapes the field`;
+      } else {
+        c.lvEl.textContent = sim.T.iron.toFixed(1) + ' °C';
+      }
+      c.w = c.el.offsetWidth; c.h = c.el.offsetHeight;
+    }
+  }
+
+  // Occlusion (~7 Hz): is something in front of the anchor? -> dashed leader.
+  calloutOccTimer -= dt;
+  if (calloutOccTimer <= 0) {
+    calloutOccTimer = 0.15;
+    const meshes = [plateM.mesh, baseM.mesh, coilInnerM.mesh, coilOuterM.mesh, woodM.mesh];
+    for (const c of CALLOUTS) {
+      _dir.subVectors(c.anchor, camera.position);
+      const d = _dir.length();
+      _raycaster.set(camera.position, _dir.normalize());
+      _raycaster.far = d + 1;
+      const hit = _raycaster.intersectObjects(meshes, false)[0];
+      c.hidden = !!hit && hit.distance < d - 1.5;
+      c.el.classList.toggle('hid', c.hidden);
+      c.path.classList.toggle('hid', c.hidden);
+    }
+  }
+
+  // Device footprint on screen -> tag columns just outside it (inside the free area).
+  let minX = Infinity, maxX = -Infinity;
+  const p = {};
+  for (let k = 0; k < 8; k++) {
+    _v.set(k & 1 ? bb.max.x : bb.min.x, (k & 2 ? bb.max.y + liftY : bb.min.y), k & 4 ? bb.max.z : bb.min.z).sub(ctr);
+    toScreen(_v, p);
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+  }
+  const l = document.getElementById('uiLeft'), r = document.getElementById('uiRight');
+  const loX = innerWidth > 760 && l ? l.getBoundingClientRect().right + 8 : 8;
+  const hiX = innerWidth > 760 && r ? r.getBoundingClientRect().left - 8 : innerWidth - 8;
+  const cols = {'-1': [], '1': []};
+  for (const c of CALLOUTS) {
+    toScreen(c.anchor, p);
+    c.ax = p.x; c.ay = p.y; c.off = p.behind;
+    cols[c.side].push(c);
+  }
+  for (const side of [-1, 1]) {
+    const list = cols[side].sort((a, b) => a.ay - b.ay);
+    let yNext = 58;
+    for (const c of list) {
+      const x = side < 0 ? Math.max(loX, minX - 22 - c.w) : Math.min(hiX - c.w, maxX + 22);
+      const y = Math.max(yNext, c.ay - c.h - 10);
+      yNext = y + c.h + 6;
+      c.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+      const ex = side < 0 ? x + c.w : x, ey = y + c.h * 0.5;
+      const kx = ex + (side < 0 ? 12 : -12);
+      c.path.setAttribute('points', `${c.ax.toFixed(1)},${c.ay.toFixed(1)} ${kx.toFixed(1)},${ey.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`);
+      c.dot.setAttribute('cx', c.ax.toFixed(1)); c.dot.setAttribute('cy', c.ay.toFixed(1));
+      const vis = !c.off;
+      c.el.style.visibility = vis ? 'visible' : 'hidden';
+      c.g.style.visibility  = vis ? 'visible' : 'hidden';
+    }
+  }
+
+  // Forces (B field / Both only).
+  const showF = fieldLineGroup.visible;
+  forceGroup.visible = showF;
+  forceTags.up.style.display = forceTags.dn.style.display = showF ? 'block' : 'none';
+  forcePanel.style.display = showF ? 'block' : 'none';
+  if (!showF) return;
+  const mg = PLATE_VARIANTS[activePlateIdx].F_grav_N;
+  const F = liftForceN(I, lev.z);
+  const yTop = plateTopLocalY() + liftY, yBot = yTop - FV.t_disp_mm;
+  const Lup = Math.max(0.001, Math.min(3, F / mg) * F_ARROW_L0);
+  arrUp.position.set(0, yTop, 0);
+  arrUp.setLength(Lup, Math.min(Lup * 0.35, size * 0.022), size * 0.014);
+  arrUp.visible = F > 0.005;
+  arrDn.position.set(0, yBot, 0);
+  arrDn.setDirection(new THREE.Vector3(0, -1, 0));
+  arrDn.setLength(F_ARROW_L0, size * 0.022, size * 0.014);
+  const place = (el, v3) => {
+    toScreen(v3, p);
+    el.style.transform = `translate(${(p.x + 10).toFixed(1)}px, ${(p.y - 9).toFixed(1)}px)`;
+  };
+  if (calloutTextTimer >= 0.19) {   // same ~5 Hz text cadence as the part tags
+    forceTags.up.textContent = `F_mag ${F.toFixed(2)} N`;
+    forceTags.dn.textContent = `m·g ${mg.toFixed(2)} N`;
+    let st;
+    if (I < 0.05) st = 'no current → no field → disc rests';
+    else if (lev.z <= 0.01 && F < mg) st = `F_mag < m·g → rests on the coils (lift-off at ${I_LEV_MIN.toFixed(2)} A)`;
+    else if (F > mg * 1.02) st = 'F_mag > m·g → disc rises';
+    else if (F < mg * 0.98) st = 'F_mag < m·g → disc sinks';
+    else st = `balanced → hovers at ${lev.z.toFixed(1)} mm`;
+    const B = ROM.B_max * I / ROM.I_em_ref;
+    forcePanel.innerHTML =
+      `<b>Why does the disc float?</b> I = ${I.toFixed(2)} A drives B ∝ I (${B.toFixed(3)} T at the disc). ` +
+      `The AC field induces eddy currents in the disc that oppose it, so coils and disc repel: ` +
+      `<span class="up">F_mag ∝ I²·e<sup>−z/z₀</sup></span>. More current → stronger push → the disc climbs until ` +
+      `the push has decayed to its weight.<br>` +
+      `<span class="up">F_mag = ${F.toFixed(2)} N ↑</span> · <span class="dn">m·g = ${mg.toFixed(2)} N ↓</span>` +
+      `<span class="st">${st}</span>`;
+  }
+  place(forceTags.up, _dir.set(0, yTop + Lup, 0).clone());
+  place(forceTags.dn, _dir.set(0, yBot - F_ARROW_L0, 0).clone());
+}
 
 // ── Disc-radius compare mode (2026-07-03) ────────────────────────────────────
 // User-requested feature: swap the live disc between every aluminium/3mm
@@ -2437,13 +2725,8 @@ function selectPlateVariant(idx) {
   resetSim();
   lev.z = 0; lev.v = 0; lev.jit = 0; lev.jitPhase1 = 0; lev.jitPhase2 = 0; lev.jitLevPhase1 = 0; lev.jitLevPhase2 = 0;
 
-  // Reposition the plate label onto the new disc's own centroid (radius changed).
-  let sx = 0, sy = 0, sz = 0, n = 0;
-  for (let i = 0; i < pos.length; i += 3) { sx += pos[i]; sy += pos[i+1]; sz += pos[i+2]; n++; }
-  if (n) {
-    plateCentroid.set(sx/n - ctr.x, sy/n - ctr.y, sz/n - ctr.z);
-    plateLabelObj.position.set(plateCentroid.x, plateCentroid.y + levLiftY() + size*0.05, plateCentroid.z);
-  }
+  // (The plate callout anchor reads the active variant's radius every frame.)
+  flLiftY = -1;   // force a field-line re-layout for the new disc on the next frame
 
   // B_max_iron/saturation badge must repaint too -- v.rom now carries this
   // variant's OWN EM peaks (WP-HTML fix), not the previously-active disc's.
@@ -2514,8 +2797,33 @@ const T_COIL_HOT = LUMPED.T_coil_hot_display_C;   // [°C]
 // the in-plate spread is physically meaningful), 'absolute'/'relative' force one
 // or the other — wired to the "Scale: …" button in the telemetry panel.
 let colorScaleMode = 'auto';
+// Smooth colour transitions (2026-09-29, user request). Two things used to jump:
+// Auto flipped the disc from the absolute to the relative scale the instant the
+// in-disc spread crossed 0.3 K (a uniformly blue disc became a full rainbow in one
+// frame), and the relative window was re-fit to min/max every frame. Now (1) the
+// disc colour WINDOW eases toward a target that blends absolute↔relative
+// continuously and never gets narrower than DISC_MIN_SPAN_K, and (2) every vertex
+// colour and the coil glow ease toward their targets (τ = COLOR_TAU_S, wall time).
+// Display only -- temperatures themselves are untouched.
+const COLOR_TAU_S = 0.35, WINDOW_TAU_S = 1.2, DISC_MIN_SPAN_K = 4.0;
+let dispLo = T_COLOR_LO, dispHi = T_COLOR_HI, colorEaseK = 1, colorFirst = true;
+function smoothstep(a, b, x) { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+function discWindowTarget() {
+  const span = discThi - discTlo;
+  const mid = 0.5 * (discTlo + discThi), half = 0.5 * Math.max(DISC_MIN_SPAN_K, span);
+  const w = colorScaleMode === 'relative' ? 1 : colorScaleMode === 'absolute' ? 0
+          : smoothstep(0.3, 3.0, span);
+  return [T_COLOR_LO + (mid - half - T_COLOR_LO) * w, T_COLOR_HI + (mid + half - T_COLOR_HI) * w];
+}
+function updateColorEasing(wall_dt) {
+  const [tLo, tHi] = discWindowTarget();
+  if (colorFirst) { dispLo = tLo; dispHi = tHi; colorEaseK = 1; colorFirst = false; return; }
+  const kw = 1 - Math.exp(-wall_dt / WINDOW_TAU_S);
+  dispLo += (tLo - dispLo) * kw; dispHi += (tHi - dispHi) * kw;
+  colorEaseK = 1 - Math.exp(-wall_dt / COLOR_TAU_S);
+}
 function paintMesh(M) {
-  const col = M.col;
+  const col = M.tgt || (M.tgt = new Float32Array(M.col.length));   // targets; eased into M.col below
   const dT_hot = T_COIL_HOT - T_AMB_JS;
   const tnInner = (sim.T.inner - T_AMB_JS) / dT_hot;
   const tnOuter = (sim.T.outer - T_AMB_JS) / dT_hot;
@@ -2524,18 +2832,13 @@ function paintMesh(M) {
   // look nearly frozen silver. 1.8x lifts that to a clearly visible warm-metal
   // shift while keeping writeRampMetal's own clamp to [0,1]; matches the real IR
   // image (docs/thermal_test.png): coils bright, ring/core moderately warm.
-  const tnIron  = (sim.T.iron - T_AMB_JS) / dT_hot * 1.8;
+  const tnIron  = (sim.T.iron - T_AMB_JS) / dT_hot * IRON_BOOST;
   const tnByReg = [0, tnInner, tnOuter, tnIron];
   // Disc relative scale: blue = coolest part of plate (top rim), red = hottest
   // (bottom centre). Only stretch once the in-plate spread is physically meaningful
   // (≥0.3 K) — below that the plate is ~isothermal, so use the absolute T_amb–125°C
   // scale and it reads as a uniformly-warming blue (no fake rainbow on noise).
-  const span = discThi - discTlo;
-  const wantAdaptive = colorScaleMode === 'relative' ? true
-                     : colorScaleMode === 'absolute' ? false
-                     : span > 0.3;
-  const adaptive = wantAdaptive && span > 1e-6;   // guard against 1/0 at t=0
-  const invSpan  = adaptive ? 1.0 / span : 0.0;
+  const invSpan = 1.0 / Math.max(1e-6, dispHi - dispLo);   // eased window (see above)
   for (let tri = 0; tri < M.reg.length; tri++) {
     const reg = M.reg[tri];
     for (let v = 0; v < 3; v++) {
@@ -2546,8 +2849,7 @@ function paintMesh(M) {
           writeEddyRamp(col, idx, M.je[vi]);
         } else {
           const T  = discVtxT(M, vi);
-          const tn = adaptive ? (T - discTlo) * invSpan : (T - T_COLOR_LO) / TRANGE;
-          writeRamp(col, idx, tn);
+          writeRamp(col, idx, (T - dispLo) * invSpan);
         }
       } else if (reg === 4) {
         col[idx] = STRUCT_RGB[0]; col[idx+1] = STRUCT_RGB[1]; col[idx+2] = STRUCT_RGB[2];
@@ -2561,6 +2863,8 @@ function paintMesh(M) {
       }
     }
   }
+  const out = M.col, k = colorEaseK;
+  for (let i = 0; i < out.length; i++) out[i] += (col[i] - out[i]) * k;
   M.geo.attributes.color.needsUpdate = true;
 }
 
@@ -2574,19 +2878,70 @@ function plateTmean() {
   return s / plateM.dT.length;
 }
 // T_ss for current I (no sigma correction for speed, close enough for UI)
-function plateTss(I) {
-  const r2 = (I / ROM.I_ref) ** 2;
-  return T_AMB_JS + ROM.dT_max_ref * r2;
+// ── Steady-state targets = the ENGINE's own fixed point (2026-09-29) ──────────
+// The "T_ss target" and the "→NN°" arrows used to be linear closed forms,
+//   disc T_amb + ΔT_max_ref·(I/I_ref)²,  coil T_amb + (P_ref/hA + ΔT_air)·(I/I_ref)²,
+// exact only at I_ref (5 A). They ignored the two negative feedbacks romStep()
+// itself integrates, so they over-shot at high current (7.9 A/20 °C: disc 128
+// vs 100 °C, inner coil 80 vs 71 °C):
+//  (1) σ_Al(T) = σ0/(1+α·ΔT): skin depth ≈12 mm ≫ 3 mm, so the disc's eddy loss
+//      ∝ σ — a disc at 100 °C conducts 24 % less and heats itself 24 % less;
+//  (2) natural convection h ∝ ΔT^n (n = convection_exponent, Churchill-Chu
+//      laminar ¼): a hotter coil sheds heat more effectively.
+// Now the targets come from driving THIS SAME romStep() at constant I until
+// nothing moves any more (explicit-Euler fixed point = ODE fixed point, for any
+// stable dt). The probe snapshots the live state, integrates on it, reads the
+// result and restores the snapshot — the running simulation never sees it.
+// The iron node is the slowest mode (C/hA ≈ 1.9 h), hence the long horizon.
+const SS_TOL_K = 1e-5;          // per-step change below which the state counts as steady
+const SS_MAX_STEPS = 20000;     // ≈ 7 simulated days at 30 s — never reached in practice
+const SS_MIN_INTERVAL_MS = 250; // recompute at most 4×/s while I keeps changing (sine, sensor)
+const ssCache = {key: null, res: null, at: 0, warm: null};
+function discTmaxAtCurrentState() {
+  let hi = -Infinity;
+  for (let vi = 0; vi < plateM.dT.length; vi++) {
+    const T = discVtxT(plateM, vi);
+    if (T > hi) hi = T;
+  }
+  return hi;
 }
-// Coil steady-state temperatures at given I — used for relative colour scale
-function coilTss_inner(I) {
-  const s2 = (I / ROM.I_ref) ** 2;
-  return T_AMB_JS + (LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF) * s2;
+function engineSteadyState(I) {
+  const key = `${I.toFixed(2)}|${T_AMB_JS}|${activePlateIdx}`;
+  if (ssCache.key === key) return ssCache.res;
+  const now = performance.now();
+  if (ssCache.res && ssCache.warm && ssCache.warm.amb === T_AMB_JS &&
+      ssCache.warm.plate === activePlateIdx && now - ssCache.at < SS_MIN_INTERVAL_MS)
+    return ssCache.res;   // throttled: keep the last target a few more frames
+  const snap = {beta: sim.beta, be: sim.beta_eddy, ba: sim.beta_air, t: sim.t, T: {...sim.T}};
+  const w = ssCache.warm;
+  if (w && w.amb === T_AMB_JS && w.plate === activePlateIdx) {   // warm start: last fixed point
+    sim.beta = w.beta; sim.beta_eddy = w.be; sim.beta_air = w.ba; Object.assign(sim.T, w.T);
+  }
+  const dt = Math.min(30.0, ROM.tau * 0.1);   // ≪ every node's C/(dQ/dT) (≥ ~60 s) → stable
+  const keys = Object.keys(sim.T), prev = {};
+  let steps = 0, converged = false;
+  for (; steps < SS_MAX_STEPS; steps++) {
+    for (const k of keys) prev[k] = sim.T[k];
+    const pe = sim.beta_eddy, pa = sim.beta_air;
+    romStep(I, dt);
+    let d = Math.max(Math.abs(sim.beta_eddy - pe), Math.abs(sim.beta_air - pa)) * ROM.dT_max_ref;
+    for (const k of keys) d = Math.max(d, Math.abs(sim.T[k] - prev[k]));
+    if (d < SS_TOL_K) { converged = true; break; }
+  }
+  const res = {I, converged, steps, T: {...sim.T},
+               beta_eddy: sim.beta_eddy, beta_air: sim.beta_air,
+               disc_Tmax: discTmaxAtCurrentState()};
+  ssCache.warm = {amb: T_AMB_JS, plate: activePlateIdx, T: {...sim.T},
+                  beta: sim.beta, be: sim.beta_eddy, ba: sim.beta_air};
+  sim.beta = snap.beta; sim.beta_eddy = snap.be; sim.beta_air = snap.ba; sim.t = snap.t;
+  Object.assign(sim.T, snap.T);
+  ssCache.key = key; ssCache.res = res; ssCache.at = now;
+  return res;
 }
-function coilTss_outer(I) {
-  const s2 = (I / ROM.I_ref) ** 2;
-  return T_AMB_JS + (LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF) * s2;
-}
+function plateTss(I)      { return engineSteadyState(I).disc_Tmax; }
+function coilTss_inner(I) { return engineSteadyState(I).T.inner; }
+function coilTss_outer(I) { return engineSteadyState(I).T.outer; }
+function ironTss(I)       { return engineSteadyState(I).T.iron; }
 // Total heat power at current I
 function totalPower(I) {
   const s2 = (I / ROM.I_ref) ** 2;
@@ -2790,8 +3145,15 @@ sFLO.oninput = () => {
 };
 
 const setV = (id, v, dec=1) => document.getElementById(id).textContent = v.toFixed(dec)+' °C';
-const setBox = (id, T) => document.getElementById(id).style.background =
-  '#' + tcol(T).getHexString();
+// Row swatches use the SAME ramp + normalisation as that part on the model (and as
+// the colour bar in its section header): disc -> eased disc window, coils -> copper,
+// core/separator -> iron (with IRON_BOOST).
+const _sw = [0, 0, 0];
+function setSwatch(id, writeFn, tn) {
+  writeFn(_sw, 0, tn);
+  document.getElementById(id).style.background =
+    `rgb(${(_sw[0]*255)|0},${(_sw[1]*255)|0},${(_sw[2]*255)|0})`;
+}
 
 // ── Panel collapse (click header to toggle) ──────────────────────────────────
 // CSS can't animate a transition into `width:fit-content` (browsers treat it as
@@ -2835,16 +3197,33 @@ themeBtn.onclick = () => {
 };
 
 // ── Colour-scale ticks + mode toggle ──────────────────────────────────────────
-function buildScaleTicks() {
-  const ticksEl = document.getElementById('scaleTicks');
-  const steps = 6;
+function ticksHtml(lo, hi, steps, dec) {
   let html = '';
-  for (let i = 0; i <= steps; i++) {
-    const T = T_COLOR_LO + TRANGE * i / steps;
-    html += `<span>${T.toFixed(0)}°</span>`;
-  }
-  ticksEl.innerHTML = html;
+  for (let i = 0; i <= steps; i++) html += `<span>${(lo + (hi - lo) * i / steps).toFixed(dec)}°</span>`;
+  return html;
 }
+// Material bars are sampled from the SAME ramp functions paintMesh uses (incl.
+// their perceptual pow/sqrt boosts), so bar colour == model colour at that T.
+function rampGradient(writeFn) {
+  const c = [0, 0, 0], stops = [];
+  for (let i = 0; i <= 10; i++) {
+    writeFn(c, 0, i / 10);
+    stops.push(`rgb(${(c[0]*255)|0},${(c[1]*255)|0},${(c[2]*255)|0}) ${i*10}%`);
+  }
+  return `linear-gradient(to right,${stops.join(',')})`;
+}
+const IRON_BOOST = 1.8;   // must match tnIron in paintMesh
+function ironHotC() { return T_AMB_JS + (T_COIL_HOT - T_AMB_JS) / IRON_BOOST; }
+let tickLo = NaN, tickHi = NaN;
+function buildScaleTicks() {
+  tickLo = dispLo; tickHi = dispHi;
+  const dec = (dispHi - dispLo) < 12 ? 1 : 0;
+  document.getElementById('scaleTicks').innerHTML = ticksHtml(dispLo, dispHi, 4, dec);
+  document.getElementById('scaleTicksCopper').innerHTML = ticksHtml(T_AMB_JS, T_COIL_HOT, 4, 0);
+  document.getElementById('scaleTicksIron').innerHTML = ticksHtml(T_AMB_JS, ironHotC(), 4, 0);
+}
+document.getElementById('scaleBarCopper').style.background = rampGradient(writeRampCopper);
+document.getElementById('scaleBarIron').style.background = rampGradient(writeRampMetal);
 buildScaleTicks();
 const scaleModeBtn = document.getElementById('scaleModeBtn');
 const SCALE_MODES = ['auto', 'absolute', 'relative'];
@@ -2856,12 +3235,20 @@ scaleModeBtn.onclick = () => {
 const scaleMarkerLo = document.getElementById('scaleMarkerLo');
 const scaleMarkerHi = document.getElementById('scaleMarkerHi');
 const scaleCurRangeEl = document.getElementById('scaleCurRange');
-function updateScaleBar() {
-  const lo = Math.max(0, Math.min(1, (discTlo - T_COLOR_LO) / TRANGE));
-  const hi = Math.max(0, Math.min(1, (discThi - T_COLOR_LO) / TRANGE));
-  scaleMarkerLo.style.left = (lo * 100).toFixed(1) + '%';
-  scaleMarkerHi.style.left = (hi * 100).toFixed(1) + '%';
+let scaleTextTimer = 0;
+const pctIn = (T, lo, hi) => (Math.max(0, Math.min(1, (T - lo) / Math.max(1e-6, hi - lo))) * 100).toFixed(1) + '%';
+function updateScaleBar(dt) {
+  // Disc markers sit in the eased display window, so they glide with it.
+  scaleMarkerLo.style.left = pctIn(discTlo, dispLo, dispHi);
+  scaleMarkerHi.style.left = pctIn(discThi, dispLo, dispHi);
+  scaleTextTimer -= dt || 0;
+  if (scaleTextTimer > 0) return;
+  scaleTextTimer = 0.25;   // text at 4 Hz, markers every frame (CSS-eased)
   scaleCurRangeEl.textContent = `${discTlo.toFixed(1)}–${discThi.toFixed(1)} °C`;
+  if (Math.abs(dispLo - tickLo) > 0.05 || Math.abs(dispHi - tickHi) > 0.05) buildScaleTicks();
+  document.getElementById('mkInner').style.left = pctIn(sim.T.inner, T_AMB_JS, T_COIL_HOT);
+  document.getElementById('mkOuter').style.left = pctIn(sim.T.outer, T_AMB_JS, T_COIL_HOT);
+  document.getElementById('mkIron').style.left  = pctIn(sim.T.iron, T_AMB_JS, ironHotC());
 }
 
 // ── Export: screenshot (PNG) + T_max(t) history (CSV) ─────────────────────────
@@ -2903,6 +3290,7 @@ addEventListener('keydown', (e) => {
   switch (e.key) {
     case ' ':  e.preventDefault(); setPaused(!paused); break;
     case 'r': case 'R': resetSim(); break;
+    case 'f': case 'F': fitView(); break;
     case '1': selectScenario('quickstart'); break;
     case '2': selectScenario('step');  break;
     case '3': selectScenario('ramp');  break;
@@ -2919,11 +3307,10 @@ document.getElementById('tauLabel').textContent =
 // Precompute coil steady-state temperatures (at I_ref) — shown as target arrows.
 // True steady rise = own rise above the local air node + the air node's rise above
 // the far ambient (AIR_DT_SS_REF), since the coils now convect into shared air.
-function paintCoilSS() {
-  const T_ss_inner = T_AMB_JS + LUMPED.nodes.inner.P_ref / LUMPED.nodes.inner.hA + AIR_DT_SS_REF;
-  const T_ss_outer = T_AMB_JS + LUMPED.nodes.outer.P_ref / LUMPED.nodes.outer.hA + AIR_DT_SS_REF;
-  document.getElementById('tInSS').textContent  = `→${T_ss_inner.toFixed(0)}°`;
-  document.getElementById('tOutSS').textContent = `→${T_ss_outer.toFixed(0)}°`;
+function paintCoilSS() {   // initial paint / after an ambient switch; the loop keeps them live
+  document.getElementById('tInSS').textContent  = `→${coilTss_inner(targetI).toFixed(0)}°`;
+  document.getElementById('tOutSS').textContent = `→${coilTss_outer(targetI).toFixed(0)}°`;
+  document.getElementById('tFeSS').textContent  = `→${ironTss(targetI).toFixed(0)}°`;
 }
 paintCoilSS();
 
@@ -3235,13 +3622,14 @@ function loop() {
   }
 
   // Paint meshes
+  updateColorEasing(wall_dt);
   paintMesh(baseM);
   paintMesh(coilInnerM);
   paintMesh(coilOuterM);
   paintMesh(woodM);
   paintMesh(plateM);
   updateCoilGlow();   // emissive ∝ coil T — hot windings visibly light up (IR look)
-  updateScaleBar();
+  updateScaleBar(wall_dt);
 
   // Update disc Z position — spring-mass response toward z_eq(I): the disc bobs
   // for ~10s after a current step, then settles (matches the real rig behaviour).
@@ -3251,7 +3639,6 @@ function loop() {
   if (!paused) levStep(I_display, dt_sim);
   const liftY = levLiftY();
   plateM.mesh.position.y = -ctr.y + liftY;
-  plateLabelObj.position.y = plateCentroid.y + liftY + size * 0.05;
 
   // Update telemetry
   const Tmax  = plateTmax();
@@ -3282,11 +3669,15 @@ function loop() {
   // once at I_ref (5A), so at 5.5A the live temperature sailed past a stale "→50°".
   document.getElementById('tInSS').textContent  = `→${coilTss_inner(I_display).toFixed(0)}°`;
   document.getElementById('tOutSS').textContent = `→${coilTss_outer(I_display).toFixed(0)}°`;
+  document.getElementById('tFeSS').textContent  = `→${ironTss(I_display).toFixed(0)}°`;
 
-  setBox('bPl',  Tmax);
-  setBox('bIn',  sim.T.inner);
-  setBox('bOut', sim.T.outer);
-  setBox('bFe',  sim.T.iron);
+  {
+    const dTh = T_COIL_HOT - T_AMB_JS;
+    setSwatch('bPl',  writeRamp,       (Tmax - dispLo) / Math.max(1e-6, dispHi - dispLo));
+    setSwatch('bIn',  writeRampCopper, (sim.T.inner - T_AMB_JS) / dTh);
+    setSwatch('bOut', writeRampCopper, (sim.T.outer - T_AMB_JS) / dTh);
+    setSwatch('bFe',  writeRampMetal,  (sim.T.iron  - T_AMB_JS) / dTh * IRON_BOOST);
+  }
   liveAirBot();
 
   // EM field telemetry: |B| and |J_e| are linear in A_φ, hence linear in I (the
@@ -3302,6 +3693,7 @@ function loop() {
   // baked set shows at I_em_ref, and above it the dash gaps shrink (denser flow) on
   // top of the existing speed/brightness scaling. B=0 reads as still+invisible.
   if (fieldLineGroup.visible) {
+    if (Math.abs(liftY - flLiftY) > 0.05) layoutFieldLines(liftY);
     const iFrac = Math.min(2.0, Math.abs(emScale));   // 0->0A, 1->I_em_ref, capped at 2x
     flFlowPhase += wall_dt * FIELD_LINE_FLOW_SPEED * iFrac;
     const visFrac  = Math.min(1, iFrac);              // fraction of lines shown
@@ -3317,14 +3709,13 @@ function loop() {
   drawChart();
   drawCurrentChart();
   controls.update();
+  scene.fog.density = FOG_BASE * FOG_REF_DIST / Math.max(1, camera.position.distanceTo(controls.target));
   renderer.render(scene, camera);
-  labelRenderer.render(scene, camera);
-  deOverlapLabels(wall_dt);
+  updateCallouts(wall_dt);
 }
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
-  labelRenderer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 });
