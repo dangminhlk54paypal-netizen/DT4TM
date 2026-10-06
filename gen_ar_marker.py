@@ -1,15 +1,21 @@
-"""gen_ar_marker.py -- printable AprilTag (tag36h11) 2x2 BOARD for the WebAR digital twin.
+"""gen_ar_marker.py -- printable AprilTag (tag36h11) 2x2 BOARDS (plate + base) for the WebAR digital twin.
 
+TWO boards, same family / layout / size, told apart by tag ID (WP-AR-DUAL):
+    page 1  PLATE board  IDs 0-3  -- stuck on the levitating plate, spins / lifts / tilts with it
+    page 2  BASE board   IDs 4-7  -- fixed on the table / housing next to the rig, never moves
 Outputs (default):
-    outputs/ar_marker.pdf   A4, VECTOR (tags are filled squares, not a raster) -- print at 100 % / actual size
-    outputs/ar_marker.png   raster PREVIEW of the same page (150 dpi, DPI metadata set)
+    outputs/ar_marker.pdf        A4, 2 pages, VECTOR (tags are filled squares, not a raster) -- print at 100 % / actual size
+    outputs/ar_marker.png        raster PREVIEW of page 1 (plate board, 150 dpi, DPI metadata set)
+    outputs/ar_marker_base.png   raster PREVIEW of page 2 (base board)
 
 Usage:
-    python gen_ar_marker.py [--pdf outputs/ar_marker.pdf] [--png outputs/ar_marker.png] [--edge 48]
+    python gen_ar_marker.py [--pdf outputs/ar_marker.pdf] [--png outputs/ar_marker.png]
+                            [--png-base outputs/ar_marker_base.png] [--edge 48]
 
 BOARD GEOMETRY  (single source of truth: this constant block is imported by build_ar_twin.py and
 baked into the AR page, so print and pose solver cannot disagree)
-    * family tag36h11, IDs 0 1 / 2 3 in reading order (0 = top-left as seen when the board is upright)
+    * family tag36h11, IDs in reading order (first ID = top-left as seen when the board is upright):
+      plate board 0 1 / 2 3, base board 4 5 / 6 7
     * a tag36h11 code is an 8x8-module black-bordered square (+1 module white border = 10 modules)
       -> module = TAG_EDGE_MM / 8 ; default edge 48 mm = 6 mm module
     * gap between the black squares of neighbouring tags = 2 modules (0.25 * edge), white margin
@@ -33,22 +39,31 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CODES_JSON = os.path.join(HERE, "tag36h11_codes.json")
 
 # ---- board geometry (see docstring) ------------------------------------------------------------
-MARKER_FAMILY = "tag36h11"
 TAG_EDGE_MM = 48.0            # black-square edge of ONE tag; the AR page's default markerSizeMm
 GAP_RATIO = 0.25              # gap between neighbouring black squares, x edge   (2 modules)
 MARGIN_RATIO = 0.125          # white margin from outermost black edge to board outline, x edge (1 module)
 BOARD_EDGE_RATIO = 2.0 + GAP_RATIO + 2.0 * MARGIN_RATIO      # board side / tag edge = 2.5
-# id -> tag centre in units of half the tag pitch, (x right, y up): pitch = edge * (1 + GAP_RATIO)
-TAG_CENTERS_UNIT = {0: (-1.0, +1.0), 1: (+1.0, +1.0), 2: (-1.0, -1.0), 3: (+1.0, -1.0)}
-TAG_IDS = tuple(sorted(TAG_CENTERS_UNIT))
+# Tag centre of the k-th tag (reading order) in units of half the tag pitch, (x right, y up): pitch = edge * (1 + GAP_RATIO)
+_LAYOUT_UNIT = ((-1.0, +1.0), (+1.0, +1.0), (-1.0, -1.0), (+1.0, -1.0))
+BOARD_IDS = {"plate": (0, 1, 2, 3), "base": (4, 5, 6, 7)}      # role -> tag IDs (SSOT; the AR page partitions detections by this)
+BOARD_TITLES = {                                              # (DE, EN) page titles
+    "plate": ("PLATTEN-MARKER (dreht mit)", "PLATE MARKER"),
+    "base": ("BASIS-MARKER (fest)", "BASE MARKER"),
+}
+BOARD_HINTS = {
+    "plate": ("Mitte auf die Mitte der Platte kleben (r = 0) - er dreht, schwebt und kippt mit der Platte.",
+              "Stick the board centre on the plate centre (r = 0) - it spins, levitates and tilts with the plate."),
+    "base": ("Fest neben dem Prüfstand auf den Tisch / das Gehäuse kleben - darf sich NIE bewegen. Gut sichtbar neben der Platte.",
+             "Fix next to the rig on the table / housing - must NEVER move. Keep it in view together with the plate."),
+}
 # Corner order reported by AprilTag for an UPRIGHT tag (image y down): p0 = bottom-left,
 # p1 = bottom-right, p2 = top-right, p3 = top-left.  In board mm (y UP), in units of edge/2:
 CORNER_UNIT = ((-1.0, -1.0), (+1.0, -1.0), (+1.0, +1.0), (-1.0, +1.0))
 
 MARKER_JS_CONFIG = {          # baked into the AR page verbatim
-    "family": MARKER_FAMILY, "ids": list(TAG_IDS), "edgeMm": TAG_EDGE_MM, "gapRatio": GAP_RATIO,
-    "marginRatio": MARGIN_RATIO, "centersUnit": {str(k): list(v) for k, v in TAG_CENTERS_UNIT.items()},
-    "cornerUnit": [list(c) for c in CORNER_UNIT],
+    "gapRatio": GAP_RATIO, "marginRatio": MARGIN_RATIO, "cornerUnit": [list(c) for c in CORNER_UNIT],
+    "boards": {role: {"ids": list(ids), "centersUnit": {str(tid): list(_LAYOUT_UNIT[k]) for k, tid in enumerate(ids)}}
+               for role, ids in BOARD_IDS.items()},
 }
 
 
@@ -56,12 +71,12 @@ def board_edge_mm(edge_mm: float = TAG_EDGE_MM) -> float:
     return edge_mm * BOARD_EDGE_RATIO
 
 
-def tag_layout(edge_mm: float = TAG_EDGE_MM) -> list[dict]:
-    """[{id, cx, cy, edge, corners[4][2]}] in board mm (origin = board centre, y up)."""
+def tag_layout(edge_mm: float = TAG_EDGE_MM, board: str = "plate") -> list[dict]:
+    """[{id, cx, cy, edge, corners[4][2]}] in board mm (origin = board centre, y up) of the plate / base board."""
     half_pitch = edge_mm * (1.0 + GAP_RATIO) / 2.0
     out = []
-    for tid in TAG_IDS:
-        ux, uy = TAG_CENTERS_UNIT[tid]
+    for k, tid in enumerate(BOARD_IDS[board]):
+        ux, uy = _LAYOUT_UNIT[k]
         cx, cy = ux * half_pitch, uy * half_pitch
         out.append({"id": tid, "cx": cx, "cy": cy, "edge": edge_mm,
                     "corners": [[cx + u * edge_mm / 2.0, cy + v * edge_mm / 2.0] for u, v in CORNER_UNIT]})
@@ -98,13 +113,15 @@ class _Page:
         self.ops.append(("text", x, y, s, size, anchor, bold, gray))
 
 
-def build_page(edge_mm: float, page_w: float = 210.0, page_h: float = 297.0) -> _Page:
+def build_page(edge_mm: float, board: str = "plate", page_w: float = 210.0, page_h: float = 297.0) -> _Page:
     codes = load_codes()
     P = _Page()
-    board = board_edge_mm(edge_mm)
+    board_mm = board_edge_mm(edge_mm)
     ox, oy = page_w / 2.0, page_h / 2.0          # board centre on the page
     mod = edge_mm / codes["width_at_border"]
-    lay = tag_layout(edge_mm)
+    lay = tag_layout(edge_mm, board)
+    ids = BOARD_IDS[board]
+    title_de, title_en = BOARD_TITLES[board]
 
     for t in lay:                                 # tags: black square + white cells (one union path)
         x0, y0 = ox + t["cx"] - edge_mm / 2.0, oy + t["cy"] - edge_mm / 2.0
@@ -124,7 +141,7 @@ def build_page(edge_mm: float, page_w: float = 210.0, page_h: float = 297.0) -> 
                     c += 1
         P.rects(wh, 1.0)
 
-    bx0, by0, bx1, by1 = ox - board / 2, oy - board / 2, ox + board / 2, oy + board / 2
+    bx0, by0, bx1, by1 = ox - board_mm / 2, oy - board_mm / 2, ox + board_mm / 2, oy + board_mm / 2
     # cut marks at the board outline (offset 2 mm from the corner, 6 mm long, outside the board)
     for (cx, cy, sx, sy) in ((bx0, by0, -1, -1), (bx1, by0, 1, -1), (bx0, by1, -1, 1), (bx1, by1, 1, 1)):
         P.line(cx + sx * 2.0, cy, cx + sx * 8.0, cy, 0.25)
@@ -137,13 +154,14 @@ def build_page(edge_mm: float, page_w: float = 210.0, page_h: float = 297.0) -> 
     ay = by1 + 14.0
     P.line(ox, ay, ox, ay + 8.0, 0.6)
     P.poly([(ox, ay + 10.5), (ox - 2.2, ay + 5.5), (ox + 2.2, ay + 5.5)])
-    P.text(ox + 5.0, ay + 3.0, "OBEN / TOP  (Tags 0 + 1)", 7.0, "l", gray=0.35)
+    P.text(ox + 5.0, ay + 3.0, f"OBEN / TOP  (Tags {ids[0]} + {ids[1]})", 7.0, "l", gray=0.35)
 
     # header text
-    P.text(ox, page_h - 22.0, "DT4TM - AprilTag-Marker (tag36h11, 2 x 2 Board, IDs 0-3)", 13.0, "c", bold=True)
-    P.text(ox, page_h - 31.0, "Mit 100 % / Originalgröße drucken - NICHT \"an Seite anpassen\".", 10.5, "c", bold=True)
-    P.text(ox, page_h - 37.5, "Print at 100 % / actual size - do NOT fit to page.", 10.5, "c", bold=True)
-    P.text(ox, page_h - 44.0, "Nach dem Druck den Maßstab unten nachmessen: 100 mm  /  Check the scale bar after printing.", 8.0, "c", gray=0.3)
+    P.text(ox, page_h - 20.0, f"{title_de}  /  {title_en}", 15.0, "c", bold=True)
+    P.text(ox, page_h - 27.0, f"DT4TM - AprilTag tag36h11, 2 x 2 Board, IDs {ids[0]}-{ids[-1]}", 10.0, "c", gray=0.2)
+    P.text(ox, page_h - 34.0, "Mit 100 % / Originalgröße drucken - NICHT \"an Seite anpassen\".", 10.5, "c", bold=True)
+    P.text(ox, page_h - 40.5, "Print at 100 % / actual size - do NOT fit to page.", 10.5, "c", bold=True)
+    P.text(ox, page_h - 47.0, "Nach dem Druck den Maßstab unten nachmessen: 100 mm  /  Check the scale bar after printing.", 8.0, "c", gray=0.3)
 
     # 100 mm scale bar with ticks every 10 mm (5 mm minor)
     sy = by0 - 26.0
@@ -158,47 +176,51 @@ def build_page(edge_mm: float, page_w: float = 210.0, page_h: float = 297.0) -> 
 
     # info block
     info = [
-        f"Tag36h11, IDs 0 1 / 2 3.  Tag edge (schwarzes Quadrat / black square): {edge_mm:g} mm  (Modul / module {mod:g} mm)",
-        f"Board: {board:g} x {board:g} mm inkl. weißer Rand / incl. white border.  Ursprung / origin = Board-Mitte, x rechts, y oben.",
-        "In der AR-Seite: \"Marker-Größe\" = Tag-Kantenlänge (Standard 48 mm).",
+        f"Tag36h11, IDs {ids[0]} {ids[1]} / {ids[2]} {ids[3]}.  Tag edge (schwarzes Quadrat / black square): {edge_mm:g} mm  (Modul / module {mod:g} mm)",
+        f"Board: {board_mm:g} x {board_mm:g} mm inkl. weißer Rand / incl. white border.  Ursprung / origin = Board-Mitte, x rechts, y oben.",
+        "In der AR-Seite: \"Marker-Größe\" = Tag-Kantenlänge (Standard 48 mm), gilt für BEIDE Boards.",
+        BOARD_HINTS[board][0],
+        BOARD_HINTS[board][1],
     ]
-    for k, s in enumerate(info):
-        P.text(ox, sy - 20.0 - 5.0 * k, s, 7.5, "c", gray=0.3)
+    for k, s_ in enumerate(info):
+        P.text(ox, sy - 20.0 - 5.0 * k, s_, 7.5, "c", gray=0.3 if k < 3 else 0.0, bold=k >= 3)
     return P
 
 
-def render_pdf(P: _Page, path: str, page_w: float = 210.0, page_h: float = 297.0):
+def render_pdf(pages: list[_Page], path: str, page_w: float = 210.0, page_h: float = 297.0):
     from reportlab.pdfgen import canvas
     from reportlab.lib.units import mm
     c = canvas.Canvas(path, pagesize=(page_w * mm, page_h * mm), pageCompression=1)
-    c.setTitle("DT4TM AprilTag marker board (tag36h11, IDs 0-3)")
+    c.setTitle("DT4TM AprilTag marker boards (tag36h11): plate IDs 0-3 (page 1), base IDs 4-7 (page 2)")
     c.setAuthor("maria-dt4tm gen_ar_marker.py")
     c.setSubject("Print at 100 % / actual size")
-    for op in P.ops:
-        k = op[0]
-        if k == "rects":
-            _, rs, g = op
-            c.setFillGray(g)
-            p = c.beginPath()
-            for (x, y, w, h) in rs:
-                p.rect(x * mm, y * mm, w * mm, h * mm)
-            c.drawPath(p, stroke=0, fill=1)
-        elif k == "line":
-            _, x0, y0, x1, y1, w, g = op
-            c.setStrokeGray(g); c.setLineWidth(w * mm)
-            c.line(x0 * mm, y0 * mm, x1 * mm, y1 * mm)
-        elif k == "poly":
-            _, pts, g = op
-            c.setFillGray(g)
-            p = c.beginPath(); p.moveTo(pts[0][0] * mm, pts[0][1] * mm)
-            for (x, y) in pts[1:]:
-                p.lineTo(x * mm, y * mm)
-            p.close(); c.drawPath(p, stroke=0, fill=1)
-        elif k == "text":
-            _, x, y, s, size, anchor, bold, g = op
-            c.setFillGray(g); c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-            {"l": c.drawString, "r": c.drawRightString, "c": c.drawCentredString}[anchor](x * mm, y * mm, s)
-    c.showPage(); c.save()
+    for P in pages:
+        for op in P.ops:
+            k = op[0]
+            if k == "rects":
+                _, rs, g = op
+                c.setFillGray(g)
+                p = c.beginPath()
+                for (x, y, w, h) in rs:
+                    p.rect(x * mm, y * mm, w * mm, h * mm)
+                c.drawPath(p, stroke=0, fill=1)
+            elif k == "line":
+                _, x0, y0, x1, y1, w, g = op
+                c.setStrokeGray(g); c.setLineWidth(w * mm)
+                c.line(x0 * mm, y0 * mm, x1 * mm, y1 * mm)
+            elif k == "poly":
+                _, pts, g = op
+                c.setFillGray(g)
+                p = c.beginPath(); p.moveTo(pts[0][0] * mm, pts[0][1] * mm)
+                for (x, y) in pts[1:]:
+                    p.lineTo(x * mm, y * mm)
+                p.close(); c.drawPath(p, stroke=0, fill=1)
+            elif k == "text":
+                _, x, y, s, size, anchor, bold, g = op
+                c.setFillGray(g); c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
+                {"l": c.drawString, "r": c.drawRightString, "c": c.drawCentredString}[anchor](x * mm, y * mm, s)
+        c.showPage()
+    c.save()
 
 
 def render_png(P: _Page, path: str, dpi: int = 150, page_w: float = 210.0, page_h: float = 297.0):
@@ -232,28 +254,33 @@ def render_png(P: _Page, path: str, dpi: int = 150, page_w: float = 210.0, page_
     img.save(path, dpi=(dpi, dpi))
 
 
-def generate_ar_marker(pdf_path: str, png_path: str | None, edge_mm: float = TAG_EDGE_MM) -> str:
-    P = build_page(edge_mm)
+def generate_ar_marker(pdf_path: str, png_path: str | None, edge_mm: float = TAG_EDGE_MM,
+                       png_base_path: str | None = None) -> str:
+    Pp, Pb = build_page(edge_mm, "plate"), build_page(edge_mm, "base")
     os.makedirs(os.path.dirname(os.path.abspath(pdf_path)), exist_ok=True)
-    render_pdf(P, pdf_path)
-    print(f"[gen_ar_marker] PDF  -> {pdf_path}")
+    render_pdf([Pp, Pb], pdf_path)
+    print(f"[gen_ar_marker] PDF  -> {pdf_path}  (page 1 = plate board IDs 0-3, page 2 = base board IDs 4-7)")
     if png_path:
-        render_png(P, png_path)
-        print(f"[gen_ar_marker] PNG preview -> {png_path}")
+        render_png(Pp, png_path)
+        print(f"[gen_ar_marker] PNG preview (plate) -> {png_path}")
+    if png_base_path:
+        render_png(Pb, png_base_path)
+        print(f"[gen_ar_marker] PNG preview (base)  -> {png_base_path}")
     b = board_edge_mm(edge_mm)
     print(f"[gen_ar_marker] Print at 100 % (actual size): tag edge {edge_mm:g} mm, board {b:g} x {b:g} mm, "
-          f"tags 0/1 top, 2/3 bottom; origin = board centre")
+          f"tags 0/1 top, 2/3 bottom (base: 4/5, 6/7); origin = board centre")
     return pdf_path
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Generate the printable AprilTag board PDF for the TEAM 28 WebAR twin")
+    ap = argparse.ArgumentParser(description="Generate the printable AprilTag board PDF (plate + base board) for the TEAM 28 WebAR twin")
     ap.add_argument("url", nargs="?", default=None, help="DEPRECATED (ignored): the marker no longer encodes a URL")
     ap.add_argument("--pdf", default=os.path.join(HERE, "outputs", "ar_marker.pdf"))
-    ap.add_argument("--png", default=os.path.join(HERE, "outputs", "ar_marker.png"), help="preview PNG ('' = skip)")
+    ap.add_argument("--png", default=os.path.join(HERE, "outputs", "ar_marker.png"), help="preview PNG of the PLATE board ('' = skip)")
+    ap.add_argument("--png-base", default=os.path.join(HERE, "outputs", "ar_marker_base.png"), help="preview PNG of the BASE board ('' = skip)")
     ap.add_argument("--edge", type=float, default=TAG_EDGE_MM,
                     help=f"tag black-square edge in mm (default {TAG_EDGE_MM:g} -> 120 mm board; must fit A4)")
     a = ap.parse_args()
     if a.url:
         print("[gen_ar_marker] NOTE: the URL argument is deprecated and ignored (AprilTag board, no QR payload).")
-    generate_ar_marker(a.pdf, a.png or None, a.edge)
+    generate_ar_marker(a.pdf, a.png or None, a.edge, a.png_base or None)

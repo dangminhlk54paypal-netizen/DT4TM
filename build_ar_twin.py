@@ -265,25 +265,30 @@ body, html {
 }
 
 /* Mini Telemetry Bar */
-#telemetryBar {
+#topStack {                    /* telemetry bar + colour scale: one column, so the scale follows the (taller when measuring) bar */
   position: fixed; top: 52px; left: 10px; right: 10px;
+  display: flex; flex-direction: column; gap: 8px; z-index: 90;
+}
+#telemetryBar {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
   background: var(--panel-bg); border: 1px solid var(--panel-border);
   border-radius: 10px; padding: 6px;
-  z-index: 90; text-align: center;
+  text-align: center;
 }
 
 .t-item { display: flex; flex-direction: column; }
+.t-meas { grid-column: 1 / -1; display: none; font-size: 0.7rem; font-weight: 700; color: #7be0ff; border-top: 1px solid var(--panel-border); padding-top: 3px; font-variant-numeric: tabular-nums; }
+.calib-val.cal-ok { color: var(--success); }
+.calib-val.cal-warn { color: #ffa502; }
+.calib-val.cal-none { color: var(--text-dim); }
 .t-label { font-size: 0.6rem; color: var(--text-dim); text-transform: uppercase; }
 .t-val { font-size: 0.82rem; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
 
 /* Dynamic Thermal Scale Bar */
 #thermalScaleBar {
-  position: fixed; top: 105px; left: 10px; right: 10px;
   display: flex; align-items: center; gap: 8px;
   background: rgba(14, 18, 36, 0.93); border: 1px solid var(--panel-border);
   border-radius: 8px; padding: 4px 10px;
-  z-index: 90;
 }
 .scale-label { font-size: 0.64rem; color: var(--text-dim); font-weight: 700; white-space: nowrap; }
 .scale-gradient {
@@ -378,7 +383,7 @@ input[type=range]::-webkit-slider-thumb {
   box-shadow: 0 0 20px rgba(0, 210, 255, 0.2);
 }
 #targetGuide::after {
-  content: "Kamera auf AprilTag-Marker richten"; position: absolute; bottom: -28px; left: -20px; right: -20px;
+  content: "Kamera auf Platten- und Basis-Marker richten"; position: absolute; bottom: -28px; left: -20px; right: -20px;
   text-align: center; font-size: 0.72rem; font-weight: 600; color: #00d2ff;
   background: rgba(11, 13, 25, 0.75); padding: 3px 6px; border-radius: 6px;
 }
@@ -425,7 +430,8 @@ input[type=range]::-webkit-slider-thumb {
   <div id="trackingBadge">🟡 3D-Vorschau</div>
 </div>
 
-<!-- Telemetry -->
+<!-- Telemetry + colour scale -->
+<div id="topStack">
 <div id="telemetryBar">
   <div class="t-item">
     <span class="t-label">Strom I</span>
@@ -440,9 +446,10 @@ input[type=range]::-webkit-slider-thumb {
     <span class="t-val" id="valTCoil">-- °C</span>
   </div>
   <div class="t-item">
-    <span class="t-label">Schwebe z</span>
+    <span class="t-label">Spalt Modell</span>
     <span class="t-val" id="valZLev">0.0 mm</span>
   </div>
+  <div class="t-meas" id="valMeas"></div>
 </div>
 
 <!-- Dynamic Thermal Color Scale Legend -->
@@ -453,11 +460,12 @@ input[type=range]::-webkit-slider-thumb {
   </div>
   <span class="scale-label" id="lblScaleMax">-- °C</span>
 </div>
+</div>
 
 <!-- Banner -->
 <div id="startBanner">
   <h3>Kamera-Überlagerung (AR)</h3>
-  <p>Starte die Kamera und richte sie auf den ausgedruckten AprilTag-Marker (PDF mit 100 % / Originalgröße drucken, 4 Tags). Die thermische Simulation und die 3D-Magnetfeldlinien rasten millimetergenau auf dem Prüfstand ein.</p>
+  <p>Starte die Kamera und richte sie auf die beiden AprilTag-Marker (PDF mit 100 % / Originalgröße drucken): <b>Seite 1 = Platten-Marker</b> auf die Platte kleben, <b>Seite 2 = Basis-Marker</b> fest neben den Prüfstand. Der Unterbau bleibt dann stehen, während die Platte dreht und schwebt.</p>
   <button class="btn-primary" id="btnStartAR">📷 Kamera starten</button>
 </div>
 
@@ -488,6 +496,16 @@ input[type=range]::-webkit-slider-thumb {
 
   <!-- Calibration Dropdown Panel -->
   <div id="calibPanel">
+    <div class="calib-row">
+      <span class="calib-title">Unterbau (Basis-Marker)</span>
+      <span class="calib-val" id="lblCalStatus" style="min-width:0; text-align:right; font-size:0.72rem;">noch nicht</span>
+    </div>
+    <div class="calib-row">
+      <div class="calib-controls" style="width:100%; gap:6px;">
+        <button class="pill-btn active" id="btnCalBase" style="padding: 6px 8px; font-size: 0.74rem;">📏 Unterbau einmessen (Platte liegt auf)</button>
+        <button class="pill-btn" id="btnCalReset" style="flex: 0 0 auto; padding: 6px 8px; font-size: 0.72rem;">zurücksetzen</button>
+      </div>
+    </div>
     <div class="calib-row">
       <span class="calib-title">Auto-Ausrichten</span>
       <div class="calib-controls">
@@ -745,12 +763,17 @@ plateGroup.add(plateM.mesh);
 const twinModel = new THREE.Group();
 twinRoot.add(twinModel);
 
+// WP-AR-DUAL: the PLATE is NOT a child of the base (twinRoot).  plateRoot = the plate-tag frame (origin = plate centre on
+// its top surface, z = plate normal); it follows the PLATE board (measured), or rides on the rig in the model state.
+const plateRoot = new THREE.Group();
+scene.add(plateRoot);
+plateRoot.add(plateGroup);
+
 // ── 3D Magnetic Field Lines Group ─────────────────────────────────────────────
 const N_THETA_FIELD = 24;
 const fieldLineGroup = new THREE.Group();
 
-twinModel.add(baseGroup);
-twinModel.add(plateGroup);
+twinModel.add(baseGroup);          // base bodies + field lines follow the BASE pose (twinRoot), manual alignment on top
 twinModel.add(fieldLineGroup);
 
 // Plate top in FEM is at Z = 67.0 mm -> offset by -67.0 brings top to Z=0 in marker space.
@@ -769,6 +792,7 @@ let manualZOffset = 0.0;
 let manualYawDeg = 22.5; // 22.5 deg rotation brings STL flat edge into front alignment!
 let manualPitchDeg = 0.0; // Pitch angle (tilt forward/backward)
 let manualScale = 1.0;
+let trimSaveHook = null;   // set by the calibration code: persists the trims alongside a stored calibration
 
 function updateModelTransform() {
   twinModel.position.set(manualXOffset, manualYOffset, manualZOffset);
@@ -776,6 +800,7 @@ function updateModelTransform() {
   const pitchRad = manualPitchDeg * (Math.PI / 180.0);
   twinModel.rotation.set(pitchRad, 0, yawRad, 'ZYX');
   twinModel.scale.set(manualScale, manualScale, manualScale);
+  plateRoot.scale.set(manualScale, manualScale, manualScale);   // plate: size only; X/Y/Z/pitch/yaw adjust the BASE against the plate
   const lblYaw = document.getElementById('lblYaw');
   if (lblYaw) lblYaw.textContent = `${manualYawDeg > 0 ? '+' : ''}${manualYawDeg.toFixed(1)}°`;
   const lblPitch = document.getElementById('lblPitch');
@@ -788,6 +813,7 @@ function updateModelTransform() {
   if (lblY) lblY.textContent = `${manualYOffset > 0 ? '+' : ''}${manualYOffset.toFixed(0)} mm`;
   const lblZ = document.getElementById('lblZOffset');
   if (lblZ) lblZ.textContent = `${manualZOffset > 0 ? '+' : ''}${manualZOffset.toFixed(0)} mm`;
+  if (trimSaveHook) trimSaveHook();
 }
 updateModelTransform();
 
@@ -936,6 +962,7 @@ let markerSizeMm = __MARKER_TAG_MM__;
 // Display choice (NOT physics): when off, the virtual plate stays firmly seated on the
 // physical mockup. The engine's levitation state (lev.*) evolves regardless.
 let enableLevitation = false;
+let modelLiftMm = 0.0;      // model plate lift shown while the plate is not camera-measured (0 unless levitation display is on)
 let globalAlpha = 0.38;
 let showThermal = true;
 const T_COLOR_HI = PARAMS.plate_hot_display_C;        // plate colour-ramp ceiling (display only)
@@ -999,10 +1026,11 @@ function stepPhysics(dt) {
   // NO Z_GAP_EXAG here: the FEM page doubles the gap (display exaggeration for a
   // standalone 3D view), but the AR overlay sits on a REAL mockup, so the virtual
   // plate must move by the physical mm or it will not line up with the real disc.
-  const levZ_mm = enableLevitation ? (lev.z + lev.jit) : 0.0;
+  // The lift is applied to plateRoot by trkDisplay()/placePlateOnRig() (model state), or replaced by the camera-measured
+  // plate pose (mode 'both'): plateGroup itself stays at its static offset.
+  modelLiftMm = enableLevitation ? (lev.z + lev.jit) : 0.0;
   baseGroup.position.z = -Z_COILS_TOP_STL;
   fieldLineGroup.position.z = -6.0;
-  plateGroup.position.z = -Z_PLATE_TOP_FEM + levZ_mm;
 }
 
 // ── Field Lines Pulse ─────────────────────────────────────────────────────────
@@ -1023,6 +1051,8 @@ const valTPlEl = document.getElementById('valTPlate');
 const valTCoEl = document.getElementById('valTCoil');
 const valZLvEl = document.getElementById('valZLev');
 const scaleNeedle = document.getElementById('scaleNeedle');
+const valMeasEl = document.getElementById('valMeas');
+let measShown = false;
 let lastUiUpdate = 0;
 
 const lblSpeed = document.getElementById('lblSpeed');
@@ -1041,6 +1071,10 @@ function updateTelemetry(time) {
   valTPlEl.textContent = discThi.toFixed(1) + ' °C';                       // plate T_max (engine field)
   valTCoEl.textContent = Math.max(sim.T.inner, sim.T.outer).toFixed(1) + ' °C';
   valZLvEl.textContent = lev.z.toFixed(1) + ' mm';                          // engine gap, always
+  // camera-measured plate state (approx.: pinhole guess for f, no lens distortion) -- display only, physics untouched
+  const M = FUS.meas, showMeas = isArActive && FUS.mode === 'both' && M.valid;
+  if (showMeas) valMeasEl.textContent = `Spalt gemessen ≈ ${M.gapMm.toFixed(1)} mm (Modell ${lev.z.toFixed(1)}) · Kipp ≈ ${M.tiltDeg.toFixed(1)}° · Dreh ≈ ${Math.round(M.spinRpm)} U/min`;
+  if (showMeas !== measShown) { measShown = showMeas; valMeasEl.style.display = showMeas ? 'block' : 'none'; }
   updateSpeedLabel();
   if (scaleNeedle) {
     const pct = Math.min(100, Math.max(0, (discThi - T_AMB_JS) / Math.max(1e-6, T_COLOR_HI - T_AMB_JS) * 100));
@@ -1048,10 +1082,10 @@ function updateTelemetry(time) {
   }
 }
 
-// ── AprilTag board tracking (WP-AR-APRILTAG) ───────────────────────────────────────
-// Marker = 2x2 board of tag36h11 tags (IDs 0-3), geometry in MARKER (baked from
-// gen_ar_marker.py, the SAME constants the printed PDF is drawn from).  Detector = the
-// official AprilTag C library (apriltag_wasm.js, WebAssembly, built by build_apriltag_wasm.py).
+// ── AprilTag board tracking (WP-AR-APRILTAG, two boards: WP-AR-DUAL) ─────────────────────
+// TWO markers: PLATE board (IDs 0-3, on the levitating plate) + BASE board (IDs 4-7, fixed), each a 2x2 board of
+// tag36h11 tags, geometry in MARKER (baked from gen_ar_marker.py, the SAME constants the printed PDF is drawn
+// from).  Detector = the official AprilTag C library (apriltag_wasm.js, WebAssembly, built by build_apriltag_wasm.py).
 // Pipeline per NEW video frame:
 //   scan (ROI crop while tracked, else full-frame search passes) -> gray into WASM heap
 //   -> apriltag_detector_detect (sub-pixel corners, refine_edges) -> gates (ID on board,
@@ -1059,8 +1093,9 @@ function updateTelemetry(time) {
 //   corners of all visible tags in board mm (1..4 tags; per-tag outlier rejection; reprojection
 //   RMS = confidence) -> IPPE-style two-solution plane pose (+ Gauss-Newton refinement) -> pick
 //   the solution by reprojection error / closeness to the filtered pose (planar ambiguity) ->
-//   jump hysteresis -> time-based One Euro filter (position mm + quaternion) -> twinRoot.
-// Rendering stays on setAnimationLoop; this only updates the pose target.
+//   jump hysteresis -> time-based One Euro filter (position mm + quaternion), ONE tracker instance per board.
+//   Fusion (trkFuse): mode both / baseOnly / plateOnly / hold / none -> targets for twinRoot (base) + plateRoot.
+// Rendering stays on setAnimationLoop; trkDisplay() turns targets into smoothed on-screen poses once per render frame.
 // Exposed as window.twinDebug.tracking for testing.
 const MARKER = __MARKER_JSON__;
 const TRK = {
@@ -1105,7 +1140,7 @@ const TRK = {
                             //   'tilt' = only the board-normal direction; the spin about the normal passes
                             //            through RAW (a fast-turning marker is followed instantly).  Spin is
                             //            the well-conditioned part of a planar pose, tilt the noisy/flip-prone one.
-                            //   'all'  = whole rotation (old behaviour: fast turns lag / are held back as jumps)
+                            //   'all'  = whole rotation (fast turns lag / are held back as jumps)
                             //   'none' = rotation fully raw, no rotation jump gate (tilt shimmer + flips show)
   ROT_MIN_CUTOFF_HZ: 1.5,   // rotation: idem
   ROT_BETA: 3.0,            // rotation: extra cutoff Hz per rad/s of angular speed
@@ -1117,34 +1152,57 @@ const TRK = {
   JUMP_DEG: 12.0,           // ... (or this many degrees away)
   ACCEPT_N: 3,              // ... until this many consecutive mutually-consistent ones arrive
   HOLD_MS: 800,             // keep the last pose this long with no usable detection
+  // ---- dual board (WP-AR-DUAL) ---------------------------------------------------------
+  // The BASE board (IDs 4-7) is static: its rotation is smoothed completely ('all').  Only the two rotation knobs
+  // below are overridden per board (tc()); the position cutoffs are shared, which keeps both overlays equally
+  // "laggy" under hand-held camera motion.
+  BASE_ROT_SMOOTHING: 'all',
+  BASE_ROT_MIN_CUTOFF_HZ: 4.0,  // the base board sits OFF the rig axis: its rotation noise/lag is multiplied by the lever arm (~200 mm: 0.3 deg lag = 1 mm), so it is smoothed LESS than the plate board
+  LIVE_MS: 150,             // a board counts as tracked NOW if its last accepted measurement is younger than this ...
+  LIVE_FRAMES: 3.5,         // ... or than this many detection frames (single-board crops measure a board only every 2-3 frames)
+  SEARCH_EVERY: 4,          // exactly one board tracked: every Nth frame is a full-frame pass (finds the OTHER board)
+  UNION_MIN_TAG_PX: 40,     // both boards tracked: one union crop only if a tag stays >= this many px, else single-board crops
+  RR_SEQ: ['plate', 'plate', 'base', 'joint'],   // single-board crop rhythm when no union crop fits (plate moves, base is static);
+                            // 'joint' = a union crop of both boards anyway: the only way to get a same-frame plate+base pair (gap / tilt / spin)
+  PLATE_HOLD_MS: 1500,      // base-only: plate drawn at its last measured pose in the rig this long, then at the model state
+  BLEND_TAU_MS: 250,        // pose offset decay after a mode / source switch (no visible hop)
+  SPIN_TAU_MS: 150, GAP_TAU_MS: 80,     // low-pass of the measured spin rate / gap
+  MEAS_VALID_MS: 500,       // measured plate state counts as valid this long after its last update (mode 'both' only; joint passes can be sparse)
+  CAL_PROV_N: 8,            // provisional (automatic) calibration: N consecutive both-board frames that agree (scatter limits below)
+  CAL_WINDOW_MS: 500, CAL_MIN_SAMPLES: 4, CAL_GAP_MS: 300, CAL_TIMEOUT_MS: 4000,   // manual capture: window / min frames in it / max hole / give up
+  CAL_MIN_CONF: 0.4,        // both boards need >= 2 tags and this confidence in every capture frame
+  CAL_MAX_JITTER_MM: 1.0, CAL_MAX_JITTER_DEG: 0.8,   // reject a capture (or provisional set) whose frame-to-frame scatter exceeds this
 };
 
-const TRK_S = {             // tracker state (reset() clears everything)
-  filt: null, pending: [], lastMeasT: 0, lastMultiT: -1e9, outline: null, tagPx: 0, shift: 0, searchTick: 0, roiMissRun: 0,
-  ntags: 0, flipsAvoided: 0, stats: null,
-};
+// One tracker instance per board.  role 'plate' = IDs 0-3 on the levitating plate, 'base' = IDs 4-7 fixed next to the rig.
+function trkNewBoard(role) {
+  const S = { role, ids: MARKER.boards[role].ids.slice(), epoch: 0 };
+  trkResetBoard(S);
+  return S;
+}
+const BOARDS = { plate: trkNewBoard('plate'), base: trkNewBoard('base') };
+const TRK_G = { searchTick: 0, rrTick: 0, frameTick: 0, lastT: null, dtMs: 33.0 };   // scheduler state shared by both boards (+ detection period, EMA)
 function trkNewStats() {
   return { frames: 0, detections: 0, accepted: 0, held: 0, jumpsAccepted: 0, roiHits: 0, roiMiss: 0, passHits: [0, 0],
            tagsSeen: [0, 0, 0, 0, 0], misses: 0, ambiguous: 0, ambigSwitched: 0, tagsDropped: 0,
            rejected: { residual: 0, convex: 0, fit: 0, pose: 0, single: 0, gate: 0 },
            scanMs: 0, detectMs: 0, procMs: 0, workerFrames: 0, workerDropped: 0 };
 }
-TRK_S.stats = trkNewStats();
+let STATS = trkNewStats();
 
 // ── board model (mm, x right, y UP, origin = board centre) ─────────────────────────
 // Corner order = AprilTag's p[0..3] for an upright tag: bottom-left, bottom-right, top-right, top-left.
-const _boardCache = { edge: -1, tags: null, outline: null };
-function boardModel(edgeMm) {
-  if (_boardCache.edge === edgeMm) return _boardCache;
-  const half = edgeMm * (1.0 + MARKER.gapRatio) / 2.0, tags = {};
-  for (const id of MARKER.ids) {
-    const u = MARKER.centersUnit[id], cx = u[0] * half, cy = u[1] * half;
-    tags[id] = MARKER.cornerUnit.map(c => [cx + c[0] * edgeMm / 2.0, cy + c[1] * edgeMm / 2.0]);
+const _boardCache = {};
+function boardModel(edgeMm, role) {
+  const c = _boardCache[role];
+  if (c && c.edge === edgeMm) return c;
+  const half = edgeMm * (1.0 + MARKER.gapRatio) / 2.0, tags = {}, B = MARKER.boards[role];
+  for (const id of B.ids) {
+    const u = B.centersUnit[id], cx = u[0] * half, cy = u[1] * half;
+    tags[id] = MARKER.cornerUnit.map(q => [cx + q[0] * edgeMm / 2.0, cy + q[1] * edgeMm / 2.0]);
   }
   const b = edgeMm * (2.0 + MARKER.gapRatio + 2.0 * MARKER.marginRatio) / 2.0;   // board half-side incl. white margin
-  _boardCache.edge = edgeMm; _boardCache.tags = tags;
-  _boardCache.outline = [[-b, b], [b, b], [b, -b], [-b, -b]];
-  return _boardCache;
+  return (_boardCache[role] = { edge: edgeMm, tags, outline: [[-b, b], [b, b], [b, -b], [-b, -b]] });
 }
 
 // ── small math ───────────────────────────────────────────────────────────────────────
@@ -1304,9 +1362,10 @@ function quatSwingTwistZ(qa, qb) {
   return { swing, twist, tilt: 2.0 * Math.acos(Math.min(1.0, Math.abs(swing[3]))) };
 }
 // Rotation distance [rad] as seen by the smoothing / jump gate (see TRK.ROT_SMOOTHING).
-function trkRotDist(qa, qb) {
-  if (TRK.ROT_SMOOTHING === 'none') return 0.0;
-  if (TRK.ROT_SMOOTHING === 'tilt') return quatSwingTwistZ(qa, qb).tilt;
+function trkRotDist(qa, qb, S) {
+  const mode = tc(S, 'ROT_SMOOTHING');
+  if (mode === 'none') return 0.0;
+  if (mode === 'tilt') return quatSwingTwistZ(qa, qb).tilt;
   return quatAngle(qa, qb);
 }
 
@@ -1428,8 +1487,8 @@ function poseToThree(P) {
 // ── board homography fit over all corners of the (gated) detections ───────────────────
 // dets: [{id, corners:[[x,y]x4] (video px), margin, hamming}] -> {H, residual|null, npts,
 // ntags, used[], obj[], img[], outline (video px)} or null.
-function fitBoard(dets, edgeMm) {
-  const M = boardModel(edgeMm);
+function fitBoard(dets, edgeMm, role) {
+  const M = boardModel(edgeMm, role);
   const fitSet = set => {
     const src = [], dst = [];
     for (const d of set) for (let k = 0; k < 4; k++) { src.push(M.tags[d.id][k]); dst.push(d.corners[k]); }
@@ -1449,7 +1508,7 @@ function fitBoard(dets, edgeMm) {
       const sub = fitSet(dets.filter((_, j) => j !== i));
       if (sub && (!best || sub.residual < best.residual)) best = sub;
     }
-    if (best && best.residual < 0.5 * fit.residual) { fit = best; TRK_S.stats.tagsDropped++; }
+    if (best && best.residual < 0.5 * fit.residual) { fit = best; STATS.tagsDropped++; }
   }
   return fit;
 }
@@ -1459,9 +1518,10 @@ function lpAlpha(cutoffHz, dt) { const tau = 1.0 / (2.0 * Math.PI * cutoffHz); r
 function filtInit(pos, quat, t) {
   return { pos: pos.slice(), quat: quat.slice(), vel: 0.0, velz: 0.0, wvel: 0.0, t };
 }
-function filtUpdate(F, pos, quat, t, conf) {
+function filtUpdate(F, pos, quat, t, conf, S) {
   const dt = Math.min(TRK.DT_MAX_S, Math.max(TRK.DT_MIN_S, (t - F.t) / 1000.0));
   const cs = TRK.CONF_MIN_SCALE + (1.0 - TRK.CONF_MIN_SCALE) * conf;
+  const rotMode = tc(S, 'ROT_SMOOTHING');
   // lateral position: vector One Euro (one cutoff from the lateral speed norm)
   const spL = Math.hypot(pos[0] - F.pos[0], pos[1] - F.pos[1]) / dt;
   F.vel += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (spL - F.vel);
@@ -1472,14 +1532,14 @@ function filtUpdate(F, pos, quat, t, conf) {
   const spZ = Math.abs(pos[2] - F.pos[2]) / dt;
   F.velz += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (spZ - F.velz);
   F.pos[2] += lpAlpha(TRK.POS_Z_MIN_CUTOFF_HZ * cs + TRK.POS_Z_BETA * F.velz, dt) * (pos[2] - F.pos[2]);
-  // rotation: same on the geodesic -- of the smoothed part only (TRK.ROT_SMOOTHING)
-  if (TRK.ROT_SMOOTHING === 'none') {
+  // rotation: same on the geodesic -- of the smoothed part only (ROT_SMOOTHING)
+  if (rotMode === 'none') {
     F.wvel = 0.0; F.quat = quat.slice();
   } else {
-    const w = trkRotDist(F.quat, quat) / dt;
+    const w = trkRotDist(F.quat, quat, S) / dt;
     F.wvel += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (w - F.wvel);
-    const aR = lpAlpha(TRK.ROT_MIN_CUTOFF_HZ * cs + TRK.ROT_BETA * F.wvel, dt);
-    if (TRK.ROT_SMOOTHING === 'tilt') {                     // smooth the tilt, take the spin as measured
+    const aR = lpAlpha(tc(S, 'ROT_MIN_CUTOFF_HZ') * cs + TRK.ROT_BETA * F.wvel, dt);
+    if (rotMode === 'tilt') {                               // smooth the tilt, take the spin as measured
       const st = quatSwingTwistZ(F.quat, quat);
       const q = quatMul(quatMul(F.quat, quatSlerp([0, 0, 0, 1], st.swing, aR)), st.twist);
       const n = Math.hypot(q[0], q[1], q[2], q[3]);
@@ -1491,35 +1551,39 @@ function filtUpdate(F, pos, quat, t, conf) {
   F.t = t;
 }
 
-// ── tracker core ────────────────────────────────────────────────────────────────────
+// ── tracker core (one instance per board) ───────────────────────────────────────────
+// Per-board parameter lookup for the rotation knobs: the base board overrides them via BASE_<KEY> (ROT_SMOOTHING, ROT_MIN_CUTOFF_HZ).
+function tc(S, key) {
+  if (S.role === 'base') { const v = TRK['BASE_' + key]; if (v !== undefined) return v; }
+  return TRK[key];
+}
+function trkResetBoard(S) {
+  S.filt = null; S.pending = []; S.lastMeasT = 0; S.lastMultiT = -1e9; S.outline = null; S.tagPx = 0;
+  S.roiMissRun = 0; S.shift = 0; S.ntags = 0; S.raw = null; S.epoch++;
+}
 function trkReset() {
-  TRK_S.filt = null; TRK_S.pending = []; TRK_S.lastMeasT = 0; TRK_S.lastMultiT = -1e9; TRK_S.outline = null; TRK_S.tagPx = 0;
-  TRK_S.roiMissRun = 0; TRK_S.shift = 0; TRK_S.ntags = 0;
+  for (const r in BOARDS) trkResetBoard(BOARDS[r]);
+  TRK_G.searchTick = 0; TRK_G.rrTick = 0; TRK_G.frameTick = 0; TRK_G.lastT = null; TRK_G.dtMs = 33.0;
+  fusReset(); dispReset();
 }
-function trkResult(status, extra) {
-  const F = TRK_S.filt;
-  return Object.assign({
-    status, tracked: !!F,
-    pos: F ? F.pos.slice() : null, quat: F ? F.quat.slice() : null,
-    fresh: status === 'accepted' || status === 'jump-accepted', ntags: TRK_S.ntags
-  }, extra || {});
+function trkResult(S, status, extra) {
+  const F = S.filt;
+  return Object.assign({ status, pos: F ? F.pos.slice() : null, quat: F ? F.quat.slice() : null, ntags: S.ntags }, extra || {});
 }
-// Called when a frame gave no usable detection.  Returns true once tracking is LOST.
-function trkMiss(tMs) {
-  TRK_S.stats.misses++;
-  if (TRK_S.filt && tMs - TRK_S.lastMeasT > TRK.HOLD_MS) { trkReset(); return true; }
-  return !TRK_S.filt;
+// No usable pose this frame: expire the held pose after HOLD_MS.
+function trkExpire(S, tMs) {
+  if (S.filt && tMs - S.lastMeasT > TRK.HOLD_MS) trkResetBoard(S);
 }
-function trkReject(reason, tMs, extra) {
-  TRK_S.stats.rejected[reason]++;
-  const lost = trkMiss(tMs);
-  return trkResult('rejected:' + reason, Object.assign({ lost }, extra || {}));
+function trkMiss(S, tMs) { STATS.misses++; trkExpire(S, tMs); }
+function trkReject(S, reason, tMs, extra) {
+  STATS.rejected[reason]++;
+  trkMiss(S, tMs);
+  return trkResult(S, 'rejected:' + reason, extra);
 }
-// Gate raw detections: on-board ID, hamming, decision margin, area, convexity; one per ID (best margin).
+// Gate raw detections (already restricted to this board's IDs): hamming, decision margin, area, convexity; one per ID (best margin).
 function trkGateDetections(raw) {
   const best = {};
   for (const d of raw) {
-    if (!(d.id in boardModel(markerSizeMm).tags)) continue;
     if (d.hamming > TRK.MAX_HAMMING || d.margin < TRK.MIN_MARGIN) continue;
     if (!isConvex(d.corners) || Math.abs(polyArea(d.corners)) < TRK.MIN_TAG_AREA_PX) continue;
     if (!best[d.id] || d.margin > best[d.id].margin) best[d.id] = d;
@@ -1527,7 +1591,7 @@ function trkGateDetections(raw) {
   return Object.values(best);
 }
 // Choose between the two IPPE solutions (planar ambiguity).
-function trkChoosePose(cands, obj, img, f, cx, cy) {
+function trkChoosePose(S, cands, obj, img, f, cx, cy) {
   const sols = [];
   for (const c of cands) {
     const r = TRK.GN_ITERS > 0 ? refinePose(c, obj, img, f, cx, cy, TRK.GN_ITERS)
@@ -1539,101 +1603,123 @@ function trkChoosePose(cands, obj, img, f, cx, cy) {
   sols.sort((a, b) => a.err - b.err);
   let pick = sols[0];
   if (sols.length > 1) {
-    const F = TRK_S.filt;
+    const F = S.filt;
     if (sols[1].err < sols[0].err * TRK.AMBIG_ERR_RATIO + TRK.AMBIG_ERR_PX) {       // ambiguous
-      TRK_S.stats.ambiguous++;
+      STATS.ambiguous++;
       if (F) {
         const a0 = quatAngle(F.quat, sols[0].quat), a1 = quatAngle(F.quat, sols[1].quat);
-        if (a1 < a0) { pick = sols[1]; TRK_S.stats.ambigSwitched++; }
+        if (a1 < a0) { pick = sols[1]; STATS.ambigSwitched++; }
       }
     }
   }
   return pick;
 }
 
-// dets: raw detections IN VIDEO PX [{id, hamming, margin, corners}], tMs: frame timestamp, vw,vh: video size.
-function trkProcessDetection(dets, tMs, vw, vh) {
-  const st = TRK_S.stats, t0 = performance.now();
+// One board, one frame.  dets: this board's raw detections IN VIDEO PX [{id, hamming, margin, corners}].
+function trkProcessBoard(S, dets, tMs, vw, vh) {
+  const st = STATS, t0 = performance.now();
   st.detections++;
   const done = r => { st.procMs += performance.now() - t0; return r; };
   const good = trkGateDetections(dets);
-  if (!good.length) return done(trkReject('gate', tMs));
-  let fit = fitBoard(good, markerSizeMm);
-  if (!fit) return done(trkReject('fit', tMs));
+  if (!good.length) return done(trkReject(S, 'gate', tMs));
+  let fit = fitBoard(good, markerSizeMm, S.role);
+  if (!fit) return done(trkReject(S, 'fit', tMs));
   const ex = { residualPx: fit.residual, npts: fit.npts, ntagsFit: fit.ntags };
   if (fit.residual !== null && fit.residual > TRK.MAX_RESIDUAL_PX) {
     // two tags that disagree: try each alone, keep the one consistent with the filtered pose (needs a prior)
-    if (fit.ntags === 2 && TRK_S.filt) {
+    if (fit.ntags === 2 && S.filt) {
       const f0 = vh * TRK.FOCAL_PER_VIDEO_H;
       let bestFit = null, bestA = 1e9;
       for (const d of fit.used) {
-        const one = fitBoard(good.filter(g => g.id === d), markerSizeMm);
+        const one = fitBoard(good.filter(g => g.id === d), markerSizeMm, S.role);
         const cs = one && ippePoses(one.H, f0, vw / 2, vh / 2);
         if (!cs || !cs.length) continue;
-        const a = Math.min(...cs.map(c => trkRotDist(TRK_S.filt.quat, poseToThree(c).quat)));
+        const a = Math.min(...cs.map(c => trkRotDist(S.filt.quat, poseToThree(c).quat, S)));
         if (a < bestA) { bestA = a; bestFit = one; }
       }
-      if (bestFit && bestA * 180 / Math.PI < TRK.JUMP_DEG) fit = bestFit; else return done(trkReject('residual', tMs, ex));
+      if (bestFit && bestA * 180 / Math.PI < TRK.JUMP_DEG) fit = bestFit; else return done(trkReject(S, 'residual', tMs, ex));
     } else {
-      return done(trkReject('residual', tMs, ex));
+      return done(trkReject(S, 'residual', tMs, ex));
     }
   }
-  if (Math.abs(polyArea(fit.outline)) < TRK.MIN_TAG_AREA_PX * 4) return done(trkReject('convex', tMs, ex));
-  if (!isConvex(fit.outline)) return done(trkReject('convex', tMs, ex));
-  if (fit.ntags === 1 && !TRK_S.filt && TRK.MIN_TAGS_ACQUIRE > 1) return done(trkReject('single', tMs, ex));
-  if (fit.ntags === 1 && TRK_S.filt && tMs - TRK_S.lastMultiT < TRK.SINGLE_TAG_GRACE_MS) return done(trkReject('single', tMs, ex));
+  if (Math.abs(polyArea(fit.outline)) < TRK.MIN_TAG_AREA_PX * 4) return done(trkReject(S, 'convex', tMs, ex));
+  if (!isConvex(fit.outline)) return done(trkReject(S, 'convex', tMs, ex));
+  if (fit.ntags === 1 && !S.filt && TRK.MIN_TAGS_ACQUIRE > 1) return done(trkReject(S, 'single', tMs, ex));
+  if (fit.ntags === 1 && S.filt && tMs - S.lastMultiT < TRK.SINGLE_TAG_GRACE_MS) return done(trkReject(S, 'single', tMs, ex));
   const f = vh * TRK.FOCAL_PER_VIDEO_H, cx = vw / 2.0, cy = vh / 2.0;
   const cands = ippePoses(fit.H, f, cx, cy);
-  const pose = cands.length ? trkChoosePose(cands, fit.obj, fit.img, f, cx, cy) : null;
-  if (!pose) return done(trkReject('pose', tMs, ex));
+  const pose = cands.length ? trkChoosePose(S, cands, fit.obj, fit.img, f, cx, cy) : null;
+  if (!pose) return done(trkReject(S, 'pose', tMs, ex));
   ex.poseErrPx = pose.err;
   st.tagsSeen[Math.min(4, fit.ntags)]++;
 
-  if (TRK_S.outline) {                                       // frame-to-frame outline shift (video px)
-    const c0 = TRK_S.outline, c1 = fit.outline;
+  if (S.outline) {                                           // frame-to-frame outline shift (video px)
+    const c0 = S.outline, c1 = fit.outline;
     let sx = 0, sy = 0;
     for (let i = 0; i < 4; i++) { sx += c1[i][0] - c0[i][0]; sy += c1[i][1] - c0[i][1]; }
-    TRK_S.shift = 0.5 * TRK_S.shift + 0.5 * Math.hypot(sx, sy) / 4;
+    S.shift = 0.5 * S.shift + 0.5 * Math.hypot(sx, sy) / 4;
   }
-  TRK_S.outline = fit.outline;
-  TRK_S.tagPx = Math.sqrt(Math.abs(polyArea(fit.outline))) / (MARKER.gapRatio + 2.0 + 2.0 * MARKER.marginRatio);   // tag edge, video px
-  TRK_S.ntags = fit.ntags;
+  S.outline = fit.outline;
+  S.tagPx = Math.sqrt(Math.abs(polyArea(fit.outline))) / (MARKER.gapRatio + 2.0 + 2.0 * MARKER.marginRatio);   // tag edge, video px
+  S.ntags = fit.ntags;
   const conf = fit.residual === null ? TRK.SINGLE_TAG_CONF
     : Math.max(0, Math.min(1, 1 - (fit.residual - TRK.GOOD_RESIDUAL_PX) / (TRK.MAX_RESIDUAL_PX - TRK.GOOD_RESIDUAL_PX)));
   ex.conf = conf; ex.ntags = fit.ntags;
   // stale filter (long gap): start over instead of blending with an old pose
-  if (TRK_S.filt && tMs - TRK_S.lastMeasT > TRK.HOLD_MS) { TRK_S.filt = null; TRK_S.pending = []; }
-  TRK_S.lastMeasT = tMs;
-  if (fit.ntags >= 2) TRK_S.lastMultiT = tMs;
+  if (S.filt && tMs - S.lastMeasT > TRK.HOLD_MS) { S.filt = null; S.pending = []; }
+  S.lastMeasT = tMs;
+  if (fit.ntags >= 2) S.lastMultiT = tMs;
   let status = 'accepted';
-  if (!TRK_S.filt) {                                        // initial snap
-    TRK_S.filt = filtInit(pose.pos, pose.quat, tMs);
+  const snap = () => { S.filt = filtInit(pose.pos, pose.quat, tMs); S.epoch++; };
+  if (!S.filt) {                                            // initial snap
+    snap();
     st.accepted++;
   } else {
-    const F = TRK_S.filt;
+    const F = S.filt;
     const dP = Math.hypot(pose.pos[0] - F.pos[0], pose.pos[1] - F.pos[1], pose.pos[2] - F.pos[2]);
-    const dR = trkRotDist(F.quat, pose.quat) * 180.0 / Math.PI;   // smoothed part only (spin is free in 'tilt' mode)
+    const dR = trkRotDist(F.quat, pose.quat, S) * 180.0 / Math.PI;   // smoothed part only (spin is free in 'tilt' mode)
     if (dP > TRK.JUMP_MM || dR > TRK.JUMP_DEG) {
-      const pend = TRK_S.pending, prev = pend.length ? pend[pend.length - 1] : null;
+      const pend = S.pending, prev = pend.length ? pend[pend.length - 1] : null;
       const cons = prev &&
         Math.hypot(pose.pos[0] - prev.pos[0], pose.pos[1] - prev.pos[1], pose.pos[2] - prev.pos[2]) < TRK.JUMP_MM &&
-        trkRotDist(prev.quat, pose.quat) * 180.0 / Math.PI < TRK.JUMP_DEG;
-      if (cons) pend.push({ pos: pose.pos, quat: pose.quat }); else TRK_S.pending = [{ pos: pose.pos, quat: pose.quat }];
-      if (TRK_S.pending.length >= TRK.ACCEPT_N) {           // persistent -> real move: re-converge
-        TRK_S.filt = filtInit(pose.pos, pose.quat, tMs);
-        TRK_S.pending = [];
+        trkRotDist(prev.quat, pose.quat, S) * 180.0 / Math.PI < TRK.JUMP_DEG;
+      if (cons) pend.push({ pos: pose.pos, quat: pose.quat }); else S.pending = [{ pos: pose.pos, quat: pose.quat }];
+      if (S.pending.length >= TRK.ACCEPT_N) {               // persistent -> real move: re-converge
+        snap();
+        S.pending = [];
         st.jumpsAccepted++; status = 'jump-accepted';
       } else {
         st.held++; status = 'held';
         F.t = tMs;                                          // keep dt sane for the next update
       }
     } else {
-      TRK_S.pending = [];
-      filtUpdate(F, pose.pos, pose.quat, tMs, conf);
+      S.pending = [];
+      filtUpdate(F, pose.pos, pose.quat, tMs, conf, S);
       st.accepted++;
     }
   }
-  return done(trkResult(status, ex));
+  if (status !== 'held') {                                  // unfiltered pose of THIS frame (calibration / measured plate state)
+    S.raw = { pos: pose.pos, quat: pose.quat, conf, ntags: fit.ntags, t: tMs };
+  }
+  return done(trkResult(S, status, ex));
+}
+
+// One detector call, all boards: partition by tag ID, run every board's tracker, then fuse.
+// roles = boards that were inside the scanned image (others are neither hit nor missed this frame).
+// Returns the PLATE board's result + .base (base board's result) + .mode.
+function trkProcessDetections(dets, tMs, vw, vh, roles) {
+  const res = {};
+  if (TRK_G.lastT !== null && tMs > TRK_G.lastT) TRK_G.dtMs += 0.2 * (Math.min(1000, tMs - TRK_G.lastT) - TRK_G.dtMs);   // detection period (EMA)
+  TRK_G.lastT = tMs;
+  for (const role of ['plate', 'base']) {
+    const S = BOARDS[role];
+    if (roles && !roles.includes(role)) { trkExpire(S, tMs); res[role] = trkResult(S, 'skipped'); continue; }
+    const part = dets.filter(d => S.ids.includes(d.id));
+    if (!part.length) { trkMiss(S, tMs); res[role] = trkResult(S, 'nodetect'); }
+    else res[role] = trkProcessBoard(S, part, tMs, vw, vh);
+  }
+  trkFuse(tMs);
+  return Object.assign({}, res.plate, { base: res.base, mode: FUS.mode });
 }
 
 // ── AprilTag WASM detector (main thread or Web Worker) ────────────────────────────────
@@ -1698,8 +1784,8 @@ function trkInitWorker() {
       if (m.type === 'error') { fail(m.msg); return; }
       const p = ATW.pending; ATW.busy = false; ATW.pending = null;
       if (!p || m.id !== p.id) return;
-      TRK_S.stats.detectMs += m.ms; TRK_S.stats.workerFrames++;
-      trkApply(trkHandle(p.plan, m.dets, p.tMs, p.vw, p.vh));
+      STATS.detectMs += m.ms; STATS.workerFrames++;
+      trkHandle(p.plan, m.dets, p.tMs, p.vw, p.vh); trkApply();
     };
     w.onerror = ev => fail(ev && ev.message);
   } catch (e) { ATW = null; trkInitMainDetector(); }
@@ -1726,55 +1812,79 @@ roiCanvas.width = TRK.ROI_MAX_PX; roiCanvas.height = TRK.ROI_MAX_PX;
 const roiCtx = roiCanvas.getContext('2d', { willReadFrequently: true });
 
 let isArActive = false;
-let isTracking = false;
 
-// Crop around the last board outline, downscaled (never up) so a tag is ~ROI_TAG_TARGET_PX wide.
-function trkScanRoi(src, vw, vh, quad) {
+// Crop around the last board outline(s) (union of several boards), downscaled (never up) so the LARGEST tag is
+// ~ROI_TAG_TARGET_PX wide.  Single board: square crop; union: the natural rectangle.
+function trkRoiGeom(vw, vh, quads, shift, tagPx, square) {
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-  for (const q of quad) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
-  const side = Math.max(x1 - x0, y1 - y0) * (1.0 + 2.0 * TRK.ROI_MARGIN) + 2.0 * TRK.ROI_MOTION_GAIN * TRK_S.shift;
+  for (const quad of quads) for (const q of quad) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
+  const grow = 1.0 + 2.0 * TRK.ROI_MARGIN, mot = 2.0 * TRK.ROI_MOTION_GAIN * shift;
+  let w0 = (x1 - x0) * grow + mot, h0 = (y1 - y0) * grow + mot;
+  if (square) w0 = h0 = Math.max(w0, h0);
+  const rw = Math.max(48, Math.min(vw, Math.round(w0))), rh = Math.max(48, Math.min(vh, Math.round(h0)));
   const cx = 0.5 * (x0 + x1), cy = 0.5 * (y0 + y1);
-  const rw = Math.max(48, Math.min(vw, Math.round(side))), rh = Math.max(48, Math.min(vh, Math.round(side)));
   const rx = Math.round(Math.max(0, Math.min(vw - rw, cx - rw / 2)));
   const ry = Math.round(Math.max(0, Math.min(vh - rh, cy - rh / 2)));
-  const kTag = TRK_S.tagPx > 1 ? TRK.ROI_TAG_TARGET_PX / TRK_S.tagPx : 1.0;
+  const kTag = tagPx > 1 ? TRK.ROI_TAG_TARGET_PX / tagPx : 1.0;
   const k = Math.max(0.25, Math.min(1.0, kTag, TRK.ROI_MAX_PX / Math.max(rw, rh)));
-  const dw = Math.max(1, Math.round(rw * k)), dh = Math.max(1, Math.round(rh * k));
-  roiCtx.drawImage(src, rx, ry, rw, rh, 0, 0, dw, dh);
-  const id = roiCtx.getImageData(0, 0, dw, dh);
-  return { data: id.data, w: dw, h: dh, sx: dw / rw, sy: dh / rh, ox: rx, oy: ry };
+  return { rx, ry, rw, rh, k, dw: Math.max(1, Math.round(rw * k)), dh: Math.max(1, Math.round(rh * k)) };
 }
-// Decide what to scan for this frame and take the scan: the tracked ROI while it keeps hitting,
-// else the next full-frame search pass (cycled: cheap one first, sensitive native-res one next).
+function trkScanRoi(src, g) {
+  roiCtx.drawImage(src, g.rx, g.ry, g.rw, g.rh, 0, 0, g.dw, g.dh);
+  const id = roiCtx.getImageData(0, 0, g.dw, g.dh);
+  return { data: id.data, w: g.dw, h: g.dh, sx: g.dw / g.rw, sy: g.dh / g.rh, ox: g.rx, oy: g.ry };
+}
+function trkRoiOk(S) { return TRK.ROI_TRACKING && S.filt && S.outline && S.roiMissRun < TRK.ROI_MISS_FALLBACK; }
+// Decide what to scan for this frame and take the scan.
+//   no board tracked        -> full-frame search pass (cycled: cheap one first, sensitive native-res one next)
+//   one board tracked       -> its ROI; every SEARCH_EVERY-th frame a full-frame pass instead (finds the OTHER board,
+//                              and re-measures the tracked one too)
+//   both tracked            -> ONE union ROI while a tag stays >= UNION_MIN_TAG_PX after downscaling, else single-board
+//                              ROIs in the RR_SEQ rhythm (plate more often: it moves) with a union ROI ('joint') every few frames;
+//                              no (or only a provisional) calibration yet -> always the union ROI (calibration needs same-frame pairs)
+//   calibration capture on  -> native-res full-frame pass (both boards in the SAME detection)
 function trkPlan(src, vw, vh) {
-  const t0 = performance.now();
-  let plan;
-  if (TRK.ROI_TRACKING && TRK_S.filt && TRK_S.outline && TRK_S.roiMissRun < TRK.ROI_MISS_FALLBACK) {
-    plan = { mode: 'roi', pi: -1, dec: TRK.ROI_DECIMATE, img: trkScanRoi(src, vw, vh, TRK_S.outline) };
-  } else {
-    const pi = TRK_S.searchTick++ % TRK.SEARCH_PASSES.length, P = TRK.SEARCH_PASSES[pi];
-    plan = { mode: 'search', pi, dec: P.dec, img: scanFull(src, vw, vh, P.long) };
+  const t0 = performance.now(), P = BOARDS.plate, B = BOARDS.base;
+  const ok = ['plate', 'base'].filter(r => trkRoiOk(BOARDS[r]));
+  TRK_G.frameTick++;
+  let plan = null;
+  if (!calBusy() && ok.length) {
+    let roles = null, g = null;
+    if (ok.length === 2) {
+      const sh = Math.max(P.shift, B.shift), tpx = Math.max(P.tagPx, B.tagPx);
+      const gu = trkRoiGeom(vw, vh, [P.outline, B.outline], sh, tpx, false);
+      const step = (!FUS.cal || FUS.cal.provisional || Math.min(P.tagPx, B.tagPx) * gu.k >= TRK.UNION_MIN_TAG_PX)
+        ? 'joint' : TRK.RR_SEQ[TRK_G.rrTick++ % TRK.RR_SEQ.length];
+      if (step === 'joint') { roles = ['plate', 'base']; g = gu; } else roles = [step];
+    } else if (TRK_G.frameTick % TRK.SEARCH_EVERY !== 0) roles = ok;
+    if (roles) {
+      if (!g) { const S = BOARDS[roles[0]]; g = trkRoiGeom(vw, vh, [S.outline], S.shift, S.tagPx, true); }
+      plan = { mode: 'roi', roles, pi: -1, dec: TRK.ROI_DECIMATE, img: trkScanRoi(src, g) };
+    }
   }
-  TRK_S.stats.scanMs += performance.now() - t0;
+  if (!plan) {
+    const pi = calBusy() ? TRK.SEARCH_PASSES.length - 1 : TRK_G.searchTick++ % TRK.SEARCH_PASSES.length, Pp = TRK.SEARCH_PASSES[pi];
+    plan = { mode: 'search', roles: ['plate', 'base'], pi, dec: Pp.dec, img: scanFull(src, vw, vh, Pp.long) };
+  }
+  STATS.scanMs += performance.now() - t0;
   return plan;
 }
 // Book-keeping + tracker update for one finished detection (dets in VIDEO px).
 function trkHandle(plan, dets, tMs, vw, vh) {
-  const st = TRK_S.stats;
-  if (plan.mode === 'roi') {
-    if (dets.length) { st.roiHits++; TRK_S.roiMissRun = 0; } else { st.roiMiss++; TRK_S.roiMissRun++; }
-  } else if (dets.length) { st.passHits[plan.pi] = (st.passHits[plan.pi] || 0) + 1; TRK_S.roiMissRun = 0; }
-  if (!dets.length) {
-    const lost = trkMiss(tMs);
-    return trkResult('nodetect', { lost });
+  const st = STATS;
+  for (const role of plan.roles) {
+    const S = BOARDS[role], has = dets.some(d => S.ids.includes(d.id));
+    if (plan.mode === 'roi') {
+      if (has) { st.roiHits++; S.roiMissRun = 0; } else { st.roiMiss++; S.roiMissRun++; }
+    } else if (has) { st.passHits[plan.pi] = (st.passHits[plan.pi] || 0) + 1; S.roiMissRun = 0; }
   }
-  return trkProcessDetection(dets, tMs, vw, vh);
+  return trkProcessDetections(dets, tMs, vw, vh, plan.roles);
 }
 // SYNCHRONOUS pipeline on the main-thread detector (tests / fallback): plan -> detect -> handle.
 function trkProcessFrame(src, tMs, vw, vh) {
-  const st = TRK_S.stats;
+  const st = STATS;
   st.frames++;
-  if (!AT) return trkResult('nolib');
+  if (!AT) return Object.assign(trkResult(BOARDS.plate, 'nolib'), { mode: FUS.mode });
   const plan = trkPlan(src, vw, vh), im = plan.img, t0 = performance.now();
   const dets = atDetectCore(AT.M, AT.st, im.data, im.w, im.h, plan.dec, TRK.QUAD_SIGMA, TRK.DECODE_SHARPENING, im.sx, im.sy, im.ox, im.oy);
   st.detectMs += performance.now() - t0;
@@ -1782,7 +1892,7 @@ function trkProcessFrame(src, tMs, vw, vh) {
 }
 // ASYNC pipeline (worker): scan on the main thread, detect off-thread; one frame in flight, newer frames are dropped meanwhile.
 function trkSubmitFrame(src, tMs, vw, vh) {
-  const st = TRK_S.stats;
+  const st = STATS;
   st.frames++;
   if (!ATW.ready || ATW.busy) { if (ATW.ready) st.workerDropped++; return; }
   const plan = trkPlan(src, vw, vh), im = plan.img;
@@ -1794,28 +1904,301 @@ function trkSubmitFrame(src, tMs, vw, vh) {
 
 trkInitWorker();
 
-// Apply a tracker result to the scene + badge
-let badgeTags = -1;
-function trkApply(res) {
-  if (res.tracked) {
-    if (res.fresh) {
-      twinRoot.position.set(res.pos[0], res.pos[1], res.pos[2]);
-      twinRoot.quaternion.set(res.quat[0], res.quat[1], res.quat[2], res.quat[3]);
+// ── Dual-board fusion (WP-AR-DUAL) ──────────────────────────────────────────────────────
+// PLATE board (IDs 0-3) is stuck on the real plate and spins / lifts / tilts with it; BASE board (IDs 4-7) is fixed
+// next to the rig.  A tag on the plate alone cannot tell "plate spins" from "camera orbits", the base board can.
+//   rig frame = the plate board's frame while the plate RESTS on the coils (origin = plate centre = rig axis,
+//   z = plate normal).  Calibration C = pose of the rig frame in the BASE board's frame (rigid, measured once).
+//   mode 'both'      base from B (+C), plate from P: measured position / tilt / spin
+//   mode 'baseOnly'  base from B; plate at its last measured pose in the rig for PLATE_HOLD_MS, then model state
+//   mode 'plateOnly' base from P: plane + lift along the normal, YAW LOCKED TO THE CAMERA (constant offset psi0
+//                    chosen so the yaw is continuous when the mode starts); plate from P
+//   mode 'hold'/'none' nothing live: keep the last poses until the trackers expire, then hide
+// Everything is a rigid transform {pos:[x,y,z] mm, quat:[x,y,z,w]} in the three.js camera frame.
+const ID_Q = [0, 0, 0, 1];
+function quatInv(q) { return [-q[0], -q[1], -q[2], q[3]]; }
+function quatRot(q, v) {                // rotate vector v by unit quaternion q
+  const x = q[0], y = q[1], z = q[2], w = q[3];
+  const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+  return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)];
+}
+function quatNorm(q) { const n = Math.hypot(q[0], q[1], q[2], q[3]) || 1; return [q[0] / n, q[1] / n, q[2] / n, q[3] / n]; }
+function xfMul(A, B) {                  // A * B : B expressed in A's parent frame
+  const p = quatRot(A.quat, B.pos);
+  return { pos: [A.pos[0] + p[0], A.pos[1] + p[1], A.pos[2] + p[2]], quat: quatNorm(quatMul(A.quat, B.quat)) };
+}
+function xfInv(A) { const qi = quatInv(A.quat), p = quatRot(qi, A.pos); return { pos: [-p[0], -p[1], -p[2]], quat: qi }; }
+function wrapPi(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a <= -Math.PI) a += 2 * Math.PI; return a; }
+const v3sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const v3add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const v3mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const v3dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const v3cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const v3len = a => Math.hypot(a[0], a[1], a[2]);
+const v3unit = a => { const n = v3len(a) || 1; return [a[0] / n, a[1] / n, a[2] / n]; };
+const boardXf = S => ({ pos: S.filt.pos.slice(), quat: S.filt.quat.slice() });          // filtered pose
+const rawXf = S => ({ pos: S.raw.pos.slice(), quat: S.raw.quat.slice() });              // this frame's unfiltered pose
+const trkLive = (S, tMs) => !!S.filt && !!S.raw && tMs - S.raw.t <= Math.max(TRK.LIVE_MS, TRK.LIVE_FRAMES * TRK_G.dtMs);   // dtMs: measured detection period
+
+// cal: { C:{pos,quat}, provisional, stored, jitterMm } = rig frame in the base board's frame; calRev counts calibration changes
+// (it is part of rigSrc, so a new calibration is blended in like any other source switch).  capture = manual calibration
+// in progress { t0, samples[], status, done }; prov = provisional accumulation { samples[] }; meas.t = -1e9: no measurement known.
+const FUS = { cal: null, calRev: 0 };
+function fusReset() {
+  Object.assign(FUS, {
+    mode: 'none', capture: null, prov: null, rigT: null, rigSrc: null, plateT: null, plateSrc: null, plateRel: null, plateRelT: -1e9, psi0: null,
+    spinPrev: null, meas: { valid: false, gapMm: 0, tiltDeg: 0, spinRpm: 0, t: -1e9 },
+  });
+}
+fusReset();
+
+// ---- camera-locked base (mode 'plateOnly') ------------------------------------------------
+// base x-axis = the camera's right vector projected into the plate plane, turned by the constant psi0.
+function camRightOnPlane(n) {
+  let x = v3sub([1, 0, 0], v3mul(n, n[0]));
+  if (v3len(x) < 0.2) x = v3sub([0, 1, 0], v3mul(n, n[1]));         // plate seen (nearly) edge-on to the camera's right: use up
+  return v3unit(x);
+}
+function fusPsi0(Px) {                  // yaw offset that makes the camera-locked rig continuous with what is displayed now
+  const n = quatRot(Px.quat, [0, 0, 1]), xc = camRightOnPlane(n);
+  const hist = DISP.rig || FUS.rigT;                                 // history: the rig as displayed; none -> the tag's own yaw
+  const xr = quatRot(hist ? hist.quat : Px.quat, [1, 0, 0]);
+  const xp = v3sub(xr, v3mul(n, v3dot(xr, n)));
+  if (v3len(xp) < 1e-6) return 0.0;
+  const u = v3unit(xp);
+  return Math.atan2(v3dot(n, v3cross(xc, u)), v3dot(xc, u));
+}
+function camLockedRig(Px, psi0, lift) {
+  const n = quatRot(Px.quat, [0, 0, 1]), xc = camRightOnPlane(n), c = Math.cos(psi0), s = Math.sin(psi0);
+  const x = v3add(v3mul(xc, c), v3mul(v3cross(n, xc), s)), y = v3cross(n, x);
+  const q = quatFromMat([[x[0], y[0], n[0]], [x[1], y[1], n[1]], [x[2], y[2], n[2]]]);
+  return { pos: v3sub(Px.pos, v3mul(n, lift)), quat: q };           // the plate sits `lift` above the base along its normal
+}
+
+// ---- calibration (base board -> rig frame) -----------------------------------------------
+const CAL_KEY = 'dt4tm.dualcal.v1';
+function calStore(op, val) {            // localStorage map {sizeMm: {C, jitterMm}}; every access guarded; 'set' returns true if the write succeeded
+  try {
+    const m = JSON.parse(localStorage.getItem(CAL_KEY) || '{}') || {};
+    if (op === 'get') return m[String(markerSizeMm)] || null;
+    if (op === 'set') m[String(markerSizeMm)] = val; else delete m[String(markerSizeMm)];
+    localStorage.setItem(CAL_KEY, JSON.stringify(m));
+    if (op === 'set') return true;
+  } catch (e) { /* private mode / blocked storage: run without persistence */ }
+  return null;
+}
+const calFin = (a, n) => Array.isArray(a) && a.length === n && a.every(x => typeof x === 'number' && isFinite(x));
+function calValid(e) {                  // storage can hold anything: trust a record only if it is well-formed
+  return !!e && typeof e === 'object' && !!e.C && calFin(e.C.pos, 3) && calFin(e.C.quat, 4) && Math.abs(Math.hypot(...e.C.quat) - 1) < 0.01
+    && (e.jitterMm == null || (typeof e.jitterMm === 'number' && isFinite(e.jitterMm)));
+}
+// The stored C contains the plate board's arbitrary rest yaw, so the manual alignment trims belong to it: stored and restored together.
+const calTrim = () => ({ x: manualXOffset, y: manualYOffset, z: manualZOffset, yaw: manualYawDeg, pitch: manualPitchDeg, scale: manualScale });
+function calApplyTrim(t) {
+  if (!t || !['x', 'y', 'z', 'yaw', 'pitch', 'scale'].every(k => typeof t[k] === 'number' && isFinite(t[k]))) return;
+  manualXOffset = t.x; manualYOffset = t.y; manualZOffset = t.z; manualYawDeg = t.yaw; manualPitchDeg = t.pitch;
+  manualScale = Math.min(1.4, Math.max(0.7, t.scale));
+  updateModelTransform();               // also refreshes the labels
+}
+function calSaveTrim() { const e = calStore('get'); if (calValid(e)) calStore('set', Object.assign(e, { trim: calTrim() })); }
+trimSaveHook = calSaveTrim;             // every later trim change updates the stored record (updateModelTransform runs it)
+function calLoad() {
+  let e = calStore('get');
+  if (e && !calValid(e)) { calStore('del'); e = null; }
+  FUS.cal = e ? { C: e.C, provisional: false, stored: true, jitterMm: e.jitterMm } : null;
+  FUS.calRev++; FUS.prov = null; FUS.capture = null;
+  if (e) calApplyTrim(e.trim);
+}
+function xfMean(list) {
+  const p = [0, 0, 0], q = [0, 0, 0, 0], q0 = list[0].quat;
+  for (const x of list) {
+    for (let i = 0; i < 3; i++) p[i] += x.pos[i] / list.length;
+    const s = quatDot(x.quat, q0) < 0 ? -1 : 1;
+    for (let i = 0; i < 4; i++) q[i] += s * x.quat[i];
+  }
+  return { pos: p, quat: quatNorm(q) };
+}
+function xfScatter(list, mean) {
+  let sp = 0, sr = 0;
+  for (const x of list) { sp += (x.pos[0] - mean.pos[0]) ** 2 + (x.pos[1] - mean.pos[1]) ** 2 + (x.pos[2] - mean.pos[2]) ** 2; const a = quatAngle(x.quat, mean.quat); sr += a * a; }
+  return { mm: Math.sqrt(sp / list.length), deg: Math.sqrt(sr / list.length) * 180 / Math.PI };
+}
+// Called on every frame in which BOTH boards were measured (same detection): raw relative pose C = B^-1 * P.
+function calFeed(tMs) {
+  const F = FUS, B = BOARDS.base, P = BOARDS.plate;
+  if (!(B.raw.ntags >= 2 && P.raw.ntags >= 2 && B.raw.conf >= TRK.CAL_MIN_CONF && P.raw.conf >= TRK.CAL_MIN_CONF)) return;
+  const C = xfMul(xfInv(rawXf(B)), rawXf(P));
+  const c = F.capture;
+  if (c && !c.done) {                                                // manual capture: sliding window, jitter-checked
+    if (c.samples.length && tMs - c.samples[c.samples.length - 1].t > TRK.CAL_GAP_MS) c.samples = [];
+    c.samples.push({ t: tMs, C });
+    while (c.samples.length && tMs - c.samples[0].t > TRK.CAL_WINDOW_MS) c.samples.shift();
+    if (c.samples.length >= TRK.CAL_MIN_SAMPLES && tMs - c.samples[0].t >= 0.8 * TRK.CAL_WINDOW_MS) {
+      const list = c.samples.map(s => s.C), mean = xfMean(list), sc = xfScatter(list, mean);
+      c.jitterMm = sc.mm;
+      if (sc.mm <= TRK.CAL_MAX_JITTER_MM && sc.deg <= TRK.CAL_MAX_JITTER_DEG) {
+        F.cal = { C: mean, provisional: false, stored: false, jitterMm: sc.mm }; F.calRev++;
+        F.cal.stored = calStore('set', { C: mean, jitterMm: sc.mm, trim: calTrim() }) === true;     // label says "(gespeichert)" only if the write worked
+        c.done = true; c.status = 'ok'; F.prov = null;
+      } else c.status = 'unruhig';
     }
-    twinRoot.visible = true;
-    if (!isTracking || res.ntags !== badgeTags) {
-      isTracking = true; badgeTags = res.ntags;
-      trackingBadge.textContent = `🟢 Prüfstand getrackt (${res.ntags}/${MARKER.ids.length} Tags)`;
-      trackingBadge.className = "tracked";
-      targetGuide.style.display = "none";
+  } else if (!F.cal) {                                               // first sighting: provisional = CAL_PROV_N CONSECUTIVE frames that agree
+    const p = F.prov || (F.prov = { samples: [] });                  // (a time gap drops the old ones; a spinning plate never agrees)
+    if (p.samples.length && tMs - p.samples[p.samples.length - 1].t > TRK.CAL_GAP_MS) p.samples = [];
+    p.samples.push({ t: tMs, C });
+    if (p.samples.length > TRK.CAL_PROV_N) p.samples.shift();
+    if (p.samples.length === TRK.CAL_PROV_N) {
+      const list = p.samples.map(s => s.C), mean = xfMean(list), sc = xfScatter(list, mean);
+      if (sc.mm <= TRK.CAL_MAX_JITTER_MM && sc.deg <= TRK.CAL_MAX_JITTER_DEG) { F.cal = { C: mean, provisional: true }; F.calRev++; F.prov = null; }
     }
-  } else if (isTracking) {
-    isTracking = false; badgeTags = -1;
-    trackingBadge.textContent = "🟡 Suche Marker...";
-    trackingBadge.className = "camera-on";
-    targetGuide.style.display = "block";
   }
 }
+function calTick(tMs) {                 // capture timeout
+  const c = FUS.capture;
+  if (!c || c.done) return;
+  if (c.t0 === null) c.t0 = tMs;
+  if (tMs - c.t0 > TRK.CAL_TIMEOUT_MS) { c.done = true; c.status = c.jitterMm !== null ? 'fail' : (c.samples.length ? 'sparse' : 'nomarker'); }   // fail = too much scatter, sparse = too few frames
+}
+function calBusy() { return !!(FUS.capture && !FUS.capture.done); }
+function calStart() { FUS.capture = { t0: null, samples: [], status: 'running', done: false, jitterMm: null }; calUi(); }
+function calClear() { calStore('del'); FUS.cal = null; FUS.calRev++; FUS.prov = null; FUS.capture = null; calUi(); }
+const calBtnEl = document.getElementById('btnCalBase'), calLblEl = document.getElementById('lblCalStatus');
+function calUi() {
+  const c = FUS.capture, F = FUS;
+  let t, cls = '';
+  let bTxt = '📏 Unterbau einmessen (Platte liegt auf)';
+  if (c && !c.done) { bTxt = `⏳ Messe … (${c.samples.length})`; t = c.status === 'unruhig' ? 'zu unruhig – Kamera ruhig halten' : 'beide Marker im Bild halten'; cls = 'warn'; }
+  else {
+    if (c && c.status === 'fail') { t = `zu unruhig (${c.jitterMm == null ? '?' : c.jitterMm.toFixed(1)} mm) – nochmal`; cls = 'warn'; }
+    else if (c && c.status === 'sparse') { t = 'zu wenige Bilder – beide Marker ruhig im Bild halten, nochmal'; cls = 'warn'; }
+    else if (c && c.status === 'nomarker') { t = 'beide Marker nicht gleichzeitig erkannt'; cls = 'warn'; }
+    else if (F.cal && F.cal.provisional) { t = 'vorläufig (automatisch) – bitte einmessen'; cls = 'warn'; }
+    else if (F.cal) { t = `eingemessen ✓${F.cal.stored ? ' (gespeichert)' : ''}` + (F.cal.jitterMm != null ? ` σ ${F.cal.jitterMm.toFixed(2)} mm` : ''); cls = 'ok'; }
+    else { t = 'noch nicht (beide Marker zeigen)'; }
+  }
+  if (calBtnEl.textContent !== bTxt) calBtnEl.textContent = bTxt;
+  if (calLblEl.textContent !== t) calLblEl.textContent = t;
+  const cn = 'calib-val cal-' + (cls || 'none');
+  if (calLblEl.className !== cn) calLblEl.className = cn;
+}
+
+// ---- mode state machine + targets ---------------------------------------------------------
+function fusMeasure(tMs) {              // camera-measured plate state; the caller guarantees both raw poses come from the SAME detection
+  const F = FUS, M = F.meas;
+  const rigRaw = xfMul(rawXf(BOARDS.base), F.cal.C);
+  const rel = xfMul(xfInv(rigRaw), rawXf(BOARDS.plate));
+  const st = quatSwingTwistZ(ID_Q, rel.quat), th = 2 * Math.atan2(st.twist[2], st.twist[3]);
+  const prev = F.spinPrev, dt = prev ? (tMs - prev.t) / 1000 : 0;
+  if (prev && dt > 0 && dt < TRK.MEAS_VALID_MS / 1000) {
+    const rpm = wrapPi(th - prev.th) / dt * 30 / Math.PI;                      // deg/s about the plate normal / 6
+    M.spinRpm += (1 - Math.exp(-dt / (TRK.SPIN_TAU_MS / 1000))) * (rpm - M.spinRpm);
+    M.gapMm += (1 - Math.exp(-dt / (TRK.GAP_TAU_MS / 1000))) * (rel.pos[2] - M.gapMm);
+  } else { M.spinRpm = 0; M.gapMm = rel.pos[2]; }
+  F.spinPrev = { t: tMs, th };
+  M.tiltDeg = st.tilt * 180 / Math.PI; M.t = tMs;
+}
+function trkFuse(tMs) {
+  const F = FUS, P = BOARDS.plate, B = BOARDS.base;
+  const liveP = trkLive(P, tMs), liveB = trkLive(B, tMs);
+  const joint = liveP && liveB && P.raw.t === tMs && B.raw.t === tMs;       // both boards measured in THIS detection (calibration, measured plate state)
+  if (!P.filt) F.meas.t = -1e9;                                             // plate tracker lost / reset: the remembered gap is void
+  if (joint) calFeed(tMs);
+  calTick(tMs);
+  const cal = F.cal, prev = F.mode;
+  let mode;
+  if (liveP && liveB && cal) mode = 'both';
+  else if (liveB && cal) mode = 'baseOnly';
+  else if (liveP) mode = 'plateOnly';
+  else if (liveB) mode = 'baseUncal';
+  else mode = ((P.filt || B.filt) && F.rigT) ? 'hold' : 'none';
+
+  if (mode === 'none' || mode === 'baseUncal') {
+    F.rigT = F.plateT = null; F.rigSrc = F.plateSrc = null; F.spinPrev = null;
+  } else if (mode !== 'hold') {
+    if (mode === 'both' || mode === 'baseOnly') { F.rigT = xfMul(boardXf(B), cal.C); F.rigSrc = 'cal:' + B.epoch + ':' + F.calRev; }
+    if (mode === 'both') {
+      F.plateT = boardXf(P); F.plateSrc = 'meas:' + P.epoch;
+      if (P.raw.t === tMs) { F.plateRel = xfMul(xfInv(F.rigT), F.plateT); F.plateRelT = tMs; }
+      if (joint) fusMeasure(tMs);
+    } else if (mode === 'baseOnly') {
+      F.plateT = null;
+      F.plateSrc = (F.plateRel && tMs - F.plateRelT <= TRK.PLATE_HOLD_MS) ? 'hold' : 'model';
+      F.spinPrev = null;
+    } else {                                                          // plateOnly: camera-locked base
+      const Px = boardXf(P), haveGap = F.meas.t > -1e8;               // lift: the last measured gap until the plate tracker resets, else the model gap
+      if (prev !== 'plateOnly') F.psi0 = fusPsi0(Px);
+      F.rigT = camLockedRig(Px, F.psi0, haveGap ? F.meas.gapMm : modelLiftMm);
+      F.rigSrc = 'cam:' + P.epoch + (haveGap ? ':m' : ':g');
+      F.plateT = Px; F.plateSrc = 'meas:' + P.epoch; F.spinPrev = null;
+    }
+  }
+  F.meas.valid = mode === 'both' && tMs - F.meas.t <= TRK.MEAS_VALID_MS;
+  F.mode = mode;
+}
+
+// ---- display: targets -> smoothed on-screen poses (re-anchored at every source switch) ---------
+// A mode switch changes WHERE a pose comes from (e.g. base: board B + calibration -> plate plane + camera lock).
+// The two sources agree only up to calibration error / tilt / the camera's own yaw drift, so at a switch the
+// difference is stored as an OFFSET (in the camera frame) that decays with BLEND_TAU_MS: the displayed pose is
+// continuous at the switch and glides onto the new source instead of hopping.
+function offNew() { return { dp: [0, 0, 0], dq: ID_Q.slice() }; }
+function offApply(xf, o) { return { pos: v3add(xf.pos, o.dp), quat: quatNorm(quatMul(o.dq, xf.quat)) }; }
+function offFrom(shown, target) { return { dp: v3sub(shown.pos, target.pos), dq: quatNorm(quatMul(shown.quat, quatInv(target.quat))) }; }
+function offDecay(o, k) { o.dp = v3mul(o.dp, k); o.dq = quatSlerp(ID_Q, o.dq, k); }
+const DISP = {};
+function dispReset() { Object.assign(DISP, { t: null, rig: null, plate: null, rigOff: offNew(), plateOff: offNew(), rigSrc: null, plateSrc: null }); }
+dispReset();
+function trkDisplay(nowMs) {
+  const D = DISP, F = FUS;
+  const dt = D.t === null ? 0 : Math.min(0.25, Math.max(0, (nowMs - D.t) / 1000));
+  D.t = nowMs;
+  if (!F.rigT) {                                                      // nothing to show: forget what was shown (next sighting snaps)
+    D.rig = D.plate = null; D.rigSrc = D.plateSrc = null;
+    twinRoot.visible = false; plateRoot.visible = false;
+    return;
+  }
+  const k = Math.exp(-dt / (TRK.BLEND_TAU_MS / 1000));
+  offDecay(D.rigOff, k); offDecay(D.plateOff, k);
+  if (F.rigSrc !== D.rigSrc) { D.rigOff = D.rig ? offFrom(D.rig, F.rigT) : offNew(); D.rigSrc = F.rigSrc; }
+  const rig = offApply(F.rigT, D.rigOff);
+  let pt;
+  if (F.plateSrc === 'hold') pt = xfMul(rig, F.plateRel);
+  else if (F.plateT) pt = F.plateT;                                  // measured plate (plateT is set exactly in the 'meas:' modes)
+  else pt = xfMul(rig, { pos: [0, 0, modelLiftMm], quat: ID_Q });      // 'model': resting / model gap, spin frozen
+  if (F.plateSrc !== D.plateSrc) { D.plateOff = D.plate ? offFrom(D.plate, pt) : offNew(); D.plateSrc = F.plateSrc; }
+  const plate = offApply(pt, D.plateOff);
+  D.rig = rig; D.plate = plate;
+  twinRoot.position.set(rig.pos[0], rig.pos[1], rig.pos[2]);
+  twinRoot.quaternion.set(rig.quat[0], rig.quat[1], rig.quat[2], rig.quat[3]);
+  plateRoot.position.set(plate.pos[0], plate.pos[1], plate.pos[2]);
+  plateRoot.quaternion.set(plate.quat[0], plate.quat[1], plate.quat[2], plate.quat[3]);
+  twinRoot.visible = true; plateRoot.visible = true;
+}
+
+// Apply a tracker result: badge + calibration UI (poses are applied per render frame by trkDisplay)
+let badgeKey = '';
+function trkBadge() {
+  const F = FUS, tp = BOARDS.plate.ntags, tb = BOARDS.base.ntags, prov = F.cal && F.cal.provisional;
+  switch (F.mode) {
+    case 'both':      return ['tracked', `🟢 Platte ${tp}/4 + Basis ${tb}/4 Tags${prov ? ' · vorläufig' : ''}`];
+    case 'baseOnly':  return ['tracked', `🟢 Basis ${tb}/4 Tags · Platte: Modell`];
+    case 'plateOnly': return ['', `🟠 Nur Platte ${tp}/4 · Basis kamerafest`];
+    case 'baseUncal': return ['', '🟠 Basis erkannt – Platten-Marker zum Einmessen zeigen'];
+    case 'hold':      return ['', '🟡 Marker verdeckt – halte Pose'];
+    default:          return ['camera-on', '🟡 Suche Marker...'];
+  }
+}
+function trkApply() {
+  const F = FUS, key = F.mode + '|' + BOARDS.plate.ntags + '|' + BOARDS.base.ntags + '|' + (F.cal ? (F.cal.provisional ? 'p' : 'c') : '-');
+  if (key !== badgeKey) {
+    badgeKey = key;
+    const b = trkBadge();
+    trackingBadge.textContent = b[1]; trackingBadge.className = b[0];
+    targetGuide.style.display = F.mode === 'none' ? 'block' : 'none';
+  }
+  calUi();
+}
+calLoad();
 
 // ── Canvas = viewport; cover-crop of the video reproduced with a camera view offset ───
 // Old scheme: canvas sized/placed to the cover-scaled VIDEO (up to 5.7 MP backbuffer,
@@ -1857,7 +2240,7 @@ function trkRunOnce(tMs) {
   if (!vw || !vh) return;
   syncCanvasToVideo(vw, vh);
   if (ATW && !ATW.failed) trkSubmitFrame(video, tMs, vw, vh);            // detector in a worker
-  else trkApply(trkProcessFrame(video, tMs, vw, vh));                    // main-thread detector
+  else { trkProcessFrame(video, tMs, vw, vh); trkApply(); }              // main-thread detector
 }
 let rvfcOn = false, lastFrameKey = -1;
 function onVideoFrame(now) {
@@ -1882,6 +2265,12 @@ function pollNewFrame(tMs) {                           // fallback without reque
 
 // ── Main Render Loop ──────────────────────────────────────────────────────────────
 let lastTime = performance.now();
+// 3D preview (no camera): the plate rides on the rig, lifted by the model gap.
+const _pv = new THREE.Vector3();
+function placePlateOnRig() {
+  _pv.set(0, 0, modelLiftMm).applyQuaternion(twinRoot.quaternion).add(twinRoot.position);
+  plateRoot.position.copy(_pv); plateRoot.quaternion.copy(twinRoot.quaternion); plateRoot.visible = twinRoot.visible;
+}
 
 function animate(time) {
   const dt = Math.min(0.1, (time - lastTime) / 1000.0);
@@ -1892,29 +2281,35 @@ function animate(time) {
   updateTelemetry(time);
 
   if (isArActive) {
-    if (!rvfcOn) pollNewFrame(time);      // pose target is updated by tracking, not per render frame
+    if (!rvfcOn) pollNewFrame(time);      // pose TARGETS are updated by tracking ...
+    trkDisplay(time);                     // ... on-screen poses (re-anchored at mode switches) once per render frame
   } else {
     if (controls) controls.update();
     twinRoot.rotation.y += 0.004;
+    placePlateOnRig();
   }
 
   renderer.render(scene, camera);
 }
 renderer.setAnimationLoop(animate);
 Object.assign(window.twinDebug, { plateM, coilInnerM, coilOuterM, camera, scene, renderer });
+function trkSetMarkerSize(v) { markerSizeMm = v; trkReset(); calLoad(); calUi(); }   // pose translations scale with it -> calibration is keyed by size
 window.twinDebug.tracking = {
-  processDetection: trkProcessDetection,   // (dets[{id,hamming,margin,corners}], tMs, vw, vh) -> {status,pos,quat,...}
-  processFrame: trkProcessFrame,           // (canvasImageSource, tMs, vw, vh): scan + detect + track, SYNC on the main-thread detector
+  processDetection: (dets, tMs, vw, vh) => trkProcessDetections(dets, tMs, vw, vh, null),   // (dets[{id,hamming,margin,corners}], tMs, vw, vh) -> plate result {status,pos,quat,...} + .base + .mode
+  processFrame: trkProcessFrame,           // (canvasImageSource, tMs, vw, vh): scan + detect + track + fuse, SYNC on the main-thread detector
   initMainDetector: trkInitMainDetector,   // -> Promise (main-thread wasm instance; tests / fallback)
   get worker() { return ATW; },
-  detect: atDetectCore, marker: MARKER, board: boardModel, ippe: ippePoses,
-  onMiss: trkMiss,
+  detect: atDetectCore, marker: MARKER, board: (edgeMm, role = 'plate') => boardModel(edgeMm, role), ippe: ippePoses,
   reset: trkReset,
   config: TRK,
-  get state() { return TRK_S; },
-  get stats() { return TRK_S.stats; },
-  resetStats() { TRK_S.stats = trkNewStats(); },
-  setMarkerSizeMm(v) { markerSizeMm = v; trkReset(); },
+  boards: BOARDS,                          // per-board tracker state {filt, raw, outline, ntags, ...}
+  fusion: FUS,                             // {mode, cal, capture, meas:{gapMm, tiltDeg, spinRpm, ...}, rigT, plateT, ...}
+  disp: DISP,                              // displayed poses + the decaying source-switch offsets (rigOff, plateOff)
+  display: trkDisplay,                     // (nowMs): targets -> on-screen poses (called per render frame in AR)
+  calibrate: calStart, calReset: calClear, // same as the two buttons
+  get stats() { return STATS; },
+  resetStats() { STATS = trkNewStats(); },
+  setMarkerSizeMm: trkSetMarkerSize,
 };
 
 // ── Start Camera Button & Dialogs ─────────────────────────────────────────────
@@ -2245,15 +2640,21 @@ if (btnYInc) {
   });
 }
 
+// Unterbau einmessen: plate resting on the coils -> rig frame = plate-board frame; stores base-board -> rig.
+document.getElementById('btnCalBase').addEventListener('click', () => {
+  if (!isArActive) { showMessage('📏 Unterbau einmessen', '<p>Kamera starten, <b>beide Marker</b> (Platte + Basis) ins Bild nehmen, Platte liegt auf den Spulen (kein Strom), dann erneut tippen.</p>'); return; }
+  calStart();
+});
+document.getElementById('btnCalReset').addEventListener('click', () => calClear());
+calUi();
+
 const lblMarkerSize = document.getElementById('lblMarkerSize');
 document.getElementById('btnSizeDec').addEventListener('click', () => {
-  markerSizeMm = Math.max(20, markerSizeMm - 2);
-  trkReset();
+  trkSetMarkerSize(Math.max(20, markerSizeMm - 2));
   lblMarkerSize.textContent = `${markerSizeMm} mm`;
 });
 document.getElementById('btnSizeInc').addEventListener('click', () => {
-  markerSizeMm = Math.min(80, markerSizeMm + 2);
-  trkReset();
+  trkSetMarkerSize(Math.min(80, markerSizeMm + 2));
   lblMarkerSize.textContent = `${markerSizeMm} mm`;
 });
 

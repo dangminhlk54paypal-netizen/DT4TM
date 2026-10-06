@@ -14,6 +14,7 @@ outputs/*
 !outputs/digital_twin_fem.html
 !outputs/ar_twin.html
 !outputs/ar_marker.png
+!outputs/ar_marker_base.png
 
 # Local-only source PDFs (problem brief / Aufgabenstellung)
 *.pdf

@@ -1569,3 +1569,94 @@ tilt (direction of the board normal — the noisy, flip-prone part of a planar p
 and gated. Position smoothing unchanged. Unit check (headless): 300°/s spin lag 3.2° → 0.0°, 60°/s
 tilt lag unchanged 1.5°; a 40° spin step counts 0° for the gate, a 20° tilt step still 20°.
 `xval_twin.py` PASS. Not tested on a device (motion blur limits how fast a tag can still be decoded).
+
+## WP-AR-DUAL (2026-10-06) — two markers: fixed BASE stays put, PLATE follows the real plate (`build_ar_twin.py`, `gen_ar_marker.py`)
+Why: the real plate on top spins / levitates / wobbles, the substructure does not. A tag stuck on the plate cannot
+tell "plate spins" from "camera orbits", so with ONE board the whole model (base too) spun with the tag. Engine
+block / `build_twin_html_fem.py` untouched (`xval_twin.py` PASS both pages, `twin_core.py` 6/6).
+
+- **Markers** (`gen_ar_marker.py`, one constant block `BOARD_IDS`): PLATE board IDs 0-3 (the already printed one,
+  page 1 byte-compatible: all non-text drawing ops identical to HEAD, tag edge 48.00 mm) + BASE board IDs 4-7 (same
+  family/layout/size, page 2). `outputs/ar_marker.pdf` is now 2 pages, each titled DE+EN ("Platten-Marker (dreht mit)"
+  / "Basis-Marker (fest)"); previews `ar_marker.png` + `ar_marker_base.png`. Page 2 verified with pupil-apriltags on a
+  600 dpi rasterised page: IDs 4-7, tag edge 48.006 mm (47.994..48.018), centres +-30.0 mm. One marker-size setting applies to both.
+- **Trackers**: one instance per board (`BOARDS.plate/base`: filter, jump hysteresis, IPPE prior, ROI outline, `raw` =
+  unfiltered pose of the last frame). One detector call returns all tags, partitioned by ID. Plate board
+  `ROT_SMOOTHING='tilt'` (spin raw); base board `'all'` with `BASE_ROT_MIN_CUTOFF_HZ=4.0` (the base sits ~200 mm off the axis:
+  rotation lag/noise is multiplied by the lever arm; swept 1.5/4/8 Hz: base position error 0.75 / 0.49 / 0.45 mm, yaw
+  0.22 / 0.11 / 0.07 deg under hand tremor + orbit; synthetic noise is low, so 4 Hz is a compromise to retune on a device).
+- **ROI/scan** (`trkPlan`, chosen by measurement, 1280x720, worker detect ms/frame at 1x / 4x CPU throttle): union crop of
+  both boards 6.2 / 30.0 (used while a tag stays >= `UNION_MIN_TAG_PX`=40 px); alternating single-board crops 2.7 / 13.5
+  (but only one board per frame: gap error 0.32 mm vs 0.04, plate rot 1.7 vs 0.55 deg) = fallback when the union is too big
+  (rhythm `RR_SEQ` plate/plate/base/**joint**, the joint step = a union crop anyway, see review fixes);
+  full-frame every frame 16 / 81. One board tracked: its ROI + a full-frame pass every 4th frame (`SEARCH_EVERY`)
+  re-acquires the other board (measured: back within 1 frame after a 3 s occlusion). Calibration capture forces
+  native full-frame passes (both boards in one detection).
+- **Scene graph**: `twinRoot` = rig frame (base bodies + field lines in `twinModel`, manual X/Y/Z/pitch/yaw/scale on top);
+  `plateRoot` (new, scene-level) = plate-tag frame, follows the plate board; scale only. The manual alignment now moves the
+  BASE against the plate (documented change). The old "Marker auf der Scheibe/auf dem Tisch" option no longer exists in the page
+  (removed earlier); the guide text was stale and is rewritten: plate marker always on the plate, base marker always fixed.
+- **Calibration** (rig frame = plate-board frame while the plate RESTS; C = pose of the rig in the base-board frame):
+  button "Unterbau einmessen (Platte liegt auf)" = sliding 0.5 s window of RAW simultaneous poses (both boards >= 2 tags,
+  conf >= 0.4), accepted when scatter <= 1.0 mm / 0.8 deg, 4 s timeout; auto PROVISIONAL calibration (mean of the first 8
+  CONSECUTIVE agreeing frames with both boards, badge "vorläufig") the first time both are seen; persisted in localStorage (key
+  `dt4tm.dualcal.v1`, per marker size, try/catch), "zurücksetzen" clears it. Repeatability on a resting clip (9 captures at
+  different start frames): std 0.024 mm / 0.010 deg, error vs truth 0.156 mm / 0.015 deg, capture takes 13 frames (0.43 s).
+- **Fusion** (`trkFuse`, `FUS`; board "live" = fresh measurement <= `LIVE_MS`=150 ms): `both` base = B*C, plate = P (measured);
+  `baseOnly` base exact, plate at its last rig-relative pose 1.5 s then model state (resting / model lev.z), spin frozen;
+  `plateOnly` (camera-locked fallback) base position + normal from the plate plane, lowered by the last measured gap (kept until a new one
+  arrives or the plate tracker resets, else model lev.z if levitation display is on, else 0), yaw = camera-right vector projected into the plate plane turned by a CONSTANT
+  psi0 chosen at mode entry so the yaw is continuous (from a displayed rig: keep it; no history: tag yaw); `hold`/`none` as before
+  (hold 0.8 s, then hide); B only without any calibration: hidden + hint. One marker alone = `plateOnly` (documented change: the
+  base no longer spins with the tag).
+- **No visible hops** (`trkDisplay`, per render frame): every pose has a source key (calibrated-base / camera-locked /
+  measured / hold / model + tracker epoch); at a source switch the difference is stored as an offset in the camera frame and decays
+  with `BLEND_TAU_MS`=250 ms. Measured target jumps at switches: both->plateOnly 2.3 mm / 0.2 deg (static camera), plateOnly->both
+  after a 30 deg orbit 29.5 deg (the camera-locked yaw drift, glides in at <= 3.7 deg/frame), plate hold->model 8 mm.
+- **Measured plate state** (mode `both`, from the SAME frame's raw poses so filter lag cannot leak in): gap along the rig axis, tilt, spin
+  rate (low-passed, unwrapped), lateral offset; telemetry row "Spalt gemessen ≈ … (Modell …) · Kipp ≈ … · Dreh ≈ …", `twinDebug.tracking.fusion.meas`.
+  Display only. Telemetry label "Schwebe z" -> "Spalt Modell".
+- **Verification** (synthetic 1280x720/30 fps clips, `gen_frames_dual.py`: static base board on the table 205 mm beside the rig, plate board
+  spinning, lifting 0->8 mm over 2.5 s, +-1 deg wobble, plate motion blur 1/60 s, noise, JPEG, hand tremor + 30 deg orbit): mode `both`, base yaw
+  error mean/max 0.11/0.28 deg (does NOT follow the spin at 30/120/300 deg/s), base position 0.49/0.88 mm, spin tracking error <= 0.03 deg mean
+  (0.23 max at 300 deg/s), measured gap error 0.02-0.09 mm mean (0.3 max), spin-rate error <= 0.03 rpm of 5/20/50. Fallback (B hidden 3 s, plate spinning
+  120 deg/s): static camera yaw drift 0.0 deg (+-0.2, max 1.5 from plate wobble), orbit 30 deg during the hide -> base yaw error 29.5 deg (= orbit, as designed).
+  Focal-length guess (page assumes f = 1.05*vh): true f 15 % too long, SAME viewpoint as the calibration: gap error 0.33 mm; after a 30 deg orbit:
+  +2.2 mm (5 %), 6.2 mm (15 %), -4.8 mm (-10 %). Unit checks (`twinDebug`): provisional/manual calibration, mode state machine incl. hold/none, continuity, plate-only yaw.
+- Cost (worker detect / main-thread scan+track per frame; 1x | 4x throttle): single-board HEAD 4.2 / 1.1 ms | 22.7 / 6.7 ms; dual `both` (union crop) 6.9 / 1.2 ms | 33.9 / 5.7 ms;
+  dual with only the plate marker (ROI + 1/4 full passes) 6.5 / 1.0 ms | 30.1 / 4.4 ms.
+- Not tested on a device: real focal length / lens distortion (guess effect above), real motion blur, hand-held noise level (retune `BASE_*`/`POS_*` cutoffs), iPhone 11 timing.
+- **Review fixes (same day; repros = reviewer scripts rev1-4, numbers before -> after, synthetic detections unless noted)**:
+  1. Fallback base hopped by the full gap 10 s after the base board vanished (`GAP_RECENT_MS` expiry): 8.28 mm -> 0.10 mm (noise). The last measured gap is now kept
+     until a new measurement or a plate-tracker reset (`!P.filt` clears `meas.t`); the lift source (`:m`/`:g`) is part of `rigSrc`, so any remaining change is blended.
+  2. Measured gap/tilt/spin only from SAME-DETECTION plate+base pairs (`joint` in `trkFuse`; `MEAS_SYNC_MS` removed). Camera moving up/down at 30 / 80 mm/s (single-board crops): gap
+     4.5-4.8 / 2.1-2.8 mm instead of 6.0 -> 6.00 / 6.00. Round-robin gets a union-crop `'joint'` step every 4th detection (union crop capped at `ROI_MAX_PX`: 6.7 ms vs 12.7 ms full-frame 960 /
+     32 ms full-frame 1280, measured, so the crop is the cheaper joint pass). `MEAS_VALID_MS` stays (reachable: joint passes are sparse in round-robin).
+  3. No (or only provisional) calibration + both boards tracked => `trkPlan` always plans the union crop, so calibration gets pairs: stuck `plateOnly` forever -> `both` after 8 frames.
+  4. Liveness window `max(LIVE_MS, LIVE_FRAMES * measured detection period)`: mode flapping at 10/12 fps round-robin 58 switches/90 frames -> 0.
+  5. `calRev` (calibration revision) in `rigSrc`: re-calibration hop 35.7 mm in one frame -> blended (4.5 mm/frame glide at tau 250 ms).
+  6. Provisional calibration = 8 CONSECUTIVE frames (gap > `CAL_GAP_MS` drops them) whose scatter is <= the manual limits: a spinning plate no longer yields one (14 deg yaw error ->
+     none until the plate rests); at rest identical numbers. Cost: the very first sighting needs 8 frames (0.27 s) before `both`.
+  7. Idle search back-off removed (`SEARCH_EVERY_IDLE`, `SEARCH_IDLE_AFTER_MS`, `trkPlan` `tMs`): one cadence (every 4th frame) instead of every 8th in production.
+  8. Manual capture: `CAL_MIN_SAMPLES` 6 -> 4 with the existing span >= 0.8 x window test: now succeeds down to 6 fps (failed below 9); new status `sparse` ("zu wenige Bilder")
+     vs `fail` ("zu unruhig").
+  9. Stored calibration validated on load (3 + 4 finite numbers, |q| = 1, finite jitter) else the entry is deleted: bad storage no longer gives NaN poses / a throwing `calUi()`.
+  10. The manual alignment trims (X/Y/Z/yaw/pitch/scale) are stored in the calibration record and restored on load (also updated whenever a trim changes while a calibration is stored): the
+      stored C contains the plate board's arbitrary rest yaw, so it is meaningless without them.
+  Over-engineering pass 2: `DISP.switches` log, dead `trkResult` fields (`role/fresh/tracked/lost`) + the `lost` plumbing, the redundant ID gate in `trkGateDetections`, `MARKER_FAMILY` and
+  the `family`/`edgeMm` keys of `MARKER_JS_CONFIG`, `meas.spinDps`, duplicate initialisers (`trkNewBoard`/`trkResetBoard`, `FUS`/`fusReset`, `DISP`/`dispReset`), always-true conditions
+  (levitation-flag re-check, `liveB && B.raw`, `&& F.plateRel`, `calUi` null guard + per-call `getElementById`, per-step `plateGroup.position.z`), `#topStack.meas` + wrapper div removed.
+  Unchanged: bench (`d_s30/120/300`, `d_fb_*`) base yaw 0.11 deg / pos 0.49 mm / gap 0.02-0.09 mm, fallback entry hop 0.57 mm / 0.18 deg; calibration repeatability identical.
+  Cost per tracked frame (bench, sync detector, ms): union `both` 7.8 (1x) / 40.5 (4x throttle); forced round-robin incl. joint step 5.2 / 25.5.
+- **Known limitations (not fixed)**: (a) the camera-locked yaw in `plateOnly` follows camera PAN/ROLL in place, not only orbit (10 deg pan -> 10 deg base yaw error, 10 deg roll -> 8 deg);
+  (b) a single-tag frame is ignored for `SINGLE_TAG_GRACE_MS` after a multi-tag one, so a board seen with one tag only is non-live (mode drops to the other board) for ~250 ms;
+  (c) the provisional calibration assumes the plate rests at first sight (a plate already levitating, steady, gives a provisional C that absorbs the gap until "Unterbau einmessen");
+  (d) in round-robin mode the spin measurement is sampled every 4th detection: unambiguous up to 180 deg per interval (~225 rpm at 30 fps, vs ~900 rpm with the union crop).
+- **Second correctness review (fresh reviewer): SHIP, no CRITICAL/MAJOR. Open MINOR follow-ups, not fixed:**
+  (1) with NO calibration and boards far apart (tags ~11 px in the forced union crop, e.g. 1.4 m apart at 1080p) the plate
+  can starve and no provisional calibration is reached — nominal layouts at 1280x720 are fine; (2) `baseUncal` hides the
+  overlay for a few frames while the plate is only in hold; (3) a gap measured before the base board was hidden stays as
+  the fallback lift if the plate lands meanwhile (not observable from one board), and survives a pause > `HOLD_MS`;
+  (4) manual capture needs a detection period <= ~167 ms ("zu wenige Bilder" on a very slow phone); (5) round-robin is
+  chosen at >= 0.9 m camera distance although the union crop would cost the same; (6)-(8) hardening of `calStore`
+  against foreign values, trim clamping, capture label wording.

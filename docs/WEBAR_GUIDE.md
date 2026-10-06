@@ -7,7 +7,7 @@ Diese Anleitung beschreibt, wie der reale Versuchsstand (TEAM 28 Levitator) mit 
 ## 1. Übersicht
 
 * **Keine App-Installation notwendig:** Funktioniert direkt im Webbrowser (Safari auf iOS, Chrome auf Android).
-* **Ausrichtung über Marker:** Ein ausgedruckter **AprilTag-Marker** (2×2-Board aus vier tag36h11-Tags, 120 × 120 mm) wird mit seiner Mitte auf die Aluminiumplatte gelegt oder geklebt ($r = 0$). Die Kamera muss nicht alle Tags sehen: ab 2 sichtbaren Tags wird getrackt, ein teilweise verdecktes Board bleibt stabil.
+* **Ausrichtung über ZWEI Marker (WP-AR-DUAL):** Zwei ausgedruckte **AprilTag-Boards** (je 2×2 tag36h11-Tags, 120 × 120 mm, gleiche Größe): der **Platten-Marker** (IDs 0–3) wird mit seiner Mitte auf die Aluminiumplatte geklebt ($r = 0$) und dreht, schwebt und kippt mit ihr; der **Basis-Marker** (IDs 4–7) liegt fest neben dem Prüfstand. Der Unterbau (Spulen, Eisen, Kork, Holzgehäuse, Feldlinien) hängt am Basis-Marker und **bleibt stehen**, die Platte im Modell folgt der echten Platte. Die Kamera muss nicht alle Tags sehen: ab 2 sichtbaren Tags je Board wird getrackt, ein teilweise verdecktes Board bleibt stabil.
 * **Was im Kamerabild sichtbar ist:**
   - **Thermische Heatmap:** Echtzeit-Temperaturverteilung auf der Platte und den Spulen mit einstellbarer Transparenz (X-Ray-Modus), damit die echte Maschine sichtbar bleibt.
   - **Elektromagnetische Flusslinien:** Die realen 3D-Feldlinienschlaufen ($\psi = \text{const}$) mit dynamischer Fluss-Animation bei Stromfluss.
@@ -17,20 +17,22 @@ Diese Anleitung beschreibt, wie der reale Versuchsstand (TEAM 28 Levitator) mit 
 
 ## 2. Marker ausdrucken und vorbereiten
 
-1. Die Druckvorlage ist ein **Vektor-PDF** (A4):
+1. Die Druckvorlage ist ein **Vektor-PDF** (A4, **2 Seiten**):
    ```
-   outputs/ar_marker.pdf        (Vorschau: outputs/ar_marker.png)
+   outputs/ar_marker.pdf        Seite 1 = Platten-Marker (IDs 0-3), Seite 2 = Basis-Marker (IDs 4-7)
+                                (Vorschau: outputs/ar_marker.png bzw. outputs/ar_marker_base.png)
    ```
+   Beide Seiten tragen oben ihren Titel („PLATTEN-MARKER (dreht mit)“ / „BASIS-MARKER (fest)“). **Beide ausdrucken, beide gleich groß** – die Marker-Größe in der App gilt für beide Boards.
    Neu erzeugen: `python gen_ar_marker.py` (braucht `reportlab` und `pillow`, keine URL nötig).
 2. **Druckhinweis:**
    - Im Druckdialog **100 % / „Tatsächliche Größe“** wählen, **nicht** „An Seite anpassen“ (die Seite trägt diesen Hinweis auch selbst).
    - **Maßstab prüfen:** Der Balken unten auf der Seite muss mit dem Lineal **genau 100 mm** messen. Die vier schwarzen Quadrate (Tags) sind **48 mm** groß, das ganze Board (inkl. weißem Rand, Schnittmarken an den Ecken) ist **120 × 120 mm**.
    - Ist der Ausdruck doch skaliert: Kantenlänge eines schwarzen Tag-Quadrats nachmessen und den Wert in der App unter ⚙️ → „Marker-Größe (Tag)“ einstellen.
    - Matt drucken (kein Hochglanzpapier, keine Spiegelungen); das Board am besten auf eine ebene Fläche kleben.
-3. **Aufbau des Boards:** Tags mit den IDs **0 1 / 2 3** (0 = oben links). Der Pfeil „OBEN / TOP“ zeigt die Marker-Oberseite (Tags 0 + 1); die Achsen sind wie beim früheren QR-Marker: Ursprung = Board-Mitte, x nach rechts, y nach oben. Die bisherigen Kalibrierwerte (Versatz X/Y, Drehung, Marker-auf-Scheibe/Tisch) behalten deshalb ihre Bedeutung, wenn die **Board-Mitte** dort liegt, wo vorher die QR-Mitte lag.
+3. **Aufbau der Boards:** Platten-Marker: Tags mit den IDs **0 1 / 2 3** (0 = oben links); Basis-Marker: **4 5 / 6 7**. Der Pfeil „OBEN / TOP“ zeigt die Marker-Oberseite (Tags 0 + 1); die Achsen sind wie beim früheren QR-Marker: Ursprung = Board-Mitte, x nach rechts, y nach oben. Versatz X/Y, Drehung, Neigung, Größe und Höhentrimmung im ⚙️-Menü verschieben ab jetzt nur noch den **Unterbau** gegenüber der Platte (die Platte sitzt immer auf dem Platten-Marker). Die frühere Wahl „Marker auf der Scheibe / auf dem Tisch“ gibt es nicht mehr: der Platten-Marker sitzt immer auf der Platte, der Basis-Marker immer fest.
 4. **Platzierung am Versuchsstand:**
-   - **Auf der Schwebescheibe (Standard):** Board-Mitte genau auf die Mitte der Aluminiumplatte ($r=0$). Die Platte hat nur Ø160 mm: das 120-mm-Board passt darauf, ragt aber weit über die Mitte hinaus – bei Bedarf stattdessen neben dem Aufbau auf den Tisch legen und den Versatz im Menü einstellen.
-   - Da $r=0$ die Symmetrieachse ist, richtet sich das gesamte 3D-Modell ohne seitlichen Versatz an der Spulenachse aus.
+   - **Platten-Marker:** Board-Mitte genau auf die Mitte der Aluminiumplatte ($r=0$, flach aufkleben, möglichst leicht – die Platte muss noch schweben). Die Platte hat nur Ø160 mm: das 120-mm-Board passt darauf. Da $r=0$ die Symmetrieachse ist, liegt das Modell ohne seitlichen Versatz an der Spulenachse.
+   - **Basis-Marker:** fest auf den Tisch oder das Gehäuse **neben** dem Prüfstand (ca. 5–15 cm Abstand, **flach**, nie bewegen; er darf beliebig gedreht sein). Beide Marker sollten **gleichzeitig** im Bild sein; je näher der Basis-Marker an der Platte liegt, desto genauer ist die Einmessung (Hebelarm) – und desto öfter reicht ein einziger Bildausschnitt.
 5. **Reichweite:** In der Simulation (1280×720-Video) wird das Board zuverlässig von ca. 25 cm bis über 1 m erkannt (der alte 45-mm-QR-Code nur bis ca. 30 cm). Reale Kameras rauschen/verwackeln mehr: bei Zittern des Overlays zuerst `POS_MIN_CUTOFF_HZ`, `POS_Z_MIN_CUTOFF_HZ`, `ROT_MIN_CUTOFF_HZ` in `build_ar_twin.py` (Block `TRK`) senken.
 
 > [!NOTE]
@@ -79,4 +81,33 @@ Aufgrund von Sicherheitsrichtlinien der Mobilbrowser (iOS Safari & Android Chrom
   - `👁️ X-Ray`: Macht das 3D-Modell halbtransparent, damit die realen Spulen darunter durchscheinen.
   - `🚀 7.8A`: Springt direkt auf den maximalen Betriebspunkt (270V Stelltrafo-Endanschlag).
 * **Zahnrad-Menü (⚙️):**
-  Ermöglicht das Umschalten der Marker-Position (auf der Scheibe vs. auf dem festen Tisch) und die Einstellung der Marker-Größe (Kantenlänge eines Tags in mm, Standard 48; das Board skaliert mit).
+  Unterbau einmessen (siehe 5.), Ausrichtung des Unterbaus (Drehwinkel, Neigung, Größe, X/Y/Z), Deckkraft, Marker-Größe (Kantenlänge eines Tags in mm, Standard 48; beide Boards skalieren mit) und „Levitation simulieren“.
+* **Anzeige oben rechts (Tracking-Modus):** `🟢 Platte 4/4 + Basis 4/4 Tags` (Normalfall), `🟢 Basis … · Platte: Modell`, `🟠 Nur Platte … · Basis kamerafest`, `🟡 Marker verdeckt`, `🟡 Suche Marker...` (Details unter 6.). Der Zusatz „· vorläufig“ heißt: noch nicht eingemessen.
+* **Telemetrie „Spalt“:** „Spalt Modell“ = Schwebehöhe aus der Physik; darunter (nur bei beiden Markern) „Spalt gemessen ≈ … mm · Kipp ≈ …° · Dreh ≈ … U/min“ = **mit der Kamera gemessen** (≈: Näherung, siehe Grenzen). Rein zur Anzeige, die Physik bleibt unberührt.
+
+---
+
+## 5. Unterbau einmessen (einmalig pro Aufbau)
+
+Der Basis-Marker liegt beliebig neben dem Prüfstand; die App muss wissen, wo die Spulenachse relativ zu ihm liegt. Dafür:
+
+1. Platte **liegt auf den Spulen** (kein Strom, Platten-Marker aufgeklebt), beide Marker sind im Bild, Kamera ruhig halten.
+2. ⚙️ → **„📏 Unterbau einmessen (Platte liegt auf)“** tippen. Nach ca. 0,5 s steht dort „eingemessen ✓“ (σ = Streuung der Messung, typisch < 0,2 mm). Bei „zu unruhig“ (Kamera/Platte bewegt sich) oder „zu wenige Bilder“ (Marker nur kurz erkannt, z. B. sehr langsame Kamera) einfach noch einmal tippen.
+3. Die Einmessung wird im Browser gespeichert (je Marker-Größe) und beim nächsten Start geladen – **zusammen mit der Fein-Anpassung** (Drehwinkel, Neigung, Größe, X/Y/Z; spätere Änderungen werden mitgespeichert). **„zurücksetzen“** löscht sie. Wurde der Basis-Marker verschoben, neu einmessen.
+
+Wenn beide Marker ca. 0,3 s ruhig gleichzeitig zu sehen sind, legt die App automatisch eine **vorläufige** Einmessung an (Anzeige „vorläufig“), damit es sofort funktioniert – sie ist nur so gut wie die Platte dabei auflag (eine drehende Platte wird nicht übernommen). Die Fein-Anpassung (Drehwinkel 22,5° für die Kantenausrichtung des Gehäuses, X/Y/Z) wirkt zusätzlich auf den Unterbau.
+
+---
+
+## 6. Was passiert, wenn ein Marker nicht zu sehen ist?
+
+| Zustand | Unterbau | Platte |
+|---|---|---|
+| **Beide Marker** | vom Basis-Marker (+ Einmessung): fest | gemessen: Position, Kippen, Drehen |
+| **Nur Basis-Marker** (Platte verdeckt) | exakt | 1,5 s letzte gemessene Lage, danach Modellzustand (aufliegend bzw. Modell-Spalt), Drehung eingefroren |
+| **Nur Platten-Marker** (Fallback) | Position und Neigung aus der Plattenebene, um den zuletzt gemessenen Spalt (bis die Platte aus dem Bild war; sonst Modell-Spalt, sonst 0) abgesenkt; **Drehung (Gier) an die Kamera gekoppelt**, nicht an den Marker – er dreht sich also nicht mit der Platte mit | folgt dem Marker |
+| **Keiner** | letzte Pose bis 0,8 s halten, dann ausblenden | – |
+
+Wichtig beim Fallback: Ohne Basis-Marker kann die App „Platte dreht sich“ nicht von „Kamera wandert um den Aufbau“ unterscheiden. Bei ruhiger Kamera bleibt der Unterbau deshalb korrekt; umkreist man den Aufbau, **läuft die Drehung des Unterbaus mit der Kamera mit** (Umlauf von 30° ≈ 30° Gier-Fehler), bis der Basis-Marker wieder erscheint. Beim Wechsel der Zustände gleitet das Bild in ca. 0,25 s auf die neue Quelle (kein Springen). Wird nur der Platten-Marker benutzt (altes Verhalten mit einem Marker), gilt immer dieser Fallback – der Unterbau dreht sich nicht mehr mit dem Marker.
+
+**Grenzen:** (1) Die Brennweite der Kamera ist geschätzt (f = 1,05 × Videohöhe): bei falscher Schätzung und anderem Blickwinkel als beim Einmessen weicht der gemessene Spalt ab (Größenordnung 0,4 mm je 1 % Brennweitenfehler nach 30° Umlauf; am Einmess-Blickwinkel praktisch fehlerfrei). (2) Bei sehr schnellem Drehen und langer Belichtung (Innenraum) verwischen die Tags; im Test (1/60 s Belichtung) blieb die Erkennung bis 300°/s stabil, darüber ist sie ungetestet. (3) Die Kameraanzeige „Kipp“ und „Spalt“ sind Näherungen (≈), keine Messgeräte.
