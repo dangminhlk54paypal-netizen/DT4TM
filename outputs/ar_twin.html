@@ -1376,6 +1376,12 @@ const TRK = {
   POS_BETA: 0.15,           // lateral: extra cutoff Hz per mm/s of lateral speed (lag on fast moves)
   POS_Z_MIN_CUTOFF_HZ: 1.5, // depth (z): scale cue only -> noisier than x,y -> heavier smoothing ...
   POS_Z_BETA: 0.02,         // ... and a small beta (noise in z must not fake "speed")
+  ROT_SMOOTHING: 'tilt',    // which part of the rotation is smoothed AND jump-gated:
+                            //   'tilt' = only the board-normal direction; the spin about the normal passes
+                            //            through RAW (a fast-turning marker is followed instantly).  Spin is
+                            //            the well-conditioned part of a planar pose, tilt the noisy/flip-prone one.
+                            //   'all'  = whole rotation (old behaviour: fast turns lag / are held back as jumps)
+                            //   'none' = rotation fully raw, no rotation jump gate (tilt shimmer + flips show)
   ROT_MIN_CUTOFF_HZ: 1.5,   // rotation: idem
   ROT_BETA: 3.0,            // rotation: extra cutoff Hz per rad/s of angular speed
   D_CUTOFF_HZ: 6.0,         // derivative low-pass (low values lag the start of a fast move)
@@ -1555,6 +1561,30 @@ function quatSlerp(a, b, t) {          // shortest path; a,b unit; returns unit
   return [q[0] / n, q[1] / n, q[2] / n, q[3] / n];
 }
 
+function quatMul(a, b) {               // Hamilton product a*b, [x,y,z,w]
+  return [a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+          a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+          a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+          a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]];
+}
+// Swing-twist split of the step qa -> qb in the MARKER-local frame: qb = qa * swing * twist.
+// twist = spin about the board normal (local z); swing = change of the normal's direction,
+// tilt = its angle [rad] (= angle between the two board normals).
+function quatSwingTwistZ(qa, qb) {
+  let d = quatMul([-qa[0], -qa[1], -qa[2], qa[3]], qb);
+  if (d[3] < 0) d = [-d[0], -d[1], -d[2], -d[3]];
+  const n = Math.hypot(d[2], d[3]);
+  const twist = n > 1e-9 ? [0, 0, d[2] / n, d[3] / n] : [0, 0, 0, 1];
+  const swing = quatMul(d, [0, 0, -twist[2], twist[3]]);
+  return { swing, twist, tilt: 2.0 * Math.acos(Math.min(1.0, Math.abs(swing[3]))) };
+}
+// Rotation distance [rad] as seen by the smoothing / jump gate (see TRK.ROT_SMOOTHING).
+function trkRotDist(qa, qb) {
+  if (TRK.ROT_SMOOTHING === 'none') return 0.0;
+  if (TRK.ROT_SMOOTHING === 'tilt') return quatSwingTwistZ(qa, qb).tilt;
+  return quatAngle(qa, qb);
+}
+
 // ── planar pose: IPPE-style two solutions (+ Gauss-Newton) ─────────────────────────────
 // Board plane z=0, board mm coords.  H maps board mm -> video px.  Camera frame = OpenCV
 // (x right, y down, z forward), K = [f 0 cx; 0 f cy].  A plane seen through a pinhole has TWO
@@ -1717,11 +1747,22 @@ function filtUpdate(F, pos, quat, t, conf) {
   const spZ = Math.abs(pos[2] - F.pos[2]) / dt;
   F.velz += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (spZ - F.velz);
   F.pos[2] += lpAlpha(TRK.POS_Z_MIN_CUTOFF_HZ * cs + TRK.POS_Z_BETA * F.velz, dt) * (pos[2] - F.pos[2]);
-  // rotation: same on the geodesic
-  const ang = quatAngle(F.quat, quat), w = ang / dt;
-  F.wvel += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (w - F.wvel);
-  const fcR = TRK.ROT_MIN_CUTOFF_HZ * cs + TRK.ROT_BETA * F.wvel;
-  F.quat = quatSlerp(F.quat, quat, lpAlpha(fcR, dt));
+  // rotation: same on the geodesic -- of the smoothed part only (TRK.ROT_SMOOTHING)
+  if (TRK.ROT_SMOOTHING === 'none') {
+    F.wvel = 0.0; F.quat = quat.slice();
+  } else {
+    const w = trkRotDist(F.quat, quat) / dt;
+    F.wvel += lpAlpha(TRK.D_CUTOFF_HZ, dt) * (w - F.wvel);
+    const aR = lpAlpha(TRK.ROT_MIN_CUTOFF_HZ * cs + TRK.ROT_BETA * F.wvel, dt);
+    if (TRK.ROT_SMOOTHING === 'tilt') {                     // smooth the tilt, take the spin as measured
+      const st = quatSwingTwistZ(F.quat, quat);
+      const q = quatMul(quatMul(F.quat, quatSlerp([0, 0, 0, 1], st.swing, aR)), st.twist);
+      const n = Math.hypot(q[0], q[1], q[2], q[3]);
+      F.quat = [q[0] / n, q[1] / n, q[2] / n, q[3] / n];
+    } else {
+      F.quat = quatSlerp(F.quat, quat, aR);
+    }
+  }
   F.t = t;
 }
 
@@ -1804,7 +1845,7 @@ function trkProcessDetection(dets, tMs, vw, vh) {
         const one = fitBoard(good.filter(g => g.id === d), markerSizeMm);
         const cs = one && ippePoses(one.H, f0, vw / 2, vh / 2);
         if (!cs || !cs.length) continue;
-        const a = Math.min(...cs.map(c => quatAngle(TRK_S.filt.quat, poseToThree(c).quat)));
+        const a = Math.min(...cs.map(c => trkRotDist(TRK_S.filt.quat, poseToThree(c).quat)));
         if (a < bestA) { bestA = a; bestFit = one; }
       }
       if (bestFit && bestA * 180 / Math.PI < TRK.JUMP_DEG) fit = bestFit; else return done(trkReject('residual', tMs, ex));
@@ -1846,12 +1887,12 @@ function trkProcessDetection(dets, tMs, vw, vh) {
   } else {
     const F = TRK_S.filt;
     const dP = Math.hypot(pose.pos[0] - F.pos[0], pose.pos[1] - F.pos[1], pose.pos[2] - F.pos[2]);
-    const dR = quatAngle(F.quat, pose.quat) * 180.0 / Math.PI;
+    const dR = trkRotDist(F.quat, pose.quat) * 180.0 / Math.PI;   // smoothed part only (spin is free in 'tilt' mode)
     if (dP > TRK.JUMP_MM || dR > TRK.JUMP_DEG) {
       const pend = TRK_S.pending, prev = pend.length ? pend[pend.length - 1] : null;
       const cons = prev &&
         Math.hypot(pose.pos[0] - prev.pos[0], pose.pos[1] - prev.pos[1], pose.pos[2] - prev.pos[2]) < TRK.JUMP_MM &&
-        quatAngle(prev.quat, pose.quat) * 180.0 / Math.PI < TRK.JUMP_DEG;
+        trkRotDist(prev.quat, pose.quat) * 180.0 / Math.PI < TRK.JUMP_DEG;
       if (cons) pend.push({ pos: pose.pos, quat: pose.quat }); else TRK_S.pending = [{ pos: pose.pos, quat: pose.quat }];
       if (TRK_S.pending.length >= TRK.ACCEPT_N) {           // persistent -> real move: re-converge
         TRK_S.filt = filtInit(pose.pos, pose.quat, tMs);

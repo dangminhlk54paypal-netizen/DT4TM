@@ -1558,3 +1558,14 @@ PDF round trip: `ar_marker.pdf` rasterised at 300 dpi -> pupil-apriltags finds I
 tag edge 48.02 +- 0.03 mm, PDF vector squares exactly 48.000 mm, cut marks 120.000 mm apart, scale bar 100.000 mm.
 - **Needs on-device testing**: real camera noise/rolling shutter (filter cutoffs), focal guess (f = 1.05*vh
   unchanged), Web Worker + Blob under iOS Safari, print scale, glare on the printed board.
+
+## WP-AR-SPIN (2026-10-06) — marker spin is followed instantly (`build_ar_twin.py`)
+User report: a fast-turning marker was not followed directly. Cause: the One Euro rotation filter
+lagged ~3° at 300°/s and, worse, lag + per-frame step exceeded `JUMP_DEG=12°`, so frames were HELD
+as "jumps" (2 held, 3rd re-snaps → stutter). Fix: new `TRK.ROT_SMOOTHING` (`'tilt'` default / `'all'`
+= old / `'none'`). In `'tilt'` mode the rotation step is split swing-twist about the board normal
+(`quatSwingTwistZ`): the spin (twist) passes through RAW and is ignored by the jump gate; only the
+tilt (direction of the board normal — the noisy, flip-prone part of a planar pose) is still smoothed
+and gated. Position smoothing unchanged. Unit check (headless): 300°/s spin lag 3.2° → 0.0°, 60°/s
+tilt lag unchanged 1.5°; a 40° spin step counts 0° for the gate, a 20° tilt step still 20°.
+`xval_twin.py` PASS. Not tested on a device (motion blur limits how fast a tag can still be decoded).
