@@ -112,17 +112,25 @@ Modul-Offset Toleranz haben) und sendet ihn als 4. CSV-Spalte.
 | 1 | ACS712-20A Modul | Breakout-Board, ±20A, 100mV/A | 1 | Hall-Effekt, galvanisch getrennt |
 | 2 | Keramikkondensator | 0,1 µF, ≥16V | 1 | OUT→GND, filtert Rauschen |
 | 3 | Jumper-Kabel | Stecker–Stecker / Stecker–Buchse | ~6 | Modul ↔ Arduino |
-| 4 | Anschlussklemme | 2-polige Schraubklemme | 2 | Spulen-Abgriffe ↔ IP+/IP− |
+| 4 | Anschlussklemme | 2-polige Schraubklemme | 2 | aufgetrennte L-Zuleitung ↔ IP+/IP− (in Reihe) |
 
 **Nicht verwenden:** CT-Stromwandler (bei 7,8A unnötig teuer), Shunt-Widerstand
 (keine galvanische Trennung — gefährlich bei 190–270V).
 
 ### Anschlussplan
 
+**⚠ IN REIHE, NICHT PARALLEL:** „Abgriff 1/2" sind die zwei Enden EINER aufgetrennten
+Zuleitung (Phase L zwischen Variac-Ausgang und Spule), NICHT die beiden Spulenklemmen.
+IP+/IP− an beide Spulenenden bei intakter Verdrahtung = Kurzschluss des Variac-Ausgangs
+(Strompfad ~1.2 mΩ). Empfohlen: separates Mess-Zwischenkabel (Variac-Ausgang → Gehäuse
+mit ACS712 → Spulenzuleitung), Rig selbst unverändert — genau dort, wo bei der
+190V→5A-Messung das Multimeter (A-Modus, in Reihe) saß.
+
 | VON | NACH | Hinweis |
 |---|---|---|
-| Spulen-Abgriff 1 | ACS712 IP+ | Hauptstromkreis, 190–270V AC |
-| Spulen-Abgriff 2 | ACS712 IP− | Hauptstromkreis, 190–270V AC |
+| Variac-Ausgang L (Phase) | ACS712 IP+ | Hauptstromkreis, 190–270V AC |
+| ACS712 IP− | Spulenzuleitung L (zur Spule) | Hauptstromkreis, 190–270V AC |
+| Variac-Ausgang N | Spule N (unverändert, NICHT durch das Modul) | Hauptstromkreis |
 | ACS712 VCC | Arduino 5V | Signalseite, sicher |
 | ACS712 OUT (+ 0.1µF Cap → GND) | Arduino A0 | Signalseite, sicher |
 | ACS712 GND | Arduino GND | Signalseite, sicher |
@@ -134,10 +142,55 @@ Kontakt zur Arduino-Seite. Rechte Seite (VCC/OUT/GND) = sicheres 0–5V-Signal.
 
 1. Arduino OHNE Variac-Verbindung (IP+/IP− offen) per USB anschließen, Serial
    Monitor öffnen (9600 baud) → `I_rms_A` sollte nahe 0.00 liegen (reines ADC-Rauschen).
-2. Variac-Dial auf 0 stellen, Spulen-Abgriffe an IP+/IP− anklemmen.
+2. Variac-Dial auf 0 stellen, Netzstecker des Variacs ziehen, Mess-Zwischenkabel (L in Reihe über IP+/IP−) einstecken.
 3. Variac langsam hochdrehen bis 190V (5A-Betriebspunkt), `I_rms_A` mit einem
    Multimeter am Spulenkreis gegenchecken (sollte ~5.0A zeigen, ±5–10%).
 4. Erst danach auf 270V (7.8A, Kalibrierpunkt) gehen, falls nötig.
+
+### Was die AC-Strommessung dem Twin bringt — nachgerechnet (2026-10-02)
+
+Alle Zahlen aus params.yaml + dem echten `TwinState` (Skript: Session-Scratchpad,
+nicht committet). Nichts davon ist gemessen außer 190V→5A und dem Rauschboden 0.248A.
+
+| Größe | Wert | Quelle |
+|---|---|---|
+| ADC-LSB, 10 bit / 14 bit (R4 `analogReadResolution(14)`) | 48.9 mA / 3.1 mA | 5V/(2ⁿ−1) / 0.100 V/A |
+| OUT-Hub bei 5 A_rms / 7.78 A_rms | 2.5 ± 0.707 V / 2.5 ± 1.100 V | Î=I·√2 → kein Clipping; ACS712-**05**B (±5A) würde clippen |
+| Rausch-Bias (Quadratur, Boden 0.248 A) | 0.5A→+11.6%, 1A→+3.0%, 5A→+0.12% | √(I²+0.248²) |
+| R_Spulen (Formel em_solver, Draht 1.2 mm nominal) | 4.185 + 4.330 = 8.515 Ω | — |
+| \|Z\| aus Messung 190V/5A | 38.0 Ω → X = 37.0 Ω, R/Z = 0.22 | — |
+| Stromabfall durch Spulenerwärmung bei festem Dial (5A, T_ss) | −0.46 % | σ_Cu(T), α=3.9e-3 |
+| T_inner,ss @20°C bei 4.75 / 5.00 / 5.25 A | 42.06 / 44.00 / 46.01 °C | TwinState |
+| Aufheizen 5A, inner: t63 / t90 | 1024 s / 2747 s | TwinState (coil_C_scale nur Größenordnung) |
+
+Folgerungen: ±5 % Stromfehler → ≈ ±8 % ΔT. Die σ(T)-Drift bei festem Dial ist klein
+(induktiv dominierte Last) — der Gewinn liegt woanders: (1) der echte Strom an jeder
+Dial-Stellung (Tabelle hat nur 3 Stützstellen), (2) **exakte Zeitstempel** für
+Rampen/Abschalten (Ramp-Test heute aus erzählter Zeitachse, ±~10 s), (3) Netzschwankungen
+gehen beim Variac 1:1 in I und ≈2× in die Verluste.
+
+**Kein 0.1 µF direkt an OUT:** laut Allegro-Datenblatt ACS712 ist die zulässige
+Lastkapazität an VIOUT max. 10 nF (bitte in „Common Operating Characteristics" prüfen).
+Glättung macht die RMS-Mittelung über ganze Netzperioden.
+
+### Integrationsplan (WP-ACS2, noch NICHT implementiert)
+
+1. **Firmware — volle Abdeckung:** RMS über das GANZE 1-s-Intervall (= 50 Perioden,
+   100 % statt heute 10 % Abtast-Duty: 100 ms Burst pro 1000 ms). Verluste ∝ ⟨i²⟩ über
+   den Zeitschritt → energie-exakter Input, auch wenn am Dial gedreht wird.
+   Optional R4: 14-bit ADC. CSV-Format `millis,I_rms_A` bleibt.
+2. **Python — Rauschkorrektur:** `I = √max(0, I_meas² − I_noise²)` in
+   `LiveDriver.condition()`, `I_noise` als neuer Key `live_sensor.noise_floor_A` (0.248,
+   gemessen). Rohwert bleibt im Log.
+3. **Kalibrierung:** `ACS712_CAL_SCALE` an 190V→5A gegen das blaue Multimeter (es sitzt
+   bereits in Reihe — ACS712 in dieselbe Leitung), zweiter Punkt bei Dial-Max als
+   Linearitätscheck. Dabei jede Dial-Stellung ~10 s halten → `dial_to_current_A` verdichten.
+4. **Messprotokoll für die Transient-Kalibrierung:** Strom loggen + HIKMICRO-Bilder mit
+   Uhrzeit (Uhren synchronisieren). Aufheizen 5A ≥ ~50 min (t90 = 2747 s laut Modell),
+   dann Abschalten und Abkühlen loggen (I=0 exakt datiert).
+5. **`refit_transient.py`** (neu, analog `refit_hA.py`): fittet `coil_C_scale`,
+   `coil_G_wind_W_per_K`, Luftknoten durch den echten `TwinState`, angetrieben vom
+   GELOGGTEN I(t) statt angenommener Stufen. hA bleibt bei `refit_hA.py`.
 
 ---
 

@@ -16,7 +16,7 @@
  * Lines starting with '#' are diagnostics and are skipped by data_io.py.
  *
  * Wiring (UNO R3/R4 pin-compatible):
- *   ACS712-20A OUT       -> A0   (+ 0.1uF ceramic cap OUT->GND at the Arduino
+ *   ACS712-20A OUT       -> A5   (+ 0.1uF ceramic cap OUT->GND at the Arduino
  *                                  end, for noise filtering — see BOM)
  *   ACS712-20A VCC       -> 5V
  *   ACS712-20A GND       -> GND
@@ -36,7 +36,7 @@
 // external biasing needed). We RMS the AC component around the MEASURED mean,
 // not an assumed 2.5V, since both the Arduino's actual 5V rail and the module's
 // bias have tolerance and drift.
-#define ACS712_PIN A0
+#define ACS712_PIN A5
 #define ACS712_SENSITIVITY_V_PER_A 0.100
 #define ADC_VREF_V 5.0
 #define ADC_COUNTS 1023.0   // 10-bit; the UNO R4 also defaults to 10-bit unless
@@ -129,5 +129,6 @@ void loop() {
 
   Serial.print(now);
   Serial.print(",");
+//  Serial.println(analogRead(A5));
   Serial.println(I_rms, 3);
 }

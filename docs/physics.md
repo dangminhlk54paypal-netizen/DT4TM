@@ -217,6 +217,18 @@ integrator to steady state (not a hand-derived formula) — nonlinear-consistent
 values **2.4744 / 2.8885 W/K** (from 2.9493/3.4509), reproducing 79.00/74.00 °C
 exactly.
 
+**(e) SUPERSEDED 2026-10-06 (WP-ANCHOR) — the anchor itself was wrong.** The
+"7.8 A, 79/74 °C, steady" point was 6.175 A (bad multimeter reading) and NOT steady
+(coils still rising; outer 67 °C). The refit machinery of (d) is kept, but the anchor
+now only gives a **lower bound** on T_ss, so `refit_hA.py --lower-bound` yields hA
+**upper bounds**. A first-law check also forced the node power onto a physical basis:
+with `C_tot,inner = 1100.6 J/K`, the loss-chain `P_inner(6.175 A) = 79.8 W` allows at
+most `dT/dt = P/C = 0.0725 K/s` with zero heat loss, yet the coil rose 0.0729 K/s while
+25–50 K above ambient. The RMS-as-amplitude convention (P = ½I_rms²R) is harmless at
+steady state (hA absorbs it) but wrong in `C·dT/dt = P − hA·ΔT`, where C is physical.
+`lumped_thermal.power_basis: rms_true` now uses `P = I_rms²R` for coils and ×2 for the
+iron eddy loss; hA = **3.5680 / 5.1546 W/K** (bounds). Details: docs/CHANGELOG.md.
+
 ### Why a levitating disc oscillates — and why the 1-DOF model can't show it
 With `i(t) = Î sin ωt` and eddy-current lift `F ∝ i²`, the force is
 `F(t) = F_dc·(1 − cos 2ωt)`: **100 % modulated** at Ω = 2ω = 628 rad/s. The

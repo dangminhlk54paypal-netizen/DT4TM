@@ -9,8 +9,9 @@ units: {length: mm, current: A, frequency: Hz, temperature: degC, power: W}
 # --- Electrical excitation (main knob of the twin) ---
 # Re-measured on the real rig 2026-06-23 (AC 50Hz, HIKMICRO IR validation session):
 # 190V -> 5A is the main operating point (supersedes the earlier 220V estimate).
-# 270V -> 7.8A is a second, stronger-heating demo point used to calibrate the coil
-# thermal network (see validation_data below). Real-time current sensor: ACS712-20A
+# Dial max (270deg, ~238V) -> 6.175A is the second, stronger-heating point the coil
+# thermal network is bounded against (see validation_data below). It was recorded as
+# "270V -> 7.8A" until 2026-10-06 -- a bad multimeter reading (WP-ANCHOR). Real-time current sensor: ACS712-20A
 # install planned (docs/archive/Stromsensor_.docx), firmware/data_io.py ready
 # (arduino/thermal_sensor/thermal_sensor.ino), physical install pending -- current_A
 # below stays the fallback constant until a real log replaces it via calibrate_from_file.
@@ -48,10 +49,13 @@ excitation:
 # degree<->Volt interpretation was):
 #   dial 0deg   -> 0 A      (off)
 #   dial 220deg -> 5.00 A   (main op point, V~=195.5V calculated)
-#   dial 270deg -> 7.75-7.85 A (max; anchor uses midpoint 7.78A, V~=240V calculated)
-# NOT a constant impedance: Z(dial220)=44Ω vs Z(dial270)=34.7Ω (levitation height
-# and coil temperature change the load) → interpolate the table, don't assume I∝V
-# across the full range. Below lift-off (dial≲200deg) I∝dial is a fair first guess.
+#   dial 270deg -> 6.15-6.20 A (max; anchor uses midpoint 6.175A at 238-239V)
+#     CORRECTED 2026-10-06 (re-measured 2026-10-02/03 with the ACS712 AND a second,
+#     fresh-battery multimeter). The old 7.75-7.85 A (anchor 7.78 A) was a bad
+#     multimeter reading: 7.78 A would need Z=30.6 Ω, but Z stays 38-39 Ω at both
+#     220deg and 270deg (239V/38.5Ω = 6.2A). See docs/CHANGELOG.md "WP-ANCHOR".
+# Load is ~linear (Z ≈ 38-39 Ω at both anchors), but keep interpolating the table
+# rather than assuming I∝V -- levitation height/coil temperature still move Z a little.
 # PURPOSE (user request 2026-07-02): drive the twin's INPUT from the dial/current
 # directly — thermal sensors stay validation-only. Phase 1: dial slider in the
 # HTML twin mapped through dial_to_current_A. Phase 2: live current sensing
@@ -60,17 +64,18 @@ power_supply:
   name: "Carroll & Meynell CMV 10 E-1 (variac, 240V in, 0-270deg dial, 50Hz)"
   type: variac
   input_V: 240.0
-  output_V_max: 240.0        # voltage at dial_max_deg (variac tops out near mains input)
+  output_V_max: 237.5        # MEASURED 2026-10-02 at dial max: 237-238 V (nominal 240 V =
+                             # the mains input; the variac's own drop). Display only.
   frequency_Hz: 50.0
   dial_unit: degrees          # CORRECTED 2026-07-10: dial scale is rotation angle, not Volts
   dial_min: 0.0
   dial_max: 270.0
-  degree_to_volt_ratio: 0.88889   # = output_V_max / dial_max; V(dial) = dial * this ratio
+  degree_to_volt_ratio: 0.87963   # = output_V_max / dial_max = 237.5/270; V(dial) = dial * this ratio
   # measured (dial_deg, I_rms) anchors — extend with more readings next lab session
   dial_to_current_A:
     - {dial: 0.0,   I: 0.0}
     - {dial: 220.0, I: 5.0}
-    - {dial: 270.0, I: 7.78}
+    - {dial: 270.0, I: 6.175}   # was 7.78 (bad reading) -- corrected 2026-10-06, WP-ANCHOR
   interpolation: linear   # piecewise-linear between anchors (monotone)
 
 # --- Aluminum Plate ---
@@ -433,50 +438,84 @@ benchmark_team28_original:
   initial_gap_mm: 3.8       # informational: rest position at t<=0 (winding-form thickness)
   expected_levitation_height_mm: 11.3
 
-# REFERENCE-ONLY: no code reads this block directly; lumped_thermal calibration
-# constants below were derived by hand against this data, not auto-fit from it.
 # --- Real-rig validation data (HIKMICRO IR camera session, 2026-06-23) ---
-# Two measured operating points (AC 50Hz). thermal_at_7p8A is the calibration
-# anchor for the coil lumped thermal network (see lumped_thermal below) --
-# coil readings (dark varnish) are trustworthy; disc/center readings are NOT
-# (shiny aluminium, true emissivity ~0.1 vs camera epsilon=0.91 -> reads low).
+# Read by refit_hA.py (thermal_anchor), the HTML builder (ambient_C, op_points) and
+# the report scripts. Measured operating points (AC 50Hz) + the two HIKMICRO IR runs of 2026-06-23.
+# REWRITTEN 2026-10-06 (WP-ANCHOR) from the user's corrected account (2026-10-03):
+#  - the max-dial current is 6.15-6.20 A, NOT 7.8 A (bad multimeter reading, see
+#    power_supply above);
+#  - the ramp run happened FIRST, then ~15 min off, then the 6.2 A run;
+#  - the 6.2 A run was NOT steady state (coils still rising when it stopped), and the
+#    outer coil ended at 67 C (the old block said 74 C).
+# Old keys thermal_at_7p8A / thermal_ramp_test are gone; history in docs/CHANGELOG.md.
+# Coil readings (dark varnish) are trustworthy; disc/core readings are NOT
+# (shiny metal, true emissivity ~0.1 vs camera epsilon=0.91 -> reads low).
+# Camera: HIKMICRO Eco, 0.1 m, epsilon=0.91, SUPER IR.
 validation_data:
   source: "AC 50Hz"
+  # Observed VISIBLE levitation gap at 5A (eyeballed on the rig 2026-07-01) -- the
+  # model's z_eq does NOT match it yet (CLAUDE.md OPEN QUESTIONS "LIFT FORCE").
+  # Reference only: shown in the HTML twin's model-info sheet, no physics reads it.
+  levitation_visible_gap_mm: [7.0, 8.0]
   op_points:
     - {V: 190, I: 5.0}
-    - {V: 270, I: 7.8}
-  thermal_at_7p8A:
-    inner_coil_C: 79
-    outer_coil_C: 74
-    center_core_C: 45
-    separator_C: 40
-    disc_rim_C: 40
-    disc_center_C: 37
-    ambient_C: 29
-    note: "disc+center IR unreliable (shiny Al, ε set 0.91)"
-  # Second session, same day: a two-stage current RAMP (not held at one current
-  # long enough to reach steady state) -- used to fit the coil's TRANSIENT time
-  # constant (tau), since thermal_at_7p8A above only constrains the steady state.
-  # Timestamps are from the narrated timeline (approximate, +-~10s), t=0 at the
-  # start of the 0->5A ramp. ambient ranged 28.6-33.7C across the rig (not a single
-  # clean value); coil/disc-bottom readings used here, not the unreliable shiny-Al
-  # disc/center ones (see note above -- same caveat likely applies to this run's
-  # disc+center readings too, not explicitly re-tested with matte paint).
-  thermal_ramp_test:
-    stage1: {t_s: [0, 300], I_A: 5.0, V: 190}
-    stage2: {t_s: [300, 450], I_A: 7.75, V: 270}
-    outer_coil_C_vs_t: [{t_s: 140, C: 40}, {t_s: 200, C: 43}, {t_s: 300, C: 48.5},
-                         {t_s: 360, C: 55.75}, {t_s: 450, C: 56}]
-    at_t450s:
-      inner_coil_C: 60.75
+    - {V: 238, I: 6.175}     # dial 270deg; was {V: 270, I: 7.8} (wrong)
+  ambient_C: 29              # lab during both IR runs (rig air ranged 28.6-33.7 C)
+  # Run A (FIRST): 1-min pre-run, then a two-stage ramp. t=0 at the 5.1 A start.
+  thermal_session_A:
+    stages: [{t_s: [0, 300], I_A: 5.1}, {t_s: [300, 510], I_A: 6.25}]
+    start: {outer_coil_C: 33.7}
+    at_t300s: {outer_coil_C: 44.7}
+    at_t510s:
+      inner_coil_C: 61
       outer_coil_C: 56
-      center_core_C: 39.5      # unreliable, see note above
-      separator_C: 36
-      disc_bottom_rim_C: 44
-      disc_bottom_center_C: 35  # unreliable, see note above
-    note: "ambient 28.6-33.7C across the rig; used T_amb=29C to match thermal_at_7p8A"
+      center_core_C: 39      # unreliable (shiny)
+      iron_ring_C: 36        # unreliable (shiny)
+      disc_top_C: 38         # unreliable (shiny)
+  pause_between_runs_s: 900  # ~15 min, current off
+  # Run B (SECOND): restarted from the warm rig, held 6.15-6.20 A for 350 s.
+  # NOT steady state -> only a LOWER BOUND on T_ss(6.175 A): T_ss >= the end values.
+  thermal_session_B:
+    I_A: 6.175
+    duration_s: 350
+    steady: false
+    start: {inner_coil_C: 53.5, outer_coil_C: 51.8, center_core_C: 38.8, iron_ring_C: 34.2, disc_C: 29.5}
+    end:
+      inner_coil_C: 79
+      outer_coil_C: 67
+      center_core_C: 45      # unreliable (shiny)
+      iron_ring_C: 43        # unreliable (shiny)
+      disc_rim_C: 39         # unreliable (shiny)
+      disc_center_C: 37      # unreliable (shiny)
+  # What refit_hA.py calibrates against. steady=false -> refit_hA.py refuses unless
+  # run with --lower-bound, and the result is then the LARGEST hA (= the COOLEST
+  # prediction) consistent with the data, not a fitted value.
+  thermal_anchor:
+    source: thermal_session_B
+    I_A: 6.175
+    T_amb_C: 29.0
+    inner_coil_C: 79.0
+    outer_coil_C: 67.0
+    steady: false
 
 # --- Lumped thermal network: coils/iron -> shared local air node -> far ambient.
+# ===== WP-ANCHOR (2026-10-06) -- READ THIS FIRST; it supersedes the 7.8A history below =====
+# The calibration anchor "7.8A, 79/74C STEADY" was wrong twice: the current was
+# 6.175A (bad multimeter reading) and the run was NOT steady (coils still rising;
+# outer ended at 67C, not 74C). Consequences, all through refit_hA.py / TwinState:
+#  1. hA is now a LOWER-BOUND solution: `refit_hA.py --lower-bound` solves the hA that
+#     makes TwinState's steady state at 6.175A/29C exactly 79/67C. True T_ss(6.175A) is
+#     >= that, so these hA are UPPER bounds and every coil T_ss prediction is a LOWER
+#     bound (coolest model still consistent with the data). NOT a fitted value.
+#  2. power_basis: rms_true (phase 3). The coil/iron node power is now the PHYSICAL
+#     P = I_rms^2*R (2x the old loss-chain value): the inner coil heated faster in
+#     run B than the loss-chain power allows even with zero heat loss.
+#  Results (5A, 20C, steady): inner 44.0 -> 55.2C, outer 41.5 -> 46.6C, iron 46.3 -> 70.0C.
+#  Phase-2-only values (loss_chain basis): hA_inner=1.5920, hA_outer=2.2500.
+#  hA, coil_C_scale, the iron node and the air node remain UNIDENTIFIABLE from the
+#  existing data -- the replay of the real IR history still misses by RMS ~15 K.
+#  Needs: a logged 5A heat-up to steady + >=60 min cooldown, and a wattmeter reading.
+# ============================================================================================
 # hA_inner/hA_outer RE-CALIBRATED 2026-07-01 after correcting coil geometry.
 # Previous calibration (2026-06-23) used WRONG coil radii (inner 28-43mm, outer
 # 46.5-61.5mm) -> P_coil(5A)=72.8W. Corrected radii (inner 28-78mm, outer
@@ -582,11 +621,20 @@ validation_data:
 # T_inner=79.000C / T_outer=74.000C EXACTLY (verified through the nonlinear
 # hAEff correction, not just the linear formula).
 lumped_thermal:
-  hA_inner_W_per_K: 2.4744    # REFIT 2026-07-28 (WP-COOL T4, refit_hA.py): solved through the
+  power_basis: rms_true      # rms_true | loss_chain. WP-ANCHOR phase 3 (2026-10-06): coil/iron node
+                               # power = I_rms^2*R (physical). loss_chain = old 1/2*I_rms^2*R (half).
+                               # Changing it REQUIRES `python refit_hA.py --lower-bound` + a re-bake.
+  hA_inner_W_per_K: 3.5680    # WP-ANCHOR 2026-10-06: `refit_hA.py --lower-bound`, rms_true basis,
+                               # anchor 6.175A/29C -> 79C (UPPER bound on hA, see header note).
+                               # Was 2.4744 (2026-07-28, 7.8A/79C "steady" -- wrong anchor),
+                               # REFIT 2026-07-28 (WP-COOL T4, refit_hA.py): solved through the
                                # nonlinear hAEff-corrected TwinState integrator. Was 2.9493
                                # (2026-07-11, linear-formula refit -- see note above), 3.5611
                                # after 2026-07-01 (pre-geometry-update).
-  hA_outer_W_per_K: 2.8885    # REFIT 2026-07-28 (WP-COOL T4, refit_hA.py): solved through the
+  hA_outer_W_per_K: 5.1546    # WP-ANCHOR 2026-10-06: `refit_hA.py --lower-bound`, rms_true basis,
+                               # anchor 6.175A/29C -> 67C (UPPER bound on hA, see header note).
+                               # Was 2.8885 (2026-07-28, 7.8A/74C "steady" -- wrong anchor),
+                               # REFIT 2026-07-28 (WP-COOL T4, refit_hA.py): solved through the
                                # nonlinear hAEff-corrected TwinState integrator. Was 3.4509
                                # (2026-07-11, linear-formula refit -- see note above), 4.3446
                                # after 2026-07-01 (pre-geometry-update).
@@ -617,7 +665,7 @@ lumped_thermal:
                                # every coil/iron node (see note above).
   coil_hot_display_C: 80.0    # NEW WP-D 2026-07-02: coil colour-ramp ceiling for the
                                # HTML twin (0=T_amb, 1=this). Anchored to IR session 1's
-                               # hottest reading (inner coil 79C@7.8A). Was a JS literal
+                               # hottest reading (inner coil 79C, run B @6.175A -- was mislabelled 7.8A). Was a JS literal
                                # `T_COIL_HOT`; moved here so it's not hardcoded.
 
 # ---------------------------------------------------------------------------
@@ -630,9 +678,33 @@ lumped_thermal:
 live_sensor:
   port: mock            # Arduino serial port (macOS: ls /dev/cu.usbmodem*); "mock" = synthetic 5A source
   baudrate: 9600        # must match Serial.begin() in thermal_sensor.ino
+  invalid_above_A: 20.0 # a reading above this is NOT a current (ACS712-20A range is +-20 A; e.g. a raw
+                        # ADC count ~512 from a debug firmware build) -> sample ignored, last valid I held
+  clamp_headroom_A: 1.0 # live over-range clamp = rig I_max (dial 270deg -> 6.175 A) + this = 7.175 A.
+                        # Deliberately generous (user decision 2026-10-06): an un-trimmed board offset
+                        # (0.23-0.35 A measured so far) + the 0.25 A noise floor, or a new Arduino not
+                        # yet in board_offsets, must not flatten real max-dial readings into the clamp.
+                        # Sliders/dial input still stop at the rig I_max; this only affects live mode.
   deadband_A: 0.5       # I_rms below this -> 0. = ~2x the firmware's startup "# noise floor",
                         # MEASURED 2026-09-28: 0.248 A (UNO R4 Minima on USB power, IP+/IP- open,
                         # no 0.1uF cap, DC bias 2.667 V). Re-measure once wired into the rig.
+  zero_cal_s: 10.0      # AUTO zero-current offset (user decision 2026-10-02): for the first 10 s of a
+                        # real serial session (Variac at 0!) digital_twin_live.py / the HTML Sensor
+                        # mode measure the reading's RMS I0 and then feed sqrt(I_raw^2 - I0^2).
+                        # 0 = off. Mock/replay/demo sources skip it.
+  zero_cal_max_A: 1.0   # I0 above this = current was flowing during the zero window -> rejected,
+                        # zero_offset_default_A is used instead.
+  zero_offset_mode: linear  # how I0 is removed: linear -> I = I_raw - I0 (user, 2026-10-02: the
+                        # board's offset is what lifts the reading, e.g. 5.44 A -> 5.10 A);
+                        # quadrature -> I = sqrt(I_raw^2 - I0^2) (pure uncorrelated noise).
+  # Default I0 when the auto window is rejected (current flowing at connect). The offset
+  # DIFFERS PER BOARD (user, 2026-10-02), so it is picked by the board's USB VID:PID
+  # (pyserial / Web Serial port.getInfo(); IDs from Arduino's boards.txt -- the live
+  # mode prints the detected ID at connect, add a row for any other board).
+  board_offsets:
+    - {name: "UNO R4 WiFi",   usb_id: "2341:1002", I0_A: 0.345}  # MEASURED 2026-10-02: 0.335-0.355 A
+    - {name: "UNO R4 Minima", usb_id: "2341:0069", I0_A: 0.225}  # MEASURED (user): ~0.225 A
+  zero_offset_default_A: 0.0    # board not in the list -> no default offset
   stale_after_s: 3.0    # no new sample for this long (wall clock) -> STALE warning (3 missed 1Hz samples)
   max_gap_s: 10.0       # sample-time jump above this is flagged "gap" (bridged with the last I)
   window_s: 600.0       # plot time window

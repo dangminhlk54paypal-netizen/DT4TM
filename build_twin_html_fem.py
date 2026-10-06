@@ -21,7 +21,7 @@ Output:
     digital_twin_fem.html   (standalone, double-click to run)
 """
 from __future__ import annotations
-import sys, os, struct, base64, json, math, copy, datetime
+import sys, os, struct, base64, json, math, copy, datetime, time
 import numpy as np
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 
@@ -218,12 +218,12 @@ def ambient_presets(cfg) -> list:
     """Fixed-ambient choices for the HTML's T_amb selector (the third choice,
     Live, is the Google Weather reading). Both values come from params.yaml:
     thermal_bc.T_ambient_degC = the reference the FEM/ROM is solved at, and
-    validation_data.thermal_at_7p8A.ambient_C = the lab during the IR session
-    the coil hA values are calibrated against."""
+    validation_data.ambient_C = the lab during the IR sessions the coil hA
+    values are bounded against."""
     T_ref = float(cfg.raw["thermal_bc"]["T_ambient_degC"])
     presets = [{"key": "ref", "value": T_ref,
                 "note": "model reference (thermal_bc.T_ambient_degC)"}]
-    lab = cfg.raw.get("validation_data", {}).get("thermal_at_7p8A", {}).get("ambient_C")
+    lab = cfg.raw.get("validation_data", {}).get("ambient_C")
     if lab is not None and float(lab) != T_ref:
         presets.append({"key": "lab", "value": float(lab),
                         "note": "lab during the IR calibration session (validation_data)"})
@@ -234,14 +234,21 @@ def live_sensor_params(cfg) -> dict:
     """params.yaml live_sensor block for the HTML's Sensor excitation mode —
     the same knobs digital_twin_live.py reads, so both live paths condition
     the measured current identically."""
-    from twin_model import i_max_for   # lazy: twin_model imports this module too
+    from twin_model import live_i_max_for   # lazy: twin_model imports this module too
     ls = cfg.raw.get("live_sensor") or {}
     return {
         "baudrate": int(ls.get("baudrate", 9600)),
         "deadband_A": float(ls.get("deadband_A", 0.2)),
         "stale_after_s": float(ls.get("stale_after_s", 3.0)),
         "max_gap_s": float(ls.get("max_gap_s", 10.0)),
-        "i_max_A": float(i_max_for(cfg)),
+        "invalid_above_A": float(ls.get("invalid_above_A", 20.0)),
+        "zero_cal_s": float(ls.get("zero_cal_s", 0.0)),
+        "zero_cal_max_A": float(ls.get("zero_cal_max_A", 1.0)),
+        "zero_offset_mode": str(ls.get("zero_offset_mode", "linear")),
+        "zero_offset_default_A": float(ls.get("zero_offset_default_A", 0.0)),
+        "board_offsets": [{"name": str(b["name"]), "usb_id": str(b["usb_id"]).lower(),
+                           "I0_A": float(b["I0_A"])} for b in ls.get("board_offsets") or []],
+        "i_max_A": float(live_i_max_for(cfg)),
     }
 
 
@@ -262,6 +269,142 @@ def power_supply_params(cfg) -> dict:
         "anchors":  [[float(a["dial"]), float(a["I"])] for a in anchors],
         "degree_to_volt_ratio": float(ps["degree_to_volt_ratio"]),
     }
+
+
+def model_info(cfg, lev: dict) -> list:
+    """Model-information tables behind the HTML's "i" button: components grouped
+    by material, material properties, distances between components, excitation
+    -- each row tagged with WHERE the numbers come from.
+    Values are read from params.yaml (+ this build's levitation solve), never
+    retyped here -- only the provenance tags/notes are authored in this function.
+
+    src tags: meas = measured on the rig by the team, given = professor /
+    TEAM 28 problem / teacher email, ref = handbook/literature value,
+    calc = computed by this model, assumed = placeholder / estimate, not verified.
+    """
+    raw = cfg.raw
+    pl, co, ci = cfg.plate, cfg.coils, cfg.iron
+    ring = raw.get("outer_iron_ring", {})
+    fr = raw.get("device_frame", {})
+    bc = cfg.bc
+    mp = raw.get("material_props", {})
+    vd = raw.get("validation_data", {})
+    ps = cfg.power_supply or {}
+
+    def f(x, d=1):
+        return f"{float(x):.{d}f}"
+
+    def span(a, b, d=1):
+        return f"{f(a, d)} – {f(b, d)} mm"
+
+    r_core = float(ci.get("r_outer_mm", 0.0))
+    ri0, ri1 = float(co["inner"]["r_inner_mm"]), float(co["inner"]["r_outer_mm"])
+    rr0, rr1 = float(ring.get("r_inner_mm", 0.0)), float(ring.get("r_outer_mm", 0.0))
+    ro0, ro1 = float(co["outer"]["r_inner_mm"]), float(co["outer"]["r_outer_mm"])
+    fr_in = ro1 + float(fr.get("air_gap_mm", 0.0))
+    fr_out = fr_in + float(fr.get("wall_thickness_mm", 0.0))
+    h_coil = float(co["height_mm"])
+    R_disc, t_disc = float(pl["radius_mm"]), float(pl["thickness_mm"])
+    gap_rest = float(pl["z_bottom_mm"]) - float(co["z_top_mm"])
+    vis_gap = vd.get("levitation_visible_gap_mm")
+
+    disc_mass = next((p.get("mass_g") for p in raw.get("plate_library", [])
+                      if abs(float(p["radius_mm"]) - R_disc) < 0.5), None)
+    ASM = "assumed"   # cell flag: placeholder value, shown highlighted in the table
+
+    # Row = {"cells": [...], "src": tag, "note": hover text}; a cell is a string,
+    # or [string, "assumed"] to flag that one value as an unverified placeholder.
+    components = [
+        {"cells": ["Aluminium", "Levitating disc", f"0 – {f(R_disc)}  (Ø{f(2*R_disc, 0)})", f(t_disc),
+                   f"{disc_mass} g" if disc_mass else "—"],
+         "src": "meas", "note": "Ø16 cm per teacher's email; thickness + mass measured 2026-07-01"},
+        {"cells": ["Copper", "Inner coil", f"{f(ri0)} – {f(ri1)}", f(h_coil),
+                   f"{co['inner']['turns']} turns"],
+         "src": "meas", "note": "ruler measurement 2026-07-10; turns confirmed by IR data"},
+        {"cells": ["Copper", "Outer coil", f"{f(ro0)} – {f(ro1)}", f(h_coil),
+                   f"{co['outer']['turns']} turns, opposite winding sense"],
+         "src": "meas", "note": "ruler measurement 2026-07-10"},
+        {"cells": ["Copper", "Coil wire", "—", "—", [f"Ø{f(co['wire_diameter_mm'])} mm wire", ASM]],
+         "src": "assumed", "note": "wire gauge not measured on the rig"},
+        {"cells": ["Iron", "Center core", f"0 – {f(r_core)}  (Ø{f(2*r_core)})", f(h_coil), "solid"],
+         "src": "meas", "note": "ruler measurement 2026-07-10; magnet test: ferromagnetic"},
+        {"cells": ["Iron", "Iron ring", f"{f(rr0)} – {f(rr1)}", f(h_coil), "solid"],
+         "src": "meas", "note": "ruler measurement 2026-07-10; magnet test: ferromagnetic"},
+        {"cells": ["Plywood", "Frame wall", f"{f(fr_in)} – {f(fr_out)}", "—", "octagonal, display only"],
+         "src": "meas", "note": "outer coil → frame: 25–30 mm air, 50 mm to the outer edge"},
+    ]
+
+    al, cu, fe = mp.get("aluminium", {}), mp.get("copper", {}), mp.get("iron", {})
+    alpha = f"α = {float(pl['sigma_tempco_per_K']):.2g} 1/K"
+    properties = [
+        {"cells": ["Aluminium", f"{float(pl['sigma_S_per_m']):.3g}", f(pl.get("mu_r", 1), 0),
+                   f(pl["k_W_per_mK"], 0), f(pl["rho_kg_per_m3"], 0), f(pl["cp_J_per_kgK"], 0), alpha],
+         "src": "ref", "note": "handbook values; α: σ(T) = σ₀/(1+α(T−T₀))"},
+        {"cells": ["Copper", f"{float(co['sigma_Cu_S_per_m']):.3g}", f(cu.get("mu_r", 1), 0),
+                   f(cu.get("k_W_per_mK", 0), 0), f(cu.get("rho_kg_per_m3", 0), 0),
+                   f(cu.get("cp_J_per_kgK", 0), 0), alpha],
+         "src": "ref", "note": "handbook values"},
+        {"cells": ["Iron", [f"{float(ci.get('sigma_S_per_m', 0)):.2g}", ASM], [f(ci.get("mu_r", 0), 0), ASM],
+                   "—", f(fe.get("rho_kg_per_m3", 0), 0), f(fe.get("cp_J_per_kgK", 0), 0),
+                   f"B_sat = {f(ci.get('B_sat_T', 1.5))} T"],
+         "src": "ref", "note": "ρ, c_p, B_sat: mild steel. σ, μᵣ: placeholders — alloy / B-H curve unknown"},
+    ]
+
+    gaps = [
+        {"cells": ["Center core", "Inner coil", f"{f(ri0 - r_core)} mm", "radial"],
+         "src": "meas", "note": "air gap"},
+        {"cells": ["Inner coil", "Iron ring", f"{f(rr0 - ri1)} mm", "radial"],
+         "src": "meas", "note": "air gap"},
+        {"cells": ["Iron ring", "Outer coil", f"{f(ro0 - rr1)} mm", "radial"],
+         "src": "meas", "note": "air gap"},
+        {"cells": ["Outer coil", "Frame wall", f"{f(fr.get('air_gap_mm', 0))} mm", "radial"],
+         "src": "meas", "note": "measured 25–30 mm, midpoint used"},
+        {"cells": ["Disc (resting)", "Coil top", f"{f(gap_rest)} mm", "vertical"],
+         "src": "given", "note": "TEAM 28 problem (winding-form thickness)"},
+        {"cells": ["Disc (levitating, 5 A)", "Coil top", f"{f(lev['z_gap_5A_mm'])} mm (model)", "vertical"],
+         "src": "calc", "note": "F_lift(z) = m·g — does NOT match the rig yet (open question, μᵣ unknown)"},
+    ]
+    if vis_gap:
+        gaps.append({"cells": ["Disc (levitating, 5 A)", "Coil top",
+                               f"{f(vis_gap[0], 0)} – {f(vis_gap[1], 0)} mm (rig)", "vertical"],
+                     "src": "meas", "note": "visible gap observed 2026-07-01"})
+    gaps.append({"cells": ["Disc edge", "Iron ring", f"disc R {f(R_disc)} ≥ ring {f(rr1)} mm",
+                           "overlap"],
+                 "src": "calc", "note": "the disc covers the whole iron ring, not only the inner coil"})
+
+    anchors = ", ".join(f"{a['dial']:.0f}° → {a['I']:.2f} A" for a in ps.get("dial_to_current_A", []))
+    excitation = [
+        {"cells": ["Operating current (RMS)",
+                   f"{f(cfg.I, 2)} A at {f(raw['excitation'].get('voltage_V', 190), 0)} V"],
+         "src": "meas", "note": "multimeter, main operating point"},
+        {"cells": ["Current amplitude î = I·√2", f"{f(cfg.I_peak, 2)} A"],
+         "src": "calc", "note": "used by the lift-force chain"},
+        {"cells": ["Frequency", f"{f(cfg.freq, 0)} Hz"], "src": "given", "note": "mains"},
+        {"cells": ["Power supply", ps.get("name", "—")], "src": "meas",
+         "note": "identified from rig photo 2026-07-02"},
+        {"cells": ["Variac dial → current", anchors or "—"], "src": "meas",
+         "note": "dial scale is degrees, not volts"},
+    ]
+    for p in vd.get("op_points", []):
+        if float(p["I"]) != cfg.I:
+            excitation.append({"cells": ["Calibration point", f"{p['V']} V → {p['I']} A"],
+                               "src": "meas", "note": "IR session 2026-06-23"})
+    excitation.append({"cells": ["Ambient temperature (default)", f"{f(bc['T_ambient_degC'], 0)} °C"],
+                       "src": "given", "note": "professor, June 2026"})
+
+    # "group": first column is a material -> merged cells + colour swatch in JS.
+    return [
+        {"title": "Components by material", "group": True,
+         "cols": ["Material", "Component", "Radius r [mm]", "Height [mm]", "Details"],
+         "rows": components},
+        {"title": "Material properties", "group": True,
+         "cols": ["Material", "σ [S/m]", "μᵣ", "k [W/(m·K)]", "ρ [kg/m³]", "c_p [J/(kg·K)]", "Other"],
+         "rows": properties},
+        {"title": "Distances between components", "group": False,
+         "cols": ["From", "To", "Distance", "Direction"], "rows": gaps},
+        {"title": "Excitation & ambient", "group": False,
+         "cols": ["Quantity", "Value"], "rows": excitation},
+    ]
 
 
 # ─── EM field visualization data (B field lines + eddy current density) ──────
@@ -438,9 +581,27 @@ def lumped_physics(cfg, em: dict) -> dict:
     print(f"[LUMPED] C_iron={C_iron:.1f} J/K (V_iron={V_iron*1e6:.1f} cm^3, "
           f"rho={rho_Fe:.0f} cp={cp_Fe:.0f})")
 
-    P_inner = 0.5 * cfg.I ** 2 * coil_R(co["inner"])
-    P_outer = 0.5 * cfg.I ** 2 * coil_R(co["outer"])
-    P_iron = em["P_iron_W"]
+    # WP-ANCHOR phase 3 (2026-10-06): power basis of the lumped coil/iron network.
+    # "loss_chain" = the old behaviour, P = 1/2*I^2*R with the RMS current_A used AS
+    # the amplitude (half the true power; harmless at steady state because hA was
+    # calibrated with the same P, but WRONG for transients: the node capacities C are
+    # physical, so dT/dt = P/C needs the physical P). "rms_true" = P = I_rms^2*R =
+    # 1/2*I_peak^2*R, and the iron eddy loss scaled by the same (I_peak/I)^2.
+    # Evidence: at 6.175 A the inner coil heated 0.0729 K/s while 25-50 K above
+    # ambient, above the loss-chain ADIABATIC limit of 0.0725 K/s (docs/CHANGELOG.md
+    # WP-ANCHOR). The em_solver loss chain and the disc ROM are NOT changed here.
+    basis = str(lt.get("power_basis", "loss_chain"))
+    if basis == "rms_true":
+        k_P = (cfg.I_peak / cfg.I) ** 2 if cfg.I else 2.0
+    elif basis == "loss_chain":
+        k_P = 1.0
+    else:
+        raise ValueError(f"lumped_thermal.power_basis must be rms_true|loss_chain, got {basis!r}")
+    P_inner = k_P * 0.5 * cfg.I ** 2 * coil_R(co["inner"])
+    P_outer = k_P * 0.5 * cfg.I ** 2 * coil_R(co["outer"])
+    P_iron = k_P * em["P_iron_W"]
+    print(f"[LUMPED] power_basis={basis} (x{k_P:.3f}): P_inner={P_inner:.2f} "
+          f"P_outer={P_outer:.2f} P_iron={P_iron:.2f} W at I_ref")
     hA_inner = float(lt["hA_inner_W_per_K"])
     hA_outer = float(lt["hA_outer_W_per_K"])
     hA_iron = float(lt["hA_iron_W_per_K"])
@@ -857,6 +1018,17 @@ def solve_plate_variant(base_cfg, radius_mm: float, z_disc_bot_mm: float) -> dic
 
 def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = None,
           bake_key: bool = False) -> None:
+    # Stage timing, printed as a table at the end and saved next to the HTML
+    # (build_timing.json) so RUN.py can show it even when it skips the build.
+    t_start = t_lap = time.perf_counter()
+    timing = []
+
+    def lap(label):
+        nonlocal t_lap
+        now = time.perf_counter()
+        timing.append([label, now - t_lap])
+        t_lap = now
+
     cfg = load_config()
 
     # WP-C (2026-07-02): optional plate-radius override, e.g. the Ø202mm disc
@@ -876,6 +1048,7 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
 
     # 1. EM + ROM (same pipeline as digital_twin.py __main__)
     print(f"[EM]  Solving at î={cfg.I}A ...", end=" ", flush=True)
+    lap("load params.yaml")
     em = compute_losses(cfg)
     print(f"P_plate={em['P_plate_W']*1e3:.1f} mW  "
           f"P_coil={em['P_coil_W']:.1f} W  P_iron={em['P_iron_W']*1e3:.0f} mW")
@@ -885,8 +1058,10 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     #     |B| and |J_e| are linear in A_φ, hence linear in I (q~I² is |J_e|², not J_e).
     print("[EMVIZ] Field lines + eddy density map ...", end=" ", flush=True)
     je_field = compute_eddy_field(em)
+    lap("EM FEM solve (phasor, active disc)")
     field_lines, B_max = compute_em_field_lines(em, cfg)
     print(f"{len(field_lines)} field lines, B_max={B_max:.3f} T")
+    lap("EM field lines + eddy map")
 
     print("[ROM] Building FEM model ...", end=" ", flush=True)
     rom = ThermalROM().build(cfg, em_losses=em, verbose=False)
@@ -904,6 +1079,7 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     f_air  = 1.0 - f_eddy
     print(f"[SPLIT] disc heat sources: eddy {f_eddy*100:.0f}% (instant)  "
           f"hot-air {f_air*100:.0f}% (coil-inertia gated)")
+    lap("thermal FEM + ROM + heat split")
 
     # 2. Build device body 100% procedurally from params.yaml — STL is NOT used for
     #    body geometry. The STL had two fundamental problems: (1) coil radii mismatched
@@ -983,6 +1159,7 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     ])
     print(f"   TOTAL body   : {len(V_base):5d} tris  z=0..{z_coil_top:.0f}mm  disc at z={z_disc_bot:.1f}mm")
 
+    lap("3D device geometry")
     # 3. Procedural solid stepped disc + FEM ΔT_ref mapped onto its vertices
     print("[DISC] Building solid stepped disc + FEM field ...", end=" ", flush=True)
     V_disc, dTe_disc, dTa_disc, Je_disc = build_disc_mesh(cfg, rom, z_disc_bot, je_field=je_field)
@@ -1038,10 +1215,15 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
         "J_max":       round(J_max, 1),  # peak disc |J_e| [A/m²] at I_em_ref
     }
     lumped = lumped_physics(cfg, em)
+    lap("disc mesh + saturation + lumped network")
     lev = lev_params(cfg)
+    lap("levitation z_eq root-find (active disc)")
     psup = power_supply_params(cfg)
     params = {"rom": rom_params, "lumped": lumped, "field_lines": field_lines, "lev": lev,
               "power_supply": psup,
+              # 2026-10-02: model-information table behind the header's "i" button
+              # (display only -- nothing in the physics reads it).
+              "model_info": model_info(cfg, lev),
               # 2026-09-29: front-end tag. build_ar_twin.py reads this PARAMS block
               # from the baked HTML and re-tags it "AR" for outputs/ar_twin.html.
               "display_channel": "HTML",
@@ -1126,6 +1308,7 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
     params["plate_variants"] = plate_variants
     params["active_plate_idx"] = active_idx
 
+    lap(f"{len(plate_variants) - 1} other disc radii (EM + ROM + z_eq each)")
     # 5. Encode binary data as base64
     pos_b64   = base64.b64encode(V.reshape(-1).astype("<f4").tobytes()).decode()
     reg_b64   = base64.b64encode(region.tobytes()).decode()
@@ -1172,6 +1355,18 @@ def build(stl_path: str | None, out_path: str, plate_radius_mm: float | None = N
 
     sz_kb = len(html) / 1024
     print(f"\nWrote {out_path}  ({sz_kb:.0f} KB) — double-click to run.")
+    lap("encode + write HTML")
+
+    total = time.perf_counter() - t_start
+    print("\n[TIME] offline computation (this build):")
+    for label, sec in timing:
+        print(f"[TIME]   {label:44s} {sec:7.2f} s  {100 * sec / total:5.1f} %")
+    print(f"[TIME]   {'TOTAL':44s} {total:7.2f} s")
+    with open(os.path.join(os.path.dirname(os.path.abspath(out_path)), "build_timing.json"),
+              "w", encoding="utf-8") as f:
+        json.dump({"built_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                   "html": os.path.basename(out_path), "total_s": round(total, 3),
+                   "stages": [[label, round(sec, 3)] for label, sec in timing]}, f, indent=1)
 
 
 # ─── HTML / JS template ───────────────────────────────────────────────────────
@@ -1195,7 +1390,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 }
 body.light{
   --bg:#eef1f7; --panel-bg:rgba(255,255,255,.86); --panel-border:rgba(40,60,110,.14);
-  --text:#1c2333; --muted:#566079; --faint:#8a93a8; --accent:#2a62d4;
+  --text:#14213d; --muted:#24406e; --faint:#43608f; --accent:#2a62d4;   /* cool navy/steel, not grey (user 2026-10-06) */
   --hover:rgba(42,98,212,.07); --chip:rgba(42,98,212,.06);
   --hdr-bg:rgba(255,255,255,.88);
   --c-hot:#c27a00; --c-ok:#1f8a4c; --c-air:#b8621e; --c-gap:#2a7ab8;
@@ -1224,6 +1419,40 @@ body{margin:0;overflow:hidden;background:var(--bg);color:var(--text);
 .iconbtn{background:none;border:1px solid var(--panel-border);color:var(--muted);
   border-radius:6px;padding:5px 10px;cursor:pointer;font-size:11.5px;white-space:nowrap}
 .iconbtn:hover{color:var(--text);border-color:var(--accent)}
+.infobtn{width:26px;height:26px;border-radius:50%;border:1.5px solid var(--accent);
+  background:var(--chip);color:var(--accent);cursor:pointer;padding:0;flex:none;
+  font:italic 700 14px/1 Georgia,'Times New Roman',serif}
+.infobtn:hover,.infobtn.on{background:var(--accent);color:#fff}
+
+/* ── Model-information sheet ("i" button) ───────────────────────────────── */
+#infoOverlay{position:fixed;inset:0;z-index:60;display:none;align-items:center;
+  justify-content:center;padding:16px;background:rgba(0,0,0,.45);backdrop-filter:blur(3px)}
+#infoOverlay.open{display:flex}
+#infoCard{width:min(860px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+  background:var(--hdr-bg);border:1px solid var(--panel-border);border-radius:12px;
+  box-shadow:0 18px 50px rgba(0,0,0,.45);backdrop-filter:blur(18px);overflow:hidden}
+.info-head{display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:11px 16px;border-bottom:1px solid var(--panel-border);font-weight:600;font-size:13.5px}
+.info-body{overflow-y:auto;padding:2px 16px 14px;scrollbar-width:thin}
+.info-body h3{margin:16px 0 6px;font-size:11px;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--accent)}
+.info-wrap{overflow-x:auto}
+.info-tbl{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.info-tbl th{padding:5px 8px;text-align:left;font-size:10.5px;font-weight:600;color:var(--muted);
+  background:var(--chip);border-bottom:1px solid var(--panel-border);white-space:nowrap}
+.info-tbl td{padding:5px 8px;border-top:1px solid var(--panel-border);vertical-align:middle;color:var(--text)}
+.info-tbl td.mat{font-weight:600;white-space:nowrap;border-right:1px solid var(--panel-border)}
+.info-tbl td.k{color:var(--muted)}
+.info-tbl td.s{width:1%;text-align:right}
+.info-tbl tbody tr:hover td:not(.mat){background:var(--hover)}
+.info-tbl tr[title]:not([title=""]){cursor:help}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:7px;vertical-align:-1px}
+.asm{color:#ff7a7a;font-weight:600}
+.info-foot{margin-top:12px;font-size:10.5px;color:var(--faint);line-height:1.9}
+.src{display:inline-block;font-size:10px;font-weight:600;padding:1px 7px;border-radius:9px;
+  white-space:nowrap;border:1px solid currentColor;opacity:.9}
+.src.meas{color:#3fbf7f}.src.given{color:#5b9cff}.src.ref{color:#a98bff}
+.src.calc{color:#36c2d6}.src.assumed{color:#ff7a7a}
 
 /* ── Panels: controls on the LEFT, readouts on the RIGHT, model free in the middle */
 .ui-col{position:absolute;top:58px;display:flex;flex-direction:column;gap:10px;
@@ -1251,6 +1480,18 @@ body{margin:0;overflow:hidden;background:var(--bg);color:var(--text);
 .sec{font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
   color:var(--faint);margin:12px 0 6px}
 .sec:first-child{margin-top:0}
+/* Collapsible picker (Ambient / Disc radius): the chip shows the current choice,
+   a click pops the options out, they fold back after PICK_HIDE_MS idle. */
+.sec-pick{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.pick-chip{text-transform:none;letter-spacing:0;font-family:inherit;font-weight:600;font-size:11.5px;line-height:1;
+  color:var(--accent);background:rgba(143,182,255,.12);border:1px solid rgba(143,182,255,.35);
+  border-radius:6px;padding:4px 9px;cursor:pointer}
+.pick-chip:hover,.pick-chip[aria-expanded="true"]{background:rgba(143,182,255,.22)}
+.pick-chip::after{content:" ▾";opacity:.7}
+.pick-chip[aria-expanded="true"]::after{content:" ▴"}
+.pick-chip:disabled{opacity:.4;cursor:not-allowed}
+.pick-body{display:none}
+.pick-body.open{display:block}
 .cg{margin-bottom:8px}
 .cg label{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px;
   font-size:12px;color:var(--muted)}
@@ -1344,7 +1585,9 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
 .callout.force.up{color:#7fe7ff;border-color:rgba(127,231,255,.45)}
 .callout.force.dn{color:#ffb070;border-color:rgba(255,176,112,.45)}
 /* "Why does the disc float?" strip -- B-field / Both modes only */
-#forcePanel{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:5;
+#forceInfoBtn{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:6;
+  display:none;align-items:center;justify-content:center;padding:0}
+#forcePanel{position:fixed;left:50%;bottom:50px;transform:translateX(-50%);z-index:5;
   background:rgba(10,14,28,.80);border:1px solid rgba(127,231,255,.30);border-radius:9px;
   padding:6px 12px;font-size:11px;color:#d6e4ff;max-width:min(560px,calc(100vw - 32px));
   display:none;pointer-events:none;line-height:1.45}
@@ -1353,6 +1596,29 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
 #forcePanel .dn{color:#ffb070}
 #forcePanel .st{display:inline-block;margin-left:6px;padding:0 6px;border-radius:5px;
   background:rgba(127,231,255,.12);color:#bff3ff}
+
+/* Light theme: overlays on the light 3D scene get a light card + dark, cool text
+   (the dark-theme pastel cyan/amber/orange is unreadable on a pale background). */
+body.light #calloutSvg .ld{stroke:rgba(36,64,110,.70)}
+body.light #calloutSvg .ld.hid{stroke:rgba(36,64,110,.40)}
+body.light #calloutSvg .dot{fill:#2a62d4;stroke:#fff}
+body.light #calloutSvg .iron .ld{stroke:rgba(67,96,143,.75)}
+body.light #calloutSvg .iron .ld.hid{stroke:rgba(67,96,143,.45)}
+body.light #calloutSvg .iron .dot{fill:#43608f}
+body.light .callout{color:#14213d;background:rgba(255,255,255,.92);border-color:rgba(42,98,212,.35);
+  box-shadow:0 1px 4px rgba(20,33,61,.12)}
+body.light .callout .lv{color:#0b3a8f}
+body.light .callout .rl{color:#43608f}
+body.light .callout.iron{color:#24406e;border-color:rgba(67,96,143,.45)}
+body.light .callout.iron .rl{color:#43608f}
+body.light .callout.force.up{color:#00609a;border-color:rgba(0,96,154,.45)}
+body.light .callout.force.dn{color:#5b3aa8;border-color:rgba(91,58,168,.45)}
+body.light #forcePanel{background:rgba(255,255,255,.95);color:#14213d;border-color:rgba(42,98,212,.35);
+  box-shadow:0 2px 8px rgba(20,33,61,.15)}
+body.light #forcePanel b{color:#0b1f4d}
+body.light #forcePanel .up{color:#00609a}
+body.light #forcePanel .dn{color:#5b3aa8}
+body.light #forcePanel .st{background:rgba(42,98,212,.10);color:#1d4fb8}
 
 #pausedBadge{position:fixed;top:58px;left:50%;transform:translateX(-50%);
   background:rgba(255,122,122,.12);color:var(--c-warn);border:1px solid rgba(255,122,122,.45);
@@ -1368,7 +1634,7 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
     margin:10px;align-items:stretch;pointer-events:auto}
   .panel{width:100%}
   /* the canvas sits behind the stacked panels here -> callouts would only peek out */
-  #calloutSvg,#calloutLayer,#forcePanel{display:none!important}
+  #calloutSvg,#calloutLayer,#forcePanel,#forceInfoBtn{display:none!important}
 }
 </style></head><body>
 
@@ -1386,7 +1652,17 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
     <span class="hdr-badge" id="hdrIBadge">I = 5.00 A</span>
   </div>
   <div class="hdr-right">
+    <button class="infobtn" id="infoBtn" title="Model information (I)" aria-label="Model information">i</button>
     <button class="iconbtn" id="themeToggle">☀️ Light</button>
+  </div>
+</div>
+<div id="infoOverlay" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
+  <div id="infoCard">
+    <div class="info-head">
+      <span id="infoTitle">Model information — TEMF levitator</span>
+      <button class="iconbtn" id="infoClose" aria-label="Close">✕</button>
+    </div>
+    <div class="info-body" id="infoBody"></div>
   </div>
 </div>
 <div id="pausedBadge">⏸ PAUSED — press Space to resume</div>
@@ -1396,7 +1672,9 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
   <div class="panel" id="panelControls">
     <div class="panel-head"><span>Physics Controls</span><span class="chev">▾</span></div>
     <div class="panel-body">
-    <div class="sec">Scenario</div>
+    <div class="sec sec-pick"><span>Scenario</span>
+      <button class="pick-chip" id="scChip" aria-expanded="false" title="Change scenario">Quick</button></div>
+    <div class="pick-body" id="scBody">
     <div class="sc-group" id="scGroup">
       <button class="sc-btn active" data-sc="quickstart">Quick</button>
       <button class="sc-btn" data-sc="step">Step</button>
@@ -1404,11 +1682,15 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       <button class="sc-btn" data-sc="sine">Sine</button>
       <button class="sc-btn" data-sc="pulse">Pulse</button>
     </div>
-    <div class="sec">Excitation</div>
+    </div>
+    <div class="sec sec-pick"><span>Excitation</span>
+      <button class="pick-chip" id="excChip" aria-expanded="false" title="Change input mode">Amps</button></div>
+    <div class="pick-body" id="excBody">
     <div class="sc-group" id="inputModeGroup">
       <button class="sc-btn active" data-mode="amps">Amps</button>
       <button class="sc-btn" data-mode="dial">Variac dial</button>
       <button class="sc-btn" data-mode="sensor">Sensor</button>
+    </div>
     </div>
     <div class="cg" id="sensorGroup" style="display:none">
       <div class="sensor-stat"><span class="dot" id="sensorDot"></span>
@@ -1416,6 +1698,7 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       <div class="sc-group" style="margin-bottom:4px">
         <button class="sc-btn" id="btnSerial">Connect Arduino</button>
         <button class="sc-btn" id="btnSensorDemo">Demo signal</button>
+        <button class="sc-btn" id="btnSensorZero" title="Re-measure the zero-current offset (Variac at 0)">Re-zero</button>
       </div>
       <p class="note" id="sensorNote">Measured I<sub>rms</sub> (ACS712 → Arduino, 1 Hz) drives the
         model in real time. Temperatures stay model predictions.</p>
@@ -1433,11 +1716,17 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       <input type="range" id="sS" min="0" max="2.301" step="0.01" value="0">
     </div>
     <button id="reset">↺ Reset temperatures</button>
-    <div class="sec">Ambient T<sub>amb</sub></div>
-    <div class="sc-group" id="ambGroup" style="margin-bottom:2px"></div>
-    <p class="note" id="ambNote" style="margin:0 0 4px"></p>
-    <div class="sec">Disc radius</div>
-    <div class="sc-group" id="plateGroup"></div>
+    <div class="sec sec-pick"><span>Ambient T<sub>amb</sub></span>
+      <button class="pick-chip" id="ambChip" aria-expanded="false" title="Change ambient temperature">— °C</button></div>
+    <div class="pick-body" id="ambBody">
+      <div class="sc-group" id="ambGroup" style="margin-bottom:2px"></div>
+      <p class="note" id="ambNote" style="margin:0 0 4px"></p>
+    </div>
+    <div class="sec sec-pick"><span>Disc radius</span>
+      <button class="pick-chip" id="plateChip" aria-expanded="false" title="Change disc radius">—</button></div>
+    <div class="pick-body" id="plateBody">
+      <div class="sc-group" id="plateGroup"></div>
+    </div>
     <div class="sec">Heat sources</div>
     <div class="row"><span>Disc eddy currents</span>
       <span class="val" id="vPdisc" style="color:var(--c-b)">0.0 W</span></div>
@@ -1472,9 +1761,7 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
     <div class="panel-body">
     <div class="kv">
       <div><span class="k">Sim time</span><span class="val" id="vT">0 s</span></div>
-      <div><span class="k">Current I(t)</span><span class="val" id="vIC">0.0 A</span></div>
       <div><span class="k">Heat in</span><span class="val" id="vP">0.0 W</span></div>
-      <div><span class="k">T<sub>amb</sub></span><span class="val" id="vTambInit">— °C</span></div>
     </div>
     <div class="sec secbar" title="Disc colour ramp (aluminium). The window eases between absolute (T_amb to hot) and relative (within the disc); the bottom face runs hotter as the coils' hot air builds up.">
       <span class="secname">Disc</span>
@@ -1489,13 +1776,8 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
     <div class="hero">
       <span class="lbl"><span class="box" id="bPl" style="background:#2255aa"></span>T<sub>max</sub></span>
       <span class="valbig" id="tPmax">25.0 °C</span></div>
-    <div class="row"><span>T<sub>mean</sub></span><span class="val" id="tPmean">25.0 °C</span></div>
-    <div class="row" title="Hottest disc point once everything has settled at this current — computed by the twin's own engine (includes σ(T) and nonlinear convection)."><span>T<sub>ss</sub> target</span>
-      <span class="val" id="tPss" style="color:var(--c-ok)">25.0 °C</span></div>
     <div class="row"><span>Bottom air</span>
       <span class="val" id="tAirBot" style="color:var(--c-air)">—</span></div>
-    <div class="row"><span>Levitation gap</span>
-      <span class="val" id="tLevGap" style="color:var(--c-gap)">0.0 mm</span></div>
     <div class="sec secbar" title="Coil colour ramp (varnished copper): T_amb to the hottest IR reading. Markers: inner (white) / outer (cream).">
       <span class="secname">Coils</span>
       <div class="barwrap">
@@ -1504,10 +1786,10 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       </div></div>
     <div class="row">
       <span><span class="box" id="bIn"></span>Inner · <span id="lblInnerTurns">1000</span> t</span>
-      <span><span class="val" id="tIn">25.0 °C</span> <span class="sub" id="tInSS"></span></span></div>
+      <span class="val" id="tIn">25.0 °C</span></div>
     <div class="row">
       <span><span class="box" id="bOut"></span>Outer · <span id="lblOuterTurns">500</span> t</span>
-      <span><span class="val" id="tOut">25.0 °C</span> <span class="sub" id="tOutSS"></span></span></div>
+      <span class="val" id="tOut">25.0 °C</span></div>
     <div class="sec secbar" title="Iron colour ramp (center core + separator ring share one thermal node).">
       <span class="secname">Iron</span>
       <div class="barwrap">
@@ -1516,8 +1798,7 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       </div></div>
     <div class="row">
       <span><span class="box" id="bFe"></span>Core + separator ring</span>
-      <span><span class="val" id="tFe">25.0 °C</span> <span class="sub" id="tFeSS"
-        title="Steady state at this current. The iron is the slowest part (C/hA ≈ 1.9 h), so it takes hours to get there."></span></span></div>
+      <span class="val" id="tFe">25.0 °C</span></div>
     <div class="sec">Field</div>
     <div class="row" id="satRow"><span>Iron B<sub>max</sub> / B<sub>sat</sub></span>
       <span class="val" id="tBmax" style="color:var(--c-ok)">—</span></div>
@@ -1525,6 +1806,8 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       <span class="val" id="tBplate" style="color:var(--c-b)">—</span></div>
     <div class="row"><span>Disc |J<sub>e</sub>|<sub>max</sub></span>
       <span class="val" id="tJmax" style="color:var(--c-j)">—</span></div>
+    <div class="row"><span>Levitation gap</span>
+      <span class="val" id="tLevGap" style="color:var(--c-gap)">0.0 mm</span></div>
     </div>
   </div>
 
@@ -1538,7 +1821,6 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
       <span><i style="border-color:#ff6644"></i>Disc T<sub>max</sub></span>
       <span><i style="border-color:#ff8844"></i>Inner</span>
       <span><i style="border-color:#ffcc44"></i>Outer</span>
-      <span><i style="border-color:#44ff88;border-top-style:dashed"></i>T<sub>ss</sub></span>
       <span><i style="border-color:#5599ff;border-top-style:dashed"></i>T<sub>amb</sub></span>
     </div>
     <div class="note" id="tauLabel"></div>
@@ -1562,6 +1844,9 @@ hr.div{border:0;border-top:1px solid var(--panel-border);margin:10px 0}
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+// Load timing [ms since navigation start] -- diagnostics only. RUN.py reads
+// window.__twinTiming from a headless browser and prints it in the terminal.
+const TWIN_T = {three_loaded: performance.now()};
 // ── Baked data ────────────────────────────────────────────────────────────────
 const PARAMS = __PARAMS__;
 const ROM    = PARAMS.rom;    // T_amb tau I_ref dT_mean_ref dT_max_ref alpha P_ref UA + I_em_ref/B_max/J_max
@@ -1638,6 +1923,7 @@ async function fetchAmbientC(timeoutMs = 4000) {
 let ambient = await fetchAmbientC();
 let T_AMB_JS = ambient.value;
 let T_AMB_AT = ambient.at.toISOString();   // when the ambient was recorded
+TWIN_T.ambient_ready = performance.now();
 console.info(`[ambient] T_amb = ${T_AMB_JS} °C, source=${ambient.source}, at ${T_AMB_AT}`);
 function paintAmbient() {
   const hhmm = ambient.at.toTimeString().slice(0, 5);
@@ -1646,13 +1932,8 @@ function paintAmbient() {
     badge.textContent = `T_amb = ${T_AMB_JS.toFixed(1)} °C${ambient.live ? ` (live ${hhmm})` : ''}`;
     badge.title = `source: ${ambient.source}, recorded ${T_AMB_AT}`;
   }
-  // Telemetry-panel row: same initial value as the header badge, fetched once
-  // from the weather API at load and used as the model's own T_amb baseline
-  // (see T_AMB_JS above) -- shown as a first-class parameter, not just a badge.
-  const vTambInit = document.getElementById('vTambInit');
-  if (vTambInit) {
-    vTambInit.textContent = `${T_AMB_JS.toFixed(1)} °C${ambient.live ? ` (live ${hhmm})` : ''}`;
-  }
+  // The live value is written into the left panel's "Live" button itself
+  // (paintAmbGroup) -- no separate telemetry row (user, 2026-10-06).
 }
 paintAmbient();
 
@@ -1665,6 +1946,7 @@ const regions    = new Uint8Array  (b64Buf("__REG_B64__"));    // per triangle
 const dT_ref_vtx = new Float32Array(b64Buf("__DT_B64__"));     // eddy field [K], uniform thru-thickness
 const dT_air_vtx = new Float32Array(b64Buf("__DTAIR_B64__"));  // hot-air field [K], bottom-weighted
 const Je_vtx     = new Float32Array(b64Buf("__JE_B64__"));     // eddy-current density, normalized 0..1
+TWIN_T.data_decoded = performance.now();
 
 // Rotate CAD Z-up → Three.js Y-up: (x,y,z)→(x,z,−y)
 for(let i=0;i<positions.length;i+=3){
@@ -1769,7 +2051,7 @@ function romStep(I, dt) {
   //     far field — they heat up a common pocket of air around themselves.
   // Contact conduction inner coil → iron/core-separator: the passive metal parts
   // physically touch the coil and heat mainly through that contact (real IR:
-  // core reaches ~45°C at 7.8A steady), not through the air pocket.
+  // core reaches ~45°C after 350 s at 6.175A, still rising), not through the air pocket.
   const q_cond = (LUMPED.nodes.iron.G_cond || 0) * (sim.T.inner - sim.T.iron);
   let Qconv = 0.0;
   for (const k in LUMPED.nodes) {
@@ -1840,6 +2122,7 @@ function resetSim() {
   sim.hist_T_inner = [T_AMB_JS];
   sim.hist_T_outer = [T_AMB_JS];
   sim.hist_I      = [0.0];
+  sim.hist_dt     = 1.0;
 }
 
 // ── Color mapping ─────────────────────────────────────────────────────────────
@@ -2098,6 +2381,21 @@ document.body.appendChild(calloutLayer);
 const forcePanel = document.createElement('div');
 forcePanel.id = 'forcePanel';
 document.body.appendChild(forcePanel);
+// The explanation strip is collapsed behind a small (i) button (user, 2026-10-06):
+// click to read it, it folds back by itself after FORCE_INFO_MS (or on a 2nd click).
+const FORCE_INFO_MS = 8000;
+const forceInfoBtn = document.createElement('button');
+forceInfoBtn.id = 'forceInfoBtn'; forceInfoBtn.className = 'infobtn';
+forceInfoBtn.textContent = 'i';
+forceInfoBtn.title = 'Why does the disc float?';
+forceInfoBtn.setAttribute('aria-label', 'Why does the disc float?');
+document.body.appendChild(forceInfoBtn);
+let forceInfoOpen = false, forceInfoTimer = null;
+forceInfoBtn.addEventListener('click', () => {
+  forceInfoOpen = !forceInfoOpen;
+  clearTimeout(forceInfoTimer);
+  if (forceInfoOpen) forceInfoTimer = setTimeout(() => { forceInfoOpen = false; }, FORCE_INFO_MS);
+});
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.dampingFactor = 0.08;
@@ -2237,8 +2535,15 @@ fieldLineGroup.position.set(-ctr.x, -ctr.y, -ctr.z);   // same (un-lifted) frame
 fieldLineGroup.visible = false;
 scene.add(fieldLineGroup);
 
-function flColor(t, out) {   // blue(0) -> cyan(0.5) -> white(1)
+let flLightTheme = false;   // set by the theme toggle; light bg needs dark lines
+function flColor(t, out) {
   t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  if (flLightTheme) {        // light theme: mid blue(0) -> royal(0.5) -> deep navy(1)
+    if (t < 0.5) { const k = t / 0.5; out.setRGB(0.42 - 0.26 * k, 0.58 - 0.26 * k, 0.90 - 0.08 * k); }
+    else         { const k = (t - 0.5) / 0.5; out.setRGB(0.16 - 0.12 * k, 0.32 - 0.20 * k, 0.82 - 0.36 * k); }
+    return;
+  }
+  // dark theme: blue(0) -> cyan(0.5) -> white(1)
   if (t < 0.5) { const k = t / 0.5; out.setRGB(0.10 * (1 - k), 0.30 + 0.70 * k, 1.0); }
   else         { const k = (t - 0.5) / 0.5; out.setRGB(k, 1.0, 1.0); }
 }
@@ -2283,7 +2588,9 @@ function layoutFieldLines(liftY) {
 function applyFieldLineOpacity() {
   for (const o of fieldLineMats) o.mat.opacity = fieldLineOpacityPct * (0.15 + 0.85 * o.amp);
 }
+let flCurrentData = null;   // last baked line set (theme toggle recolours it)
 function buildFieldLines(linesData) {
+  flCurrentData = linesData;
   // Tear down the previous disc's field lines (dispose GPU buffers) before
   // rebuilding from linesData -- mutate fieldLineMats IN PLACE (length=0, not
   // reassignment) since the render loop and applyFieldLineOpacity() close
@@ -2522,6 +2829,7 @@ function makeForceArrow(color) {
   return a;
 }
 const arrUp = makeForceArrow(0x7fe7ff), arrDn = makeForceArrow(0xffb070);
+const FORCE_ARROW_COL = {dark: [0x7fe7ff, 0xffb070], light: [0x00609a, 0x5b3aa8]};
 const F_ARROW_L0 = size * 0.09;   // on-screen length of m·g; F_mag scales against it
 const forceTags = {up: null, dn: null};
 for (const k of ['up', 'dn']) {
@@ -2636,7 +2944,9 @@ function updateCallouts(dt) {
   const showF = fieldLineGroup.visible;
   forceGroup.visible = showF;
   forceTags.up.style.display = forceTags.dn.style.display = showF ? 'block' : 'none';
-  forcePanel.style.display = showF ? 'block' : 'none';
+  forceInfoBtn.style.display = showF ? 'flex' : 'none';
+  forceInfoBtn.classList.toggle('on', showF && forceInfoOpen);
+  forcePanel.style.display = (showF && forceInfoOpen) ? 'block' : 'none';
   if (!showF) return;
   const mg = PLATE_VARIANTS[activePlateIdx].F_grav_N;
   const F = liftForceN(I, lev.z);
@@ -2784,7 +3094,7 @@ function updateHeatParticles(dt) {
 // ── Paint vertex colors (allocation-free hot path) ───────────────────────────
 let TRANGE = T_COLOR_HI - T_COLOR_LO;
 // Coil colour-ramp ceiling — ABSOLUTE scale: 0 = T_amb, 1 = T_COIL_HOT.
-// Anchored to the real IR data (session 1, 2026-06-23): inner coil hit 79°C @7.8A,
+// Anchored to the real IR data (session 1, 2026-06-23): inner coil hit 79°C @6.175A (run B, not steady),
 // the hottest reading ever measured. Colour only changes when the actual
 // temperature changes — NOT when I changes (a prior *relative* scale divided by
 // I-dependent T_ss(I), so bumping I made the coil "cool" instantly and steady
@@ -2828,7 +3138,7 @@ function paintMesh(M) {
   const tnInner = (sim.T.inner - T_AMB_JS) / dT_hot;
   const tnOuter = (sim.T.outer - T_AMB_JS) / dT_hot;
   // Core/separator: same absolute scale as the coils, then a visual boost — the
-  // real core/ring only reach ~45°C @7.8A (tnorm ≈0.31 on this scale), which would
+  // real core/ring only reach ~45°C @6.175A (tnorm ≈0.31 on this scale), which would
   // look nearly frozen silver. 1.8x lifts that to a clearly visible warm-metal
   // shift while keeping writeRampMetal's own clamp to [0,1]; matches the real IR
   // image (docs/thermal_test.png): coils bright, ring/core moderately warm.
@@ -2953,7 +3263,16 @@ function totalPower(I) {
 // ── Rolling chart canvas ──────────────────────────────────────────────────────
 const chartCanvas = document.getElementById('chart');
 const ctx = chartCanvas.getContext('2d');
-const CHART_WIN = 600; // 10 min window; intentionally hardcoded (cosmetic chart span, not physics)
+// Whole-run x-axis (user, 2026-10-06): the charts always span t=0 -> now instead
+// of a rolling 10-min window. CHART_MIN_SPAN only keeps the first seconds from
+// being stretched across the full width. Cosmetic, not physics.
+const CHART_MIN_SPAN = 60;
+function chartSpan() {
+  const N = sim.hist_t.length;
+  const t0 = N ? sim.hist_t[0] : 0, tNow = N ? sim.hist_t[N-1] : 0;
+  return {t0, span: Math.max(CHART_MIN_SPAN, tNow - t0)};
+}
+function fmtSpan(sec) { return sec < 120 ? sec.toFixed(0) + ' s' : sec < 7200 ? (sec/60).toFixed(1) + ' min' : (sec/3600).toFixed(2) + ' h'; }
 
 function drawGrid(W, H, nRows) {
   ctx.strokeStyle = 'rgba(120,140,180,.12)'; ctx.lineWidth = 1; ctx.setLineDash([]);
@@ -2975,23 +3294,22 @@ function drawChart() {
   const N = sim.hist_t.length;
   if (N < 2) return;
   const tNow = sim.hist_t[N-1];
-  const t0   = Math.max(0, tNow - CHART_WIN);
-  const curI = getI();
-  const curTss       = plateTss(curI);
-  const curInnerSS   = coilTss_inner(curI);
+  const {t0, span} = chartSpan();
+  // Steady-state target line removed (user, 2026-10-06: no measured steady state
+  // yet, WP-ANCHOR) -- the axis now scales to the history actually drawn.
+  let Thi = T_AMB_JS + 2;
+  for (let i = 0; i < N; i++) {
+    if (sim.hist_t[i] < t0) continue;
+    Thi = Math.max(Thi, sim.hist_Tmax[i] + 1, sim.hist_T_inner[i] + 1, sim.hist_T_outer[i] + 1);
+  }
   const Tlo = T_AMB_JS - 0.5;
-  const Thi = Math.max(curTss + 2, sim.hist_Tmax[N-1] + 1,
-                        curInnerSS + 2, sim.hist_T_inner[N-1] + 1, T_AMB_JS + 2);
-  const tx = t => (t - t0) / CHART_WIN * W;
+  const tx = t => (t - t0) / span * W;
   const ty = T => H - (T - Tlo) / (Thi - Tlo) * H;
   drawGrid(W, H, 4);
   // T_amb line (blue dashed)
   ctx.strokeStyle = '#5599ff'; ctx.lineWidth = 1; ctx.setLineDash([5,4]);
   ctx.beginPath();
   ctx.moveTo(0, ty(T_AMB_JS)); ctx.lineTo(W, ty(T_AMB_JS)); ctx.stroke();
-  // T_ss plate line (green dashed)
-  ctx.strokeStyle = '#44ff88'; ctx.lineWidth = 1; ctx.setLineDash([5,4]);
-  ctx.beginPath(); ctx.moveTo(0, ty(curTss)); ctx.lineTo(W, ty(curTss)); ctx.stroke();
   ctx.setLineDash([]);
   // Outer coil line (bright yellow, thicker for contrast)
   ctx.strokeStyle = '#ffdd22'; ctx.lineWidth = 2.2;
@@ -3024,9 +3342,10 @@ function drawChart() {
   ctx.fillStyle = '#7ab'; ctx.font = '9px monospace';
   ctx.fillText(Thi.toFixed(1)+'°C', 2, 11);
   ctx.fillText(Tlo.toFixed(1)+'°C', 2, H-3);
-  ctx.fillStyle = '#44ff88'; ctx.fillText('T_ss', W-28, ty(curTss)-4);
-  const winLabel = tNow < CHART_WIN ? (tNow/60).toFixed(1)+'min' : '-10min…now';
-  ctx.fillStyle = '#556'; ctx.fillText(winLabel, 2, H/2);
+  // x-axis span, bottom-right (bottom-left holds the T_lo label)
+  const spanLbl = `${fmtSpan(t0)} → ${fmtSpan(t0 + span)}`;
+  ctx.fillStyle = '#7ab';
+  ctx.fillText(spanLbl, W - ctx.measureText(spanLbl).width - 3, H - 3);
 }
 
 // ── I(t) current-profile chart (second canvas) ────────────────────────────────
@@ -3037,10 +3356,11 @@ function drawCurrentChart() {
   ctxI.fillStyle = '#0a0a14'; ctxI.fillRect(0, 0, W, H);
   const N = sim.hist_I.length;
   if (N < 2) return;
-  const tNow = sim.hist_t[N-1];
-  const t0 = Math.max(0, tNow - CHART_WIN);
-  const Ihi = Math.max(targetI, 1) * 1.15;
-  const tx = t => (t - t0) / CHART_WIN * W;
+  const {t0, span} = chartSpan();
+  let Ihi = Math.max(targetI, 1);
+  for (let i = 0; i < N; i++) Ihi = Math.max(Ihi, sim.hist_I[i]);
+  Ihi *= 1.15;
+  const tx = t => (t - t0) / span * W;
   const iy = I => H - (I / Ihi) * H;
   ctxI.strokeStyle = 'rgba(120,140,180,.12)'; ctxI.lineWidth = 1;
   ctxI.beginPath();
@@ -3070,8 +3390,8 @@ function attachChartTooltip(canvas, formatFn) {
     if (N < 2) { chartTip.style.display = 'none'; return; }
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const tNow = sim.hist_t[N-1], t0 = Math.max(0, tNow - CHART_WIN);
-    const tAtX = t0 + x / canvas.width * CHART_WIN;
+    const {t0, span} = chartSpan();
+    const tAtX = t0 + x / canvas.width * span;
     let idx = 0, best = Infinity;
     for (let i = 0; i < N; i++) {
       const d = Math.abs(sim.hist_t[i] - tAtX);
@@ -3096,12 +3416,36 @@ sS.oninput = () => {
   document.getElementById('vS').textContent = (sp<10?sp.toFixed(1):Math.round(sp))+'×';
 };
 sS.oninput();  // sync display with initial slider value on load
+// Collapsible picker (user, 2026-10-06): chip = current choice; click opens the
+// options, they close by themselves PICK_HIDE_MS after the last interaction
+// (hovering the open options holds them open; a 2nd chip click closes at once).
+const PICK_HIDE_MS = 3000;
+function makePicker(chipId, bodyId) {
+  const chip = document.getElementById(chipId), body = document.getElementById(bodyId);
+  let timer = null;
+  const close = () => { clearTimeout(timer); body.classList.remove('open'); chip.setAttribute('aria-expanded', 'false'); };
+  const arm = () => { clearTimeout(timer); timer = setTimeout(close, PICK_HIDE_MS); };
+  chip.addEventListener('click', () => {
+    if (body.classList.contains('open')) return close();
+    body.classList.add('open'); chip.setAttribute('aria-expanded', 'true'); arm();
+  });
+  body.addEventListener('mouseenter', () => clearTimeout(timer));
+  body.addEventListener('mouseleave', () => { if (body.classList.contains('open')) arm(); });
+  body.addEventListener('click', () => { if (body.classList.contains('open')) arm(); });
+  return {setLabel: t => { chip.textContent = t; }};
+}
+const ambPicker = makePicker('ambChip', 'ambBody');
+const platePicker = makePicker('plateChip', 'plateBody');
+const scPicker = makePicker('scChip', 'scBody');
+const excPicker = makePicker('excChip', 'excBody');
+
 function selectScenario(name) {
   if (sensorDriveI !== null) return;   // Sensor mode: the rig sets I(t)
   const btn = document.querySelector(`.sc-btn[data-sc="${name}"]`);
   if (!btn) return;
   document.querySelectorAll('.sc-btn[data-sc]').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
+  scPicker.setLabel(btn.textContent);
   curScenario = name;
   resetSim();
 }
@@ -3109,6 +3453,7 @@ document.querySelectorAll('.sc-btn[data-sc]').forEach(btn => {
   btn.onclick = () => selectScenario(btn.dataset.sc);
 });
 document.getElementById('reset').onclick = resetSim;
+
 
 // ── Disc-radius compare mode: build the radio buttons from PARAMS.plate_variants
 // (not hardcoded here) so the radius list always matches what Python baked.
@@ -3123,8 +3468,10 @@ document.getElementById('reset').onclick = resetSim;
       grp.querySelectorAll('.sc-btn').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
       selectPlateVariant(i);
+      platePicker.setLabel(b.textContent);
     };
     grp.appendChild(b);
+    if (i === activePlateIdx) platePicker.setLabel(b.textContent);
   });
 }
 
@@ -3194,7 +3541,73 @@ themeBtn.onclick = () => {
   themeBtn.textContent = isLightTheme ? '🌙 Dark' : '☀️ Light';
   const fogColor = isLightTheme ? 0xdfe6f5 : 0x0f0f1e;
   scene.fog.color.set(fogColor);
+  // 3D overlays follow the theme too: field lines + force arrows get dark,
+  // cool colours on the light background.
+  flLightTheme = isLightTheme;
+  if (flCurrentData) buildFieldLines(flCurrentData);
+  const [cUp, cDn] = FORCE_ARROW_COL[isLightTheme ? 'light' : 'dark'];
+  arrUp.setColor(cUp); arrDn.setColor(cDn);
 };
+
+// ── Model-information table ("i" button / key I) ──────────────────────────────
+// Tables are baked from params.yaml (model_info() in build_twin_html_fem.py); the
+// JS only lays them out. Display only. Notes appear as a hover tooltip.
+const MODEL_INFO = PARAMS.model_info;
+const SRC_LABEL = {meas: 'Measured', given: 'Given', ref: 'Reference', calc: 'Computed',
+                   assumed: 'Assumed'};
+const SRC_HINT = {
+  meas: 'measured on the real rig by the team',
+  given: 'given by the professor / TEAM 28 problem / teacher',
+  ref: 'handbook / literature value',
+  calc: 'computed by this model',
+  assumed: 'placeholder or estimate, not verified',
+};
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+function srcChip(s) {
+  return `<span class="src ${s}" title="${SRC_HINT[s] || ''}">${SRC_LABEL[s] || s}</span>`;
+}
+const MAT_COLOR = {Aluminium: '#c0c8d4', Copper: '#c4561b', Iron: '#8a94a6', Plywood: '#a0773f'};
+function infoCell(c) {   // a cell is "text" or ["text", "assumed"]
+  return Array.isArray(c) ? `<span class="asm">${escHtml(c[0])} †</span>` : escHtml(c);
+}
+function renderModelInfo() {
+  let h = '';
+  for (const sec of MODEL_INFO) {
+    h += `<h3>${escHtml(sec.title)}</h3><div class="info-wrap"><table class="info-tbl">` +
+         '<thead><tr>' + sec.cols.map(c => `<th>${escHtml(c)}</th>`).join('') + '<th>Source</th></tr></thead><tbody>';
+    sec.rows.forEach((row, i) => {
+      h += `<tr title="${escHtml(row.note || '')}">`;
+      row.cells.forEach((c, j) => {
+        if (j === 0 && sec.group) {   // merge consecutive rows of the same material
+          if (i > 0 && sec.rows[i - 1].cells[0] === c) return;
+          let n = 1;
+          while (i + n < sec.rows.length && sec.rows[i + n].cells[0] === c) n++;
+          h += `<td class="mat" rowspan="${n}"><span class="sw" style="background:${MAT_COLOR[c] || 'var(--faint)'}"></span>${escHtml(c)}</td>`;
+        } else {
+          h += `<td${j === 0 ? ' class="k"' : ''}>${infoCell(c)}</td>`;
+        }
+      });
+      h += `<td class="s">${srcChip(row.src)}</td></tr>`;
+    });
+    h += '</tbody></table></div>';
+  }
+  h += '<div class="info-foot"><span class="asm">†</span> assumed placeholder, not measured · ' +
+    'hover a row for its note<br>Source: ' +
+    Object.keys(SRC_LABEL).map(k => `${srcChip(k)} ${SRC_HINT[k]}`).join(' · ') + '</div>';
+  document.getElementById('infoBody').innerHTML = h;
+}
+renderModelInfo();
+const infoOverlay = document.getElementById('infoOverlay');
+const infoBtn = document.getElementById('infoBtn');
+function setInfoOpen(open) {
+  infoOverlay.classList.toggle('open', open);
+  infoBtn.classList.toggle('on', open);
+}
+infoBtn.onclick = () => setInfoOpen(!infoOverlay.classList.contains('open'));
+document.getElementById('infoClose').onclick = () => setInfoOpen(false);
+infoOverlay.addEventListener('click', e => { if (e.target === infoOverlay) setInfoOpen(false); });
 
 // ── Colour-scale ticks + mode toggle ──────────────────────────────────────────
 function ticksHtml(lo, hi, steps, dec) {
@@ -3287,6 +3700,11 @@ function adjustSpeed(dir) {
   sS.oninput();
 }
 addEventListener('keydown', (e) => {
+  if (e.key === 'i' || e.key === 'I') { setInfoOpen(!infoOverlay.classList.contains('open')); return; }
+  if (infoOverlay.classList.contains('open')) {   // sheet open: Esc closes, sim keys stay inert
+    if (e.key === 'Escape') setInfoOpen(false);
+    return;
+  }
   switch (e.key) {
     case ' ':  e.preventDefault(); setPaused(!paused); break;
     case 'r': case 'R': resetSim(); break;
@@ -3307,11 +3725,10 @@ document.getElementById('tauLabel').textContent =
 // Precompute coil steady-state temperatures (at I_ref) — shown as target arrows.
 // True steady rise = own rise above the local air node + the air node's rise above
 // the far ambient (AIR_DT_SS_REF), since the coils now convect into shared air.
-function paintCoilSS() {   // initial paint / after an ambient switch; the loop keeps them live
-  document.getElementById('tInSS').textContent  = `→${coilTss_inner(targetI).toFixed(0)}°`;
-  document.getElementById('tOutSS').textContent = `→${coilTss_outer(targetI).toFixed(0)}°`;
-  document.getElementById('tFeSS').textContent  = `→${ironTss(targetI).toFixed(0)}°`;
-}
+// Steady-state read-outs REMOVED from the panel (user, 2026-10-06): there is no
+// measured steady state yet (WP-ANCHOR -- coil hA are only bounds). The engine
+// functions (coilTss_*/ironTss/plateTss) stay; xval and the chart may use them.
+function paintCoilSS() {}
 paintCoilSS();
 
 // Iron/plate EM badges (B_max_iron/saturation) — was a one-shot block that never
@@ -3346,7 +3763,7 @@ sI.oninput = () => {
 // power_supply.dial_to_current_A). Piecewise-linear, same as config.py's
 // dial_to_current_A() so the twin and the offline tooling agree.
 const PS_ANCHORS = (PARAMS.power_supply && PARAMS.power_supply.anchors) ||
-  [[0, 0], [220, 5.0], [270, 7.78]];
+  [[0, 0], [220, 5.0], [270, 6.175]];
 function dialToCurrentA(dial) {
   const xs = PS_ANCHORS;
   if (dial <= xs[0][0]) return xs[0][1];
@@ -3387,6 +3804,7 @@ document.querySelectorAll('.sc-btn[data-mode]').forEach(btn => {
   btn.onclick = () => {
     document.querySelectorAll('.sc-btn[data-mode]').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
+    excPicker.setLabel(btn.textContent);
     const mode = btn.dataset.mode;
     document.getElementById('ampsGroup').style.display = mode === 'amps' ? '' : 'none';
     document.getElementById('dialGroup').style.display  = mode === 'dial' ? '' : 'none';
@@ -3400,6 +3818,7 @@ document.querySelectorAll('.sc-btn[data-mode]').forEach(btn => {
 // Changing T_amb restarts the sim at equilibrium with the NEW ambient: the disc
 // field is stored relative to T_amb while the coil/iron/air nodes are absolute,
 // so switching mid-run would give an inconsistent mixed state.
+
 const AMB_PRESETS = PARAMS.ambient_presets || [{key: 'ref', value: ROM.T_amb, note: 'model reference'}];
 const LIVE_KEY_OK = !!GOOGLE_WEATHER_API_KEY && GOOGLE_WEATHER_API_KEY !== "YOUR_KEY_HERE" && !weatherKeyExpired();
 const ambGroup = document.getElementById('ambGroup'), ambNote = document.getElementById('ambNote');
@@ -3407,6 +3826,9 @@ let ambMode = ambient.live ? 'live'
   : (AMB_PRESETS.find(p => Math.abs(p.value - T_AMB_JS) < 1e-9) || AMB_PRESETS[0]).key;
 function paintAmbGroup() {
   ambGroup.querySelectorAll('.sc-btn').forEach(b => b.classList.toggle('active', b.dataset.amb === ambMode));
+  const liveBtn = ambGroup.querySelector('.sc-btn[data-amb="live"]');
+  if (liveBtn) liveBtn.textContent = ambient.live ? `Live ${T_AMB_JS.toFixed(1)} °C` : 'Live';
+  ambPicker.setLabel(ambMode === 'live' ? `Live ${T_AMB_JS.toFixed(1)} °C` : `${T_AMB_JS.toFixed(0)} °C`);
   const p = AMB_PRESETS.find(q => q.key === ambMode);
   ambNote.textContent = ambMode === 'live'
     ? `Google Weather, Darmstadt · ${ambient.at.toTimeString().slice(0, 5)}`
@@ -3454,36 +3876,63 @@ paintAmbGroup();
 // wire format data_io.py parses -- or a synthetic demo signal. Conditioning
 // matches digital_twin_live.py's LiveDriver (params.yaml live_sensor): dead-band,
 // clamp to the rig's I_max, zero-order hold between samples, STALE after
-// stale_after_s without a sample. While a source runs: speed locked to 1x (real
-// time), scenarios off. Temperatures remain model OUTPUT (no T sensor on the rig).
+// stale_after_s without a sample, plus the same AUTO zero offset for a real serial
+// source: the first zero_cal_s seconds (Variac at 0) give I0 = RMS of the readings,
+// then I = I_raw - I0 (zero_offset_mode linear) or sqrt(I_raw^2 - I0^2) (quadrature);
+// I0 > zero_cal_max_A (current was flowing) -> the board's default from
+// live_sensor.board_offsets (matched by USB VID:PID via port.getInfo()) instead. Also accepts bare "I_rms" lines (firmware without millis).
+// While a source runs: speed locked to 1x (real time), scenarios off.
+// Temperatures remain model OUTPUT (no T sensor on the rig).
 const LS = PARAMS.live_sensor || {};
 const SENSOR_BAUD = LS.baudrate || 9600, SENSOR_DEADBAND_A = LS.deadband_A ?? 0.2;
 const SENSOR_STALE_S = LS.stale_after_s || 3.0, SENSOR_I_MAX = LS.i_max_A || 20.0;
+const ZERO_CAL_S = LS.zero_cal_s || 0, ZERO_CAL_MAX_A = LS.zero_cal_max_A ?? 1.0;
+const SENSOR_INVALID_A = LS.invalid_above_A ?? 20.0;   // above = not a current (raw ADC?)
+const ZERO_MODE = LS.zero_offset_mode || 'linear', ZERO_DEFAULT_A = LS.zero_offset_default_A || 0;
+const BOARD_OFFSETS = LS.board_offsets || [];
+function boardOffset(info) {   // same rule as digital_twin_live.board_offset()
+  const hex = n => (n ?? -1).toString(16).padStart(4, '0');
+  const id = info && info.usbVendorId != null ? `${hex(info.usbVendorId)}:${hex(info.usbProductId)}` : null;
+  const b = BOARD_OFFSETS.find(x => id && x.usb_id === id);
+  return b ? {name: b.name, id, I0: b.I0_A} : {name: 'unknown board', id, I0: ZERO_DEFAULT_A};
+}
 const HAS_SERIAL = 'serial' in navigator;
 const sensor = {kind: null, state: 'off', msg: '', lastWall: 0, lastRaw: NaN, n: 0,
-                port: null, reader: null, timer: null};
+                port: null, reader: null, timer: null,
+                zero: 'off', zeroT0: 0, zeroBuf: [], I0: 0,    // zero: off|measuring|done|rejected
+                board: {name: '', id: null, I0: ZERO_DEFAULT_A}};
 const sDot = document.getElementById('sensorDot'), sStateEl = document.getElementById('sensorState');
 const sIEl = document.getElementById('sensorI'), sNote = document.getElementById('sensorNote');
 const btnSerial = document.getElementById('btnSerial'), btnDemo = document.getElementById('btnSensorDemo');
+const btnZero = document.getElementById('btnSensorZero');
+const sNoteDefault = sNote.innerHTML;   // restored when no zero-offset message applies
 if (!HAS_SERIAL) {
   btnSerial.disabled = true;
   btnSerial.title = 'Web Serial needs Chrome or Edge on a desktop (not Safari/Firefox/iOS)';
 }
 function parseSensorLine(line) {
-  // "millis,I_rms_A" (rig) or "millis,T_core,T_disc,I_rms" (legacy log) -> I, else null
+  // "millis,I_rms_A" (rig), "millis,T_core,T_disc,I_rms" (legacy log) or a bare
+  // "I_rms" (firmware without millis) -> I, else null
   line = line.trim();
   if (!line || line[0] === '#') return null;
+  if (/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(line)) return parseFloat(line);
   const f = line.split(',').map(x => x.trim());
   if ((f.length !== 2 && f.length !== 4) || !/^-?\d+$/.test(f[0])) return null;
   const I = parseFloat(f[f.length - 1]);
   return Number.isFinite(I) ? I : null;
 }
 function conditionI(I) {   // same rule as LiveDriver.condition()
+  I = ZERO_MODE === 'quadrature' ? Math.sqrt(Math.max(0, I * I - sensor.I0 * sensor.I0))
+                                 : Math.max(0, I - sensor.I0);   // zero offset
   if (!(I >= SENSOR_DEADBAND_A)) return 0.0;
   return Math.min(I, SENSOR_I_MAX);
 }
 function lockControls(on) {
   document.getElementById('scGroup').classList.toggle('locked', on);
+  const scChip = document.getElementById('scChip');   // collapsed picker: lock it too
+  scChip.disabled = on;
+  scChip.title = on ? 'Locked: the rig sets I(t) in Sensor mode' : 'Change scenario';
+  if (on) { document.getElementById('scBody').classList.remove('open'); scChip.setAttribute('aria-expanded', 'false'); }
   if (on) { sS.value = 0; sS.oninput(); }
   sS.disabled = on;
 }
@@ -3494,20 +3943,47 @@ function paintSensor() {
   sDot.className = 'dot ' + ({live: 'live', stale: 'stale', error: 'error'}[sensor.state] || '');
   sStateEl.textContent = labels[sensor.state] + (sensor.msg ? ` — ${sensor.msg}` : '');
   sIEl.textContent = Number.isFinite(sensor.lastRaw) ? `${sensor.lastRaw.toFixed(2)} A` : '— A';
+  const zeroTxt = {measuring: `Zero offset: measuring — keep the Variac at 0 (${ZERO_CAL_S} s) · ${sensor.board.name || 'board ?'}`,
+                   done: `Zero offset I₀ = ${sensor.I0.toFixed(3)} A removed (${ZERO_MODE === 'quadrature' ? '√(I² − I₀²)' : 'I − I₀'}), raw value shown above`,
+                   rejected: `Auto offset REJECTED (current was flowing) — using the ${sensor.board.name} default I₀ = ${sensor.I0.toFixed(3)} A; set the Variac to 0 and press Re-zero`};
+  sNote.innerHTML = zeroTxt[sensor.zero] || sNoteDefault;
+  btnZero.disabled = sensor.kind !== 'serial' || !ZERO_CAL_S;
   btnSerial.textContent = sensor.kind === 'serial' ? 'Disconnect' : 'Connect Arduino';
   btnDemo.textContent = sensor.kind === 'demo' ? 'Stop demo' : 'Demo signal';
   btnDemo.disabled = sensor.kind === 'serial';
   if (HAS_SERIAL) btnSerial.disabled = sensor.kind === 'demo';
 }
+function startZeroCal() {
+  sensor.zero = ZERO_CAL_S > 0 ? 'measuring' : 'off';
+  sensor.zeroT0 = 0; sensor.zeroBuf = [];
+}
 function sensorPush(I_raw) {
   sensor.lastRaw = I_raw; sensor.lastWall = performance.now(); sensor.n++;
-  sensorDriveI = conditionI(I_raw);
+  if (I_raw > SENSOR_INVALID_A) {   // same rule as LiveDriver: ignore, hold the last valid I
+    sensor.state = 'live';
+    sensor.msg = `invalid reading ${I_raw.toFixed(0)} (raw ADC? check firmware) — ignored`;
+    paintSensor(); return;
+  }
+  if (sensor.zero === 'measuring') {
+    if (!sensor.zeroT0) sensor.zeroT0 = sensor.lastWall;
+    if (Number.isFinite(I_raw)) sensor.zeroBuf.push(I_raw);
+    sensorDriveI = 0.0;                    // Variac at 0 while the offset is measured
+    if (sensor.lastWall - sensor.zeroT0 >= ZERO_CAL_S * 1000 && sensor.zeroBuf.length) {
+      const I0 = Math.sqrt(sensor.zeroBuf.reduce((a, x) => a + x * x, 0) / sensor.zeroBuf.length);
+      if (I0 > ZERO_CAL_MAX_A) { sensor.zero = 'rejected'; sensor.I0 = sensor.board.I0; }
+      else { sensor.zero = 'done'; sensor.I0 = I0; }
+    }
+  } else {
+    sensorDriveI = conditionI(I_raw);
+  }
   sensor.state = 'live'; sensor.msg = '';
   paintSensor();
 }
 function startSource(kind) {
   sensor.kind = kind; sensor.state = kind === 'serial' ? 'connecting' : 'waiting';
   sensor.n = 0; sensor.lastRaw = NaN; sensor.msg = '';
+  sensor.I0 = 0;
+  if (kind === 'serial') startZeroCal(); else sensor.zero = 'off';   // demo is already clean
   sensorDriveI = null; lockControls(true); setPaused(false); paintSensor();
 }
 async function stopSensor(msg = '') {
@@ -3527,11 +4003,14 @@ function startDemo() {
   const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
   sensor.timer = setInterval(() => sensorPush(5.0 + 0.03 * gauss()), 1000);
 }
-async function connectSerial() {
-  let port;
-  try { port = await navigator.serial.requestPort(); }   // needs this click (user gesture)
-  catch (e) { sensor.msg = 'no port selected'; paintSensor(); return; }
+async function connectSerial(port = null) {
+  if (!port) {   // a NEW port needs this click (user gesture); a granted one is passed in
+    try { port = await navigator.serial.requestPort(); }
+    catch (e) { sensor.msg = 'no port selected'; paintSensor(); return; }
+  }
   startSource('serial');
+  sensor.board = boardOffset(port.getInfo ? port.getInfo() : null);
+  console.log(`[sensor] ${sensor.board.name} (USB ${sensor.board.id || '?'}) -> default I0 ${sensor.board.I0} A`);
   try { await port.open({baudRate: SENSOR_BAUD}); }
   catch (e) { await stopSensor(`cannot open port (${e.message})`); return; }
   sensor.port = port; sensor.state = 'waiting'; paintSensor();   // Arduino reboots ~2 s on open
@@ -3560,7 +4039,27 @@ async function connectSerial() {
   }
 }
 btnSerial.onclick = () => sensor.kind === 'serial' ? stopSensor() : connectSerial();
+// `?sensor` in the URL (RUN.py --sensor): open in Sensor mode and connect to an
+// Arduino this browser was already allowed to use. Web Serial needs ONE click on
+// "Connect Arduino" the very first time (browser security rule); after that the
+// page reconnects by itself, also when the Arduino is unplugged and plugged back.
+const sensorModeBtn = document.querySelector('.sc-btn[data-mode="sensor"]');
+async function autoConnectSerial() {
+  if (!HAS_SERIAL || sensor.kind) return;
+  const ports = await navigator.serial.getPorts();
+  if (ports.length) { connectSerial(ports[0]); return; }
+  sensor.msg = 'first time: click Connect Arduino and pick the port'; paintSensor();
+}
+if (new URLSearchParams(location.search).has('sensor')) {
+  sensorModeBtn.click();
+  if (HAS_SERIAL) autoConnectSerial();
+  else { sensor.msg = 'open this page in Chrome or Edge (Web Serial)'; paintSensor(); }
+}
+if (HAS_SERIAL) navigator.serial.addEventListener('connect', () => {
+  if (sensorModeBtn.classList.contains('active')) autoConnectSerial();
+});
 btnDemo.onclick   = () => sensor.kind === 'demo' ? stopSensor() : startDemo();
+btnZero.onclick   = () => { startZeroCal(); paintSensor(); };
 setInterval(() => {   // watchdog: flag a silent source, keep holding the last I
   if (sensor.state === 'live' && performance.now() - sensor.lastWall > SENSOR_STALE_S * 1000) {
     sensor.state = 'stale'; paintSensor();
@@ -3568,7 +4067,11 @@ setInterval(() => {   // watchdog: flag a silent source, keep holding the last I
 }, 500);
 paintSensor();
 const sensorDebug = {parseSensorLine, conditionI, push: sensorPush, startDemo, stopSensor,
-                     get state() { return sensor.state; }, get driveI() { return sensorDriveI; }};
+                     startSource, startZeroCal, boardOffset,
+                     setBoard: info => { sensor.board = boardOffset(info); },
+                     get state() { return sensor.state; }, get driveI() { return sensorDriveI; },
+                     get zero() { return {state: sensor.zero, I0: sensor.I0}; },
+                     get note() { return sNote.textContent; }};
 
 // ── Main animation loop ───────────────────────────────────────────────────────
 let lastWall = performance.now();
@@ -3600,9 +4103,9 @@ function loop() {
     // Everything downstream (colour scale, T_max, history, telemetry) reads it.
     updateDiscRange();
 
-    // Record history every ~1 sim-second
+    // Record history every sim.hist_dt sim-seconds (starts at 1 s)
     recordTimer += dt_sim;
-    if (recordTimer >= 1.0) {
+    if (recordTimer >= (sim.hist_dt || 1.0)) {
       recordTimer = 0;
       const Tmax = plateTmax();
       sim.hist_t.push(sim.t);
@@ -3610,11 +4113,13 @@ function loop() {
       sim.hist_T_inner.push(sim.T.inner);
       sim.hist_T_outer.push(sim.T.outer);
       sim.hist_I.push(getI());
-      // Keep max 3600 points
+      // Max 3600 points, but the START of the run is never dropped (the chart
+      // shows t=0 -> now): over the cap, keep every 2nd point and double the
+      // sampling interval. CSV export then has the same (coarser) spacing.
       if (sim.hist_t.length > 3600) {
-        sim.hist_t.shift(); sim.hist_Tmax.shift();
-        sim.hist_T_inner.shift(); sim.hist_T_outer.shift();
-        sim.hist_I.shift();
+        for (const k of ['hist_t', 'hist_Tmax', 'hist_T_inner', 'hist_T_outer', 'hist_I'])
+          sim[k] = sim[k].filter((_, i) => i % 2 === 0);
+        sim.hist_dt = (sim.hist_dt || 1.0) * 2;
       }
     }
 
@@ -3642,12 +4147,9 @@ function loop() {
 
   // Update telemetry
   const Tmax  = plateTmax();
-  const Tmean = plateTmean();
-  const Tss   = plateTss(I_display);
 
   document.getElementById('vT').textContent  = sim.t < 120
     ? sim.t.toFixed(1)+' s' : (sim.t/60).toFixed(2)+' min';
-  document.getElementById('vIC').textContent = I_display.toFixed(2)+' A';
   document.getElementById('vP').textContent  = totalPower(I_display).toFixed(1)+' W';
   document.getElementById('hdrIBadge').textContent =
     `I = ${I_display.toFixed(2)} A, ~${dialToVoltageV(dialFromCurrentA(I_display)).toFixed(0)} V`;
@@ -3663,13 +4165,7 @@ function loop() {
   document.getElementById('tLevGap').textContent =
     lev.z.toFixed(1) + ' mm';
   document.getElementById('tPmax').textContent  = Tmax.toFixed(2)+' °C';
-  setV('tPmean', Tmean); setV('tPss', Tss);
   setV('tIn',  sim.T.inner); setV('tOut', sim.T.outer); setV('tFe',  sim.T.iron);
-  // Steady-state target arrows must track the CURRENT I — they were previously baked
-  // once at I_ref (5A), so at 5.5A the live temperature sailed past a stale "→50°".
-  document.getElementById('tInSS').textContent  = `→${coilTss_inner(I_display).toFixed(0)}°`;
-  document.getElementById('tOutSS').textContent = `→${coilTss_outer(I_display).toFixed(0)}°`;
-  document.getElementById('tFeSS').textContent  = `→${ironTss(I_display).toFixed(0)}°`;
 
   {
     const dTh = T_COIL_HOT - T_AMB_JS;
@@ -3720,7 +4216,11 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
 });
 
-loop();
+TWIN_T.scene_built = performance.now();
+loop();                                    // first simulation step + first render
+TWIN_T.first_step = performance.now();
+window.__twinTiming = TWIN_T;
+console.log('[TIME] page load, ms since navigation start:', TWIN_T);
 </script></body></html>"""
 
 

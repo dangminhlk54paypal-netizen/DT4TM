@@ -47,6 +47,9 @@ from weather_api import describe as weather_describe
 # and for any log recorded with thermocouples attached.
 _LINE_RE_I = re.compile(r"^\s*(-?\d+)\s*,\s*([^,]+)\s*$")
 _LINE_RE_TI = re.compile(r"^\s*(-?\d+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*$")
+# Bare "I_rms_A" (one number per line, no millis) — the firmware's debug/plotter
+# variant. Timestamped with the PC's clock on arrival instead of the Arduino's.
+_LINE_RE_BARE = re.compile(r"^\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|nan)\s*$", re.I)
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +129,12 @@ class SensorReader:
             if not line or line.startswith("#"):
                 continue
             m = _LINE_RE_TI.match(line)
+            mb = None if m else _LINE_RE_BARE.match(line)
             if m:
                 ms_str, t1_str, t2_str, t3_str = m.groups()
+            elif mb:
+                ms_str, t3_str = str(int(time.monotonic() * 1000)), mb.group(1)
+                t1_str = t2_str = "nan"
             else:
                 m = _LINE_RE_I.match(line)
                 if not m:

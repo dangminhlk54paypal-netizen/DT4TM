@@ -18,8 +18,18 @@ Input handling (LiveDriver):
   - Zero-order hold: the interval (t_{k-1}, t_k] is driven by the PREVIOUS sample's I.
     A 1 s input delay is thermally irrelevant (tau is minutes) and it lets a gap be
     bridged the same way as a normal step.
-  - Dead-band: I < live_sensor.deadband_A -> 0 (ACS712 noise floor, Variac at 0).
-  - Over-range: I > i_max_for(cfg) is clamped and flagged.
+  - Zero offset (auto): for the first live_sensor.zero_cal_s seconds (Variac at 0!)
+    the raw readings are collected and the model gets I=0; their RMS is the board's
+    zero-current offset I0 (differs per Arduino: 0.248 A R4 Minima, ~0.345 A R4 WiFi).
+    Afterwards every sample is corrected by live_sensor.zero_offset_mode:
+    linear I = max(0, I_raw - I0) (default) or quadrature sqrt(max(0, I_raw^2 - I0^2)).
+    An I0 above zero_cal_max_A means current was flowing -> rejected, and the
+    board's default (live_sensor.board_offsets, matched by USB VID:PID) is used
+    instead -- the offset differs per Arduino. "Re-zero" in the window repeats it.
+    The raw value stays in the log (I_meas).
+  - Dead-band: I < live_sensor.deadband_A -> 0 (applied after the offset correction).
+  - Over-range: I > live_i_max_for(cfg) (= rig I_max + live_sensor.clamp_headroom_A)
+    is clamped and flagged.
   - dt > max_gap_s: still integrated with the last I, but flagged "gap".
   - dt <= 0 (Arduino reset -> millis restarts): resync, no step, flagged "resync".
   - No sample for stale_after_s (wall clock): status turns STALE, the model holds.
@@ -62,6 +72,16 @@ class LiveDriver:
     I_max: float
     deadband_A: float
     max_gap_s: float
+    invalid_above_A: float = 20.0   # readings above this are not a current -> ignored
+    n_invalid: int = 0
+    zero_cal_s: float = 0.0         # auto zero-offset window [s sensor time]; 0 = off
+    zero_cal_max_A: float = 1.0     # an offset above this means current was flowing
+    zero_mode: str = "linear"       # linear: I_raw - I0 | quadrature: sqrt(I_raw^2 - I0^2)
+    zero_default_A: float = 0.0     # offset used when the auto window is rejected
+    I0_A: float = 0.0               # zero-current offset actually applied
+    zero_state: str = "off"         # off | measuring | done | rejected
+    zero_t0: "float | None" = None
+    zero_buf: "list[float]" = field(default_factory=list)
     t_prev: "float | None" = None   # sensor time of the last accepted sample
     I_hold: float = 0.0             # ZOH current driving the NEXT interval
     t_axis: float = 0.0             # session clock for plotting (survives Arduino resets)
@@ -81,13 +101,45 @@ class LiveDriver:
         self.twin.T_amb = float(T_amb)
         self.T_amb_source = source
 
+    def __post_init__(self):
+        if self.zero_cal_s > 0 and self.zero_state == "off":
+            self.zero_state = "measuring"
+
+    def start_zero_cal(self) -> None:
+        """(Re)measure the zero-current offset — the Variac must be at 0."""
+        self.zero_state, self.zero_t0, self.zero_buf = "measuring", None, []
+
+    def _zero_cal_sample(self, t_s: float, I_raw: float) -> None:
+        if self.zero_t0 is None:
+            self.zero_t0 = t_s
+        if not math.isnan(I_raw) and I_raw <= self.invalid_above_A:
+            self.zero_buf.append(float(I_raw))
+        if t_s - self.zero_t0 < self.zero_cal_s or not self.zero_buf:
+            return
+        I0 = math.sqrt(sum(x * x for x in self.zero_buf) / len(self.zero_buf))
+        if I0 > self.zero_cal_max_A:
+            self.zero_state, self.I0_A = "rejected", self.zero_default_A
+            print(f"[LIVE] zero offset REJECTED: {I0:.3f} A > {self.zero_cal_max_A} A "
+                  f"(current flowing?) -- using the default I0 = {self.zero_default_A:.3f} A. "
+                  f"Set the Variac to 0 and Re-zero for this board's own value.")
+        else:
+            self.zero_state, self.I0_A = "done", I0
+            print(f"[LIVE] zero offset I0 = {I0:.3f} A ({len(self.zero_buf)} samples), "
+                  f"{self.zero_mode} removal")
+
     def condition(self, I_raw: float) -> "tuple[float, str]":
         """Measured I_rms -> current fed to the model, plus a flag."""
-        if I_raw is None or math.isnan(I_raw) or I_raw < self.deadband_A:
+        if I_raw is None or math.isnan(I_raw):
             return 0.0, ""
-        if I_raw > self.I_max:
+        if self.zero_mode == "quadrature":
+            I = math.sqrt(max(0.0, I_raw * I_raw - self.I0_A * self.I0_A))
+        else:
+            I = max(0.0, I_raw - self.I0_A)
+        if I < self.deadband_A:
+            return 0.0, ""
+        if I > self.I_max:
             return self.I_max, "overrange"
-        return float(I_raw), ""
+        return I, ""
 
     def disc_T(self) -> "tuple[float, float]":
         """(mean, max) disc temperature. The full field needs a live rom (dT_ref);
@@ -102,7 +154,17 @@ class LiveDriver:
     def push(self, t_s: float, I_raw: float, T_core_meas: float = math.nan,
              T_disc_meas: float = math.nan) -> str:
         """Feed one sensor sample. Returns its flag ("", first/gap/resync/overrange)."""
-        I_used, flag = self.condition(I_raw)
+        if I_raw is not None and not math.isnan(I_raw) and I_raw > self.invalid_above_A:
+            # not a current (e.g. raw ADC count) -> hold the last valid I, never clamp-and-heat
+            I_used, flag = self.I_hold, "invalid"
+            self.n_invalid += 1
+            if self.zero_state == "measuring":
+                self._zero_cal_sample(t_s, I_raw)   # advances the window, value not used
+        elif self.zero_state == "measuring":
+            self._zero_cal_sample(t_s, I_raw)
+            I_used, flag = 0.0, "zerocal"   # Variac at 0 while the offset is measured
+        else:
+            I_used, flag = self.condition(I_raw)
         if flag == "overrange":
             self.n_overrange += 1
 
@@ -140,7 +202,10 @@ class LiveDriver:
         """Model back to ambient + clear history; the sensor link keeps running."""
         self.twin.reset()
         self.__init__(self.twin, self.I_max, self.deadband_A, self.max_gap_s,
-                      T_amb_source=self.T_amb_source)
+                      invalid_above_A=self.invalid_above_A, zero_cal_s=self.zero_cal_s, zero_cal_max_A=self.zero_cal_max_A,
+                      zero_mode=self.zero_mode, zero_default_A=self.zero_default_A,
+                      I0_A=self.I0_A, zero_state=self.zero_state, zero_t0=self.zero_t0,
+                      zero_buf=self.zero_buf, T_amb_source=self.T_amb_source)
 
     def export_csv(self, path: str) -> int:
         h = self.hist
@@ -158,6 +223,27 @@ class LiveDriver:
                     row.append(v if isinstance(v, str) else f"{v:.4f}")
                 w.writerow(row)
         return len(h["t"])
+
+
+def board_offset(ls: dict, usb_id: "str | None") -> "tuple[str, float]":
+    """(board name, default I0) for a USB "VVVV:PPPP" id from live_sensor.board_offsets;
+    unknown board -> ("unknown board", zero_offset_default_A)."""
+    for b in ls.get("board_offsets") or []:
+        if usb_id and str(b["usb_id"]).lower() == usb_id.lower():
+            return str(b["name"]), float(b["I0_A"])
+    return "unknown board", float(ls.get("zero_offset_default_A", 0.0))
+
+
+def port_usb_id(port: str) -> "str | None":
+    """USB VID:PID ("2341:1002") of a serial port, or None if not a USB device."""
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return None
+    for p in list_ports.comports():
+        if p.device == port and p.vid is not None:
+            return f"{p.vid:04x}:{p.pid:04x}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +310,9 @@ def run_gui(driver: LiveDriver, q: "queue.Queue", stop: threading.Event,
     ax_T = fig.add_axes([0.07, 0.45, 0.90, 0.47])
     ax_I = fig.add_axes([0.07, 0.20, 0.90, 0.18], sharex=ax_T)
     ax_st = fig.add_axes([0.07, 0.02, 0.62, 0.11]); ax_st.axis("off")
-    ax_rst = fig.add_axes([0.72, 0.05, 0.12, 0.06])
-    ax_csv = fig.add_axes([0.85, 0.05, 0.12, 0.06])
+    ax_rst = fig.add_axes([0.70, 0.05, 0.085, 0.06])
+    ax_zero = fig.add_axes([0.79, 0.05, 0.085, 0.06])
+    ax_csv = fig.add_axes([0.88, 0.05, 0.09, 0.06])
 
     for ax, title in ((ax_T, "Temperature — MODEL PREDICTION driven by measured I"),
                       (ax_I, "Measured current I_rms(t)")):
@@ -267,14 +354,21 @@ def run_gui(driver: LiveDriver, q: "queue.Queue", stop: threading.Event,
     link = {"last_wall": None, "state": "WAITING", "msg": "", "meas_legend": False}
 
     btn_rst = Button(ax_rst, "Reset model", color="#223355", hovercolor="#335588")
+    btn_zero = Button(ax_zero, "Re-zero", color="#223355", hovercolor="#335588")
     btn_csv = Button(ax_csv, "Export CSV", color="#223355", hovercolor="#335588")
-    for b in (btn_rst, btn_csv):
+    for b in (btn_rst, btn_zero, btn_csv):
         b.label.set_color(TITLE_CLR); b.label.set_fontsize(9)
 
     def _on_reset(_ev):
         driver.reset()
         link["msg"] = "model reset to ambient"
     btn_rst.on_clicked(_on_reset)
+
+    def _on_zero(_ev):
+        driver.zero_cal_s = driver.zero_cal_s or 10.0
+        driver.start_zero_cal()
+        link["msg"] = "re-zero: keep the Variac at 0"
+    btn_zero.on_clicked(_on_zero)
 
     def _on_csv(_ev):
         os.makedirs(os.path.join(HERE, "outputs"), exist_ok=True)
@@ -296,7 +390,10 @@ def run_gui(driver: LiveDriver, q: "queue.Queue", stop: threading.Event,
                 _, _, t, T_core, T_disc, I = msg
                 flag = driver.push(t, I, T_core, T_disc)
                 link["last_wall"], link["state"] = wall, "LIVE"
-                if flag in ("gap", "resync", "overrange"):
+                if flag == "invalid":
+                    link["msg"] = (f"INVALID reading {I:.0f} (> {driver.invalid_above_A:g} A, "
+                                   f"raw ADC? check firmware) -- ignored, I held")
+                elif flag in ("gap", "resync", "overrange"):
                     link["msg"] = f"{flag} at t={driver.t_axis:.0f}s"
             elif kind == "error":
                 link["state"], link["msg"] = "DISCONNECTED", msg[2]
@@ -335,16 +432,28 @@ def run_gui(driver: LiveDriver, q: "queue.Queue", stop: threading.Event,
         age = "" if link["last_wall"] is None else \
             f"  last sample {time.monotonic() - link['last_wall']:.1f}s ago"
         I_now = h["I_meas"][-1] if h["I_meas"] else math.nan
+        I_use = h["I_used"][-1] if h["I_used"] else math.nan
+        if driver.zero_state == "measuring":
+            left = driver.zero_cal_s - (0.0 if driver.zero_t0 is None or driver.t_prev is None
+                                        else driver.t_prev - driver.zero_t0)
+            zero = f"ZERO-CAL: keep the Variac at 0 ... {max(left, 0):.0f}s left"
+        else:
+            zero = {"done": f"offset I0={driver.I0_A:.3f}A (auto, {driver.zero_mode})",
+                    "rejected": f"auto offset REJECTED (current flowing) -> default "
+                                f"I0={driver.I0_A:.3f}A; Re-zero at 0 A",
+                    "off": "offset off"}[driver.zero_state]
         T_in = h["T_inner"][-1] if h["T_inner"] else math.nan
         Td = h["T_disc_mean"][-1] if h["T_disc_mean"] else math.nan
         z = h["z_mm"][-1] if h["z_mm"] else math.nan
         txt.set_text(
             f"{badge}   source: {source_label}{age}\n"
-            f"I_meas={I_now:5.2f}A  T_inner={T_in:6.2f}°C  T_disc={Td:6.2f}°C  z_gap={z:5.2f}mm  "
+            f"I_meas={I_now:5.2f}A  I_used={I_use:5.2f}A  [{zero}]\n"
+            f"T_inner={T_in:6.2f}°C  T_disc={Td:6.2f}°C  z_gap={z:5.2f}mm  "
             f"T_amb={driver.twin.T_amb:.1f}°C ({driver.T_amb_source})\n"
             f"samples={driver.n_samples}  gaps={driver.n_gaps}  resyncs={driver.n_resyncs}  "
-            f"overrange={driver.n_overrange}\n{link['msg']}")
-        txt.set_color({"LIVE": "#88ff99", "STALE": "#ffcc44"}.get(link["state"], TEXT_CLR))
+            f"overrange={driver.n_overrange}  invalid={driver.n_invalid}\n{link['msg']}")
+        txt.set_color("#ffcc44" if driver.zero_state in ("measuring", "rejected") else
+                      {"LIVE": "#88ff99", "STALE": "#ffcc44"}.get(link["state"], TEXT_CLR))
 
     ani = FuncAnimation(fig, update, interval=200, cache_frame_data=False)
     fig._live_ani = ani   # keep a reference alive for the window's lifetime
@@ -465,6 +574,60 @@ def _self_check() -> bool:
             lines = f.read().strip().splitlines()
     check("CSV export", n == 10 and len(lines) == 11 and lines[0].startswith("t_s,I_meas_A"))
 
+    # 11. Auto zero offset: 10 s of 0.25 A noise -> I0 = 0.25, model held at 0 meanwhile,
+    #     then (quadrature mode) 5.006 A raw -> sqrt(5.006^2 - 0.25^2) = 5.000 A.
+    d = LiveDriver(fresh_twin(), I_max=7.8, deadband_A=0.2, max_gap_s=10.0, zero_cal_s=10.0,
+                   zero_mode="quadrature")
+    for k in range(11):
+        d.push(float(k), 0.25)
+    held = d.twin.lumped_state.T["inner"] == 20.0 and set(d.hist["flag"]) == {"zerocal"}
+    d.push(11.0, math.sqrt(5.0 ** 2 + 0.25 ** 2))
+    check("zero offset: measured, model held at 0 during the window",
+          d.zero_state == "done" and abs(d.I0_A - 0.25) < 1e-12 and held, f"I0={d.I0_A:.4f}")
+    check("zero offset: removed in quadrature", abs(d.hist["I_used"][-1] - 5.0) < 1e-12,
+          f"I_used={d.hist['I_used'][-1]:.6f}")
+    d2 = LiveDriver(fresh_twin(), I_max=7.8, deadband_A=0.2, max_gap_s=10.0, zero_cal_s=5.0)
+    for k in range(6):
+        d2.push(float(k), 0.345)
+    d2.push(6.0, 5.44)
+    check("zero offset: linear (default) 5.44 A raw, I0=0.345 -> 5.095 A",
+          d2.zero_mode == "linear" and abs(d2.hist["I_used"][-1] - 5.095) < 1e-12,
+          f"I_used={d2.hist['I_used'][-1]:.4f}")
+    d.reset()
+    check("zero offset survives a model reset", d.zero_state == "done" and d.I0_A == 0.25)
+
+    # 12. Current flowing during the zero window -> rejected, the default offset is used.
+    d = LiveDriver(fresh_twin(), I_max=7.8, deadband_A=0.2, max_gap_s=10.0, zero_cal_s=5.0,
+                   zero_default_A=0.345)
+    for k in range(7):
+        d.push(float(k), 5.0)
+    check("zero offset: 5 A during the window -> rejected, default I0 used",
+          d.zero_state == "rejected" and d.I0_A == 0.345
+          and abs(d.hist["I_used"][-1] - 4.655) < 1e-12, f"I_used={d.hist['I_used'][-1]:.4f}")
+
+    # 13. Per-board default offset by USB VID:PID.
+    ls = {"board_offsets": [{"name": "UNO R4 WiFi", "usb_id": "2341:1002", "I0_A": 0.345},
+                            {"name": "UNO R4 Minima", "usb_id": "2341:0069", "I0_A": 0.225}],
+          "zero_offset_default_A": 0.0}
+    check("board offset: WiFi / Minima / unknown",
+          board_offset(ls, "2341:1002") == ("UNO R4 WiFi", 0.345)
+          and board_offset(ls, "2341:0069") == ("UNO R4 Minima", 0.225)
+          and board_offset(ls, "1a86:7523") == ("unknown board", 0.0)
+          and board_offset(ls, None) == ("unknown board", 0.0))
+
+    # 14. A raw ADC count (512) is not a current: ignored, last valid I held, no clamp-heating.
+    d = fresh_driver()
+    d.push(0.0, 5.0); d.push(1.0, 512.0); d.push(2.0, 5.0)
+    check("invalid reading (raw ADC 512) -> ignored, 5 A held",
+          d.hist["flag"][1] == "invalid" and d.hist["I_used"][1] == 5.0 and d.n_invalid == 1
+          and d.n_overrange == 0)
+
+    # 15. Bare "I_rms" serial lines (firmware without millis) are accepted.
+    from data_io import _LINE_RE_BARE
+    check("serial: bare number lines parse",
+          [bool(_LINE_RE_BARE.match(x)) for x in ("4.987", "0.250", "nan", "12", "1,2", "# x")]
+          == [True, True, True, True, False, False])
+
     print(f"\n{sum(results)}/{len(results)} PASS" + ("" if all(results) else "  -- FAILURES ABOVE"))
     return all(results)
 
@@ -489,7 +652,7 @@ def main() -> None:
     from config import load_config
     from data_io import SensorReader
     from rom import ThermalROM
-    from twin_model import coeffs_from_live, i_max_for
+    from twin_model import coeffs_from_live, live_i_max_for
 
     cfg = load_config()
     ls = cfg.raw.get("live_sensor")
@@ -537,8 +700,23 @@ def main() -> None:
     rom = ThermalROM().build(cfg, em_losses=em, verbose=False)
     rom_c, lumped_c, lev_c = coeffs_from_live(cfg, em, rom)
     twin = TwinState(rom=rom_c, lumped=lumped_c, lev=lev_c, T_amb=amb["T_amb_degC"])
-    driver = LiveDriver(twin, I_max=i_max_for(cfg), deadband_A=float(ls["deadband_A"]),
-                        max_gap_s=float(ls["max_gap_s"]), T_amb_source=amb["source"])
+    # Auto zero-offset only for a real sensor: mock/replay values are already "clean".
+    zero_cal_s = float(ls.get("zero_cal_s", 0.0)) if not (is_mock or args.replay) else 0.0
+    usb_id = port_usb_id(port) if zero_cal_s > 0 else None
+    board, I0_default = board_offset(ls, usb_id)
+    if zero_cal_s > 0:
+        print(f"[LIVE] board: {board} (USB {usb_id or '?'}) -> default I0 {I0_default:.3f} A "
+              f"if the auto zero window is rejected")
+    driver = LiveDriver(twin, I_max=live_i_max_for(cfg), deadband_A=float(ls["deadband_A"]),
+                        invalid_above_A=float(ls.get("invalid_above_A", 20.0)),
+                        max_gap_s=float(ls["max_gap_s"]), zero_cal_s=zero_cal_s,
+                        zero_cal_max_A=float(ls.get("zero_cal_max_A", 1.0)),
+                        zero_mode=str(ls.get("zero_offset_mode", "linear")),
+                        zero_default_A=I0_default if zero_cal_s > 0 else 0.0,
+                        T_amb_source=amb["source"])
+    if zero_cal_s > 0:
+        print(f"[LIVE] measuring the zero-current offset for {zero_cal_s:g}s -- "
+              f"keep the Variac at 0 until the window says done")
 
     q, stop = queue.Queue(), threading.Event()
     start_reader(stream, q, stop, drop_temps=drop)

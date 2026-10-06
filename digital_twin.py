@@ -135,8 +135,8 @@ def run_live(
     # -----------------------------------------------------------------------
     # Slider I
     # -----------------------------------------------------------------------
-    # I_MAX covers the rig's real max current (variac dial 270 -> 7.78A measured
-    # 2026-07-02, docs/rig_photo.jpg), with a little headroom over the old 5.0A cap.
+    # I_MAX covers the rig's real max current (variac dial 270deg -> 6.175 A,
+    # re-measured 2026-10-02/03, WP-ANCHOR); the slider adds +0.5 A on top.
     ps = cfg.power_supply
     I_MAX = i_max_for(cfg)
     sl_I = Slider(ax_slI, "I (A)", 0.0, round(I_MAX + 0.5, 1), valinit=I_init,

@@ -101,21 +101,27 @@ B_max in iron = 0.66T (unsaturated). I²-check 3.998 ≈ 4.000. `validate_domain
 PASSES, all diffs <1% (largest: P_plate 0.767%).
 
 ## Real-rig validation (HIKMICRO IR, 2026-06-23) — reference data
-Two measured AC 50Hz operating points (`validation_data` in params.yaml): **190V→5A**
-(main op point) and **270V→7.8A** (calibration anchor).
-- **Session 1** (steady state @7.8A): inner coil **79°C** (hottest), outer coil 74°C,
-  center core 45°C, separator 40°C, ambient 29°C.
-- **Session 2** (ramp, NOT steady): inner/outer coil 60.75/56°C at t=450s, plus a
-  timestamped outer-coil trajectory used to fit the coil's time constant.
-- ⚠️ **Caveat:** disc + center-core IR readings are UNRELIABLE (shiny aluminium, wrong
+Measured AC 50Hz points (`validation_data` in params.yaml): **190V→5A** (main op point)
+and **dial 270° (~238V) → 6.175A** (6.15–6.20A, re-measured 2026-10-02/03 with ACS712 +
+a second multimeter). ⚠️ The old "270V→7.8A" was a BAD reading (Z stays 38–39Ω at both
+dial points) — corrected 2026-10-06, WP-ANCHOR, docs/CHANGELOG.md.
+- **Run A** (FIRST, ramp): 5.1A 0–300s, 6.25A 300–510s from 33.7°C → inner/outer
+  coil 61/56°C at t=510s. `validation_data.thermal_session_A`.
+- ~15 min off, then **Run B**: 6.175A for 350s from 53.5/51.8°C → inner **79°C** /
+  outer **67°C**, still rising → **NOT steady state** (only a lower bound on T_ss).
+- ⚠️ **Caveat:** disc + core/ring IR readings are UNRELIABLE (shiny metal, wrong
   emissivity). Only the dark-varnished **coil** readings are trustworthy for calibration.
 
-Calibrated lumped coil network (params.yaml `lumped_thermal`, current values):
-`hA_inner=2.4744` / `hA_outer=2.8885` / `coil_C_scale=0.2241` → T_inner_ss≈79.00°C /
-T_outer_ss≈74.00°C at 7.8A/29°C — exact match to Session 1, solved through the ACTUAL
-nonlinear `TwinState` integrator by `refit_hA.py` (never a hand-derived linear formula;
-that shortcut caused two separate refit bugs). Six calibration rounds so far, all
-narrated in docs/CHANGELOG.md.
+Lumped coil network (params.yaml `lumped_thermal`, current values): `power_basis:
+rms_true` (node P = I_rms²R, 2× the old loss-chain value — needed because node C is
+physical; run B heated faster than the loss-chain P allows even adiabatically),
+`hA_inner=3.5680` / `hA_outer=5.1546` from `refit_hA.py --lower-bound` (anchor
+`validation_data.thermal_anchor`: TwinState steady at 6.175A/29°C = exactly 79/67°C).
+These hA are UPPER bounds → every coil T_ss is a LOWER bound (5A/20°C: inner ≥55.2,
+outer ≥46.6°C). **hA, coil_C_scale, iron and air nodes are NOT identifiable from the
+existing data** — replaying the real run A/B history still misses by RMS ≈15K. Do NOT
+refit them to this data; wait for a logged 5A heat-up + ≥60 min cooldown + wattmeter.
+The disc ROM and the em_solver loss chain still use the loss-chain convention.
 
 ## Data (repo root)
 - `levitation_height_team28.csv` — Table I from the problem PDF (t_ms, z_mm). LEVITATION
@@ -146,13 +152,13 @@ All of these are done, verified, and have no open issues. Details → docs/CHANG
 | `digital_twin.py` | Interactive matplotlib twin. Imports `TwinState`/`SCENARIOS` from twin_core, the rest from twin_model — no second copy of the physics. |
 | `extensions/digital_twin_pyvista.py` | Desktop 3D twin (PyVista/VTK, OPTIONAL ~400MB dep — hence `extensions/`, see layout rule). Same `TwinState`; geometry reuses `build_twin_html_fem.py`'s mesh builders verbatim. `--self-check` runs with no VTK installed. Run from repo root. |
 | `build_twin_html_fem.py` | The FEM-accurate standalone AR twin (only active HTML builder). 100% procedural geometry, two-node coil thermal model, closed-form levitation, 4 live-swappable disc radii, Amps/dial dual input, live T_amb from Google Weather API. `--bake-key` gates the real key (default: placeholder). |
-| `refit_hA.py` | Refits `lumped_thermal.hA_inner/outer` through the real `TwinState` integrator. params.yaml stays SSOT. |
+| `refit_hA.py` | Solves `lumped_thermal.hA_inner/outer` through the real `TwinState` integrator against `validation_data.thermal_anchor` (read from params). Non-steady anchor → refuses unless `--lower-bound`. |
 | `visualize.py`, `sim_plates.py` | 2D→3D revolve/GLB export, cross-plate comparison. |
 | `data_io.py` + `arduino/thermal_sensor.ino` | SensorReader (serial/mock) → `calibrate_from_file()` → `rom.calibrate_UA()`. Tested vs `mock_sensor_data.csv`. |
 | `weather_api.py` | stdlib-only: the SINGLE key loader (`load_key`, also used by the builder), `key_active` (expiry), `ambient_now(fallback)` → {T_amb_degC, source, fetched_at}; never raises, never prints the key. `python weather_api.py` shows the current reading. |
 | `gen_qr.py` | QR → `outputs/qr_digital_twin.png`. Hosting URL still undecided. |
 | `build_ar_twin.py` (+ `gen_ar_marker.py`, `serve_ar.py`, `compile_mind.py`) | Teammate's WebAR channel (branch `ar_simulation`, merged 2026-09-29) → `outputs/ar_twin.html`. Reads PARAMS + mesh from `digital_twin_fem.html` by regex (keep that filename + the `const PARAMS = {...};\nconst ROM` shape). Own display physics (τ≈2.5 s), NOT twin_core — not xval-pinned; leave it to the teammate. `PARAMS.display_channel` = "HTML"/"AR". Rebuild AR after every HTML re-bake. |
-| `digital_twin_live.py` | OPTIONAL separate live mode: ACS712 I_rms (serial/mock/replay) → reader thread → `LiveDriver` (ZOH, dead-band, gap/resync flags) → the same `TwinState`. Params: `live_sensor` block. `--self-check` 11/11. The HTML twin has the same feature as its `Sensor` excitation mode (Web Serial, Chrome/Edge). |
+| `digital_twin_live.py` | OPTIONAL separate live mode: ACS712 I_rms (serial/mock/replay) → reader thread → `LiveDriver` (auto zero offset I−I₀ (or √(I²−I₀²)) over the first `zero_cal_s`, per-board default I₀ by USB VID:PID if rejected, readings > `invalid_above_A` ignored, ZOH, dead-band, gap/resync flags) → the same `TwinState`. Params: `live_sensor` block. `--self-check` 19/19. The HTML twin has the same feature as its `Sensor` excitation mode (Web Serial, Chrome/Edge). |
 
 **Cross-cutting invariant:** `twin_core.py` and the HTML's baked JS implement the same
 physics twice. Change one → change the other → `python xval_twin.py` must stay PASS.
@@ -177,7 +183,13 @@ physics twice. Change one → change the other → `python xval_twin.py` must st
       coil_G_wind, air_node_C/hA_far, G_iron_cond, hA_iron) is unidentifiable from the
       existing heat-up-only data, and the shared air node (T5) cannot be fitted without
       it. Also fits `coil_G_wind_W_per_K`/`convection_exponent` (order-of-magnitude
-      only today). See docs/SENSOR_PLAN.md.
+      only today). Since WP-ANCHOR (2026-10-06) hA_inner/outer are bounds, not fits —
+      this log turns them into fits. Run 5A to near-steady (≥60 min), then log ≥60 min
+      off. Also measure electrical input POWER (wattmeter, or U·I·cosφ) to confirm
+      `power_basis: rms_true`. See docs/SENSOR_PLAN.md.
+- [ ] Follow-up of WP-ANCHOR: the disc ROM (`rom.py`) and the HTML power read-outs still
+      use loss-chain P for the disc while coils/iron use rms_true — the HTML "total
+      power" line mixes both bases. Decide after the wattmeter reading.
 - [ ] **NEXT: sensor hardware build** (Arduino + MAX31855×2 + ACS712-20A current
       sensor, docs/SENSOR_PLAN.md / docs/archive/Stromsensor_.docx), log a real run,
       re-calibrate from it. Firmware + `data_io.py` pipeline ready (4-column CSV incl.

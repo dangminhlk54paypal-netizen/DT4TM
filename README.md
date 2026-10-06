@@ -57,6 +57,8 @@ python digital_twin_live.py               # OPTIONAL live mode: twin driven by t
                                           # (--port /dev/cu.usbmodem… | mock, --replay log.csv, --self-check)
 python weather_api.py                     # current ambient from Google Weather (key in local/, fallback 20°C)
 python RUN.py                             # one-click: re-bake HTML if stale, open it (macOS: double-click RUN.command)
+python RUN.py --sensor                    # same, but in Chrome + Sensor mode: the twin runs on the Arduino-MEASURED current
+                                          # (auto-connect; first time one click on Connect Arduino; Variac at 0 for ~10 s)
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
 
 # WebAR twin (AR channel, see docs/WEBAR_GUIDE.md)

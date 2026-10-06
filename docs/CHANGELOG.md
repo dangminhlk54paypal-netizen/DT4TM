@@ -1642,3 +1642,149 @@ xval_twin PASS, twin_core 6/6.
   (absorbed by the 7.8 A calibration). `twin_core.LumpedCoeffs.coil_Tss` docstring still
   describes the old JS formula (left as-is: engine file).
 - Talk script Stolperstein #3 updated (63 → 59.1 °C, why).
+
+## 2026-10-02 — WP-INFO: model-information table behind an "i" button (HTML display)
+- Header gets a round "i" button (also key `I`; `Esc`/backdrop click closes) that opens four
+  column tables: components grouped by material (Al / Cu / Fe / plywood: radius, height,
+  details), material properties (σ, μᵣ, k, ρ, c_p), distances between components (radial gaps,
+  rest/levitation gap, disc↔ring overlap), excitation & ambient. Each row carries a source
+  chip — Measured / Given / Reference / Computed / Assumed — and a hover note; unverified
+  single values (iron σ/μᵣ, wire Ø) are flagged red with †. Nothing is added to the 3D view.
+- Values come from params.yaml via `model_info(cfg, lev)` in `build_twin_html_fem.py`
+  (baked as `PARAMS.model_info`); only provenance tags/notes are authored there.
+- params.yaml: new `validation_data.levitation_visible_gap_mm: [7.0, 8.0]` (the 2026-07-01
+  rig observation, previously only in CLAUDE.md) so the table doesn't hardcode it.
+- Physics untouched: `xval_twin.py` PASS (A + B). AR rebuilt after the re-bake.
+
+## 2026-10-02 — WP-TIME: load / offline-computation timing printed by RUN.py
+- `build_twin_html_fem.build()` times every stage and prints a `[TIME]` table at the end;
+  also writes `outputs/build_timing.json` (gitignored) so RUN.py can show the last build's
+  numbers when it skips the bake.
+- Baked JS sets load marks (`window.__twinTiming`, also `console.log`): three.js imported →
+  ambient ready (Google Weather call in the live build) → baked data decoded → scene built →
+  first simulation step.
+- `RUN.py` prints the build wall time, then measures the page in headless Chromium (Playwright
+  from .venv, fresh cache) and prints the load stages. `--no-timing` skips it. NB: in the live
+  build that measurement makes one extra Google Weather call per run.
+- Measured 2026-10-02 (dev Mac): offline ≈ 50 s, of which ≈ 49 s are the levitation
+  z_eq root-finds (`_lev_anchor`, ~10 s per disc radius × 4); EM phasor solve 1.3 s per radius,
+  thermal FEM + ROM 0.06 s. Page load to first step: 0.35 s (placeholder build) / ~1.1 s
+  (live build, ~0.75 s of it the weather API call). RUN.py docstring's old "~2 s" corrected.
+
+## 2026-10-02 — WP-ZERO: auto zero-current offset for the live current input
+- User request: the ACS712 reading carries an offset; user decision: measure it automatically
+  at start-up. `LiveDriver` (digital_twin_live.py) and the HTML Sensor mode now collect the
+  raw readings for `live_sensor.zero_cal_s` (10 s, Variac at 0, model held at I=0), take their
+  RMS as I0 and feed `I = sqrt(max(0, I_raw² − I0²))` afterwards (noise adds to an RMS in
+  quadrature, so a linear subtraction would under-read at low current). I0 >
+  `zero_cal_max_A` (1.0 A) = current was flowing → rejected, no offset. "Re-zero" button in
+  both front-ends; a model Reset keeps I0. Raw value still logged (`I_meas`). Mock / replay /
+  demo sources skip it.
+- `data_io.SensorReader` + HTML `parseSensorLine` also accept bare `I_rms` lines (the local,
+  uncommitted firmware edit prints `Serial.println(I_rms)` only, ~10 Hz, pin A5) —
+  timestamped with the PC clock. `millis,I_rms_A` stays the documented format.
+- `digital_twin_live.py --self-check` 16/16 (5 new: zero window, quadrature, reset, reject,
+  bare lines); HTML logic checked in headless Chromium via `twinDebug.sensor`; xval PASS.
+
+## 2026-10-02 — WP-SENSOR-RUN: HTML twin on the measured current, one command
+- `python RUN.py --sensor` opens the (re-baked if stale) HTML twin in Google Chrome (Web
+  Serial; Safari has none) with `?sensor=1`; warns when no Arduino is on USB or another
+  program (Arduino IDE Serial Monitor, digital_twin_live.py) holds the port.
+- Page: `?sensor` selects the Sensor excitation mode and connects to an already-permitted
+  port via `navigator.serial.getPorts()` (first time ever: one click on "Connect Arduino",
+  browser rule); the `connect` event reconnects after an unplug/replug. Zero-offset window
+  (WP-ZERO) runs on every connect.
+
+## 2026-10-02 — WP-ZERO2: linear offset removal (user data), default I0, measured variac max
+- User data (UNO R4 WiFi): no current → the sensor already reports 0.335–0.355 A; the offset
+  depends on the board (R4 Minima: 0.248 A) and is what lifts the reading to 5.44 A. A pure-
+  noise (quadrature) model cannot explain that (√(5.44²−0.345²)=5.43), a linear one can
+  (5.44−0.345 = 5.10 A, rest within ACS712 sensitivity tolerance) → new
+  `live_sensor.zero_offset_mode: linear` (default; `quadrature` still available) in
+  LiveDriver and the HTML Sensor mode.
+- `live_sensor.zero_offset_default_A: 0.345` (measured, R4 WiFi) is applied when the auto window
+  is rejected (current flowing at connect) instead of no offset.
+- `power_supply.output_V_max` 240 → 237.5 V (measured at dial max: 237–238 V),
+  `degree_to_volt_ratio` 0.87963. Display only (dial-mode voltage readout).
+- live self-check 17/17; HTML checked in Chromium (5.44 raw → 5.095 A); xval PASS.
+- Same day, follow-up: the default offset is PER BOARD (user: R4 WiFi ≈ 0.345 A, R4 Minima
+  ≈ 0.225 A) → `live_sensor.board_offsets` (name, USB VID:PID from Arduino boards.txt, I0_A),
+  matched via pyserial `list_ports` / Web Serial `port.getInfo()`; unknown board →
+  `zero_offset_default_A` (0.0). The live mode prints / the page logs the detected board +
+  ID at connect (IDs not yet confirmed on the hardware). live self-check 18/18.
+
+## 2026-10-05 — WP-INVALID: a non-current reading can no longer heat the twin
+- Found while checking the sensor for a heat-up measurement: a debug edit of the firmware
+  printed `millis,analogRead(A5)` (raw ADC count ≈ 512) on the DATA line. LiveDriver /
+  the HTML read it as 512 A → clamped to I_max → the twin heated at full current.
+  (The .ino on disk was reverted to `I_rms` by the user meanwhile; the board must be re-flashed.)
+- Guard: `live_sensor.invalid_above_A: 20.0` (ACS712-20A range). Above it the sample is
+  flagged `invalid`, ignored (also by the zero window) and the last valid I is held — in
+  LiveDriver and the HTML Sensor mode. Board on the bench confirmed as UNO R4 Minima,
+  USB 2341:0069 (matches `board_offsets`). live self-check 19/19, xval PASS.
+
+## 2026-10-06 — WP-ANCHOR: the 7.8 A calibration anchor was wrong (current AND steady state)
+
+**Data correction (user re-measurement 2026-10-02/03, ACS712 + a second multimeter):**
+variac dial 270° → **6.15–6.20 A** at 238–239 V, not 7.78 A. Z ≈ 38–39 Ω at both 220°
+and 270° (239 V / 38.5 Ω = 6.2 A; 7.78 A would need 30.6 Ω). Corrected IR timeline: the
+ramp run (now `thermal_session_A`: 5.1 A 0–300 s, 6.25 A 300–510 s, from 33.7 °C → 61/56 °C)
+was FIRST; ~15 min off; then `thermal_session_B`: 6.175 A for 350 s from 53.5/51.8 °C →
+**79/67 °C, still rising** (old block: "7.8 A, 79/74 °C, steady").
+
+**Why it matters (scratch analysis through TwinState, reproduced after the edits):**
+- Old hA predicted T_ss(6.2 A, 29 °C) = 63.2/59.8 °C < the 79 °C already reached → the
+  calibrated model contradicted its own anchor once the current was right.
+- Adiabatic check: inner coil C_tot = 1100.6 J/K. Loss-chain P_inner(6.175 A) = 79.8 W →
+  max 0.0725 K/s with ZERO heat loss; run B measured 0.0729 K/s while 25–50 K above ambient.
+  Impossible under loss-chain P; consistent with the physical P (×2, 0.145 K/s). The 7.78 A
+  figure (×1.58 in P) had been masking the ×2 RMS-as-amplitude error in transients.
+- hA is NOT identifiable from this data: free transient fits reproduce the points
+  (RMS 2–5 K) but imply absurd/unverifiable T_ss(5 A) = 104–176 °C (hA trades off with C).
+
+**Changes:**
+- Phase 1 (data/UI): `power_supply.dial_to_current_A` 270° → 6.175 A; `validation_data`
+  rewritten (`op_points`, `ambient_C`, `thermal_session_A/B`, `thermal_anchor` with
+  `steady: false`); old keys `thermal_at_7p8A`/`thermal_ramp_test` removed. JS fallback
+  anchors, AR slider max (now from `PARAMS.power_supply`), comments → 6.175 A.
+  `refit_hA.py` reads the anchor from params; refuses a non-steady anchor unless
+  `--lower-bound`. New `live_sensor.clamp_headroom_A: 1.0` + `twin_model.live_i_max_for()`
+  → live clamp 7.175 A (rig I_max 6.175 + headroom for un-trimmed board offsets; user
+  decision); both live paths (digital_twin_live.py, HTML Sensor mode) use it.
+- Phase 2 (lower bound): `refit_hA.py --lower-bound` at 6.175 A/29 °C → 79/67 °C.
+  Loss-chain basis would give hA 1.5920/2.2500 (recorded, not deployed).
+- Phase 3: `lumped_thermal.power_basis: rms_true` (`lumped_physics()`: coil P = I_rms²R,
+  iron P ×(I_peak/I)² = 2). Refit under it → **hA_inner 2.4744 → 3.5680, hA_outer
+  2.8885 → 5.1546** (upper bounds). em_solver loss chain + disc ROM unchanged.
+
+**Resulting predictions (TwinState, params as committed):**
+
+| | before | after |
+|---|---|---|
+| T_ss 5 A/20 °C inner / outer / iron | 44.0 / 41.5 / 46.3 °C | **55.2 / 46.6 / 70.0 °C** (lower bounds; iron unconstrained) |
+| T_ss 6.175 A/29 °C inner / outer | 63.2 / 59.8 °C | 79.0 / 67.0 °C |
+| 5 A from cold, inner @10/30/60 min | 31.4 / 39.2 / 42.7 °C | 38.1 / 49.1 / 53.6 °C |
+| Replay of real run A + pause + run B (7 pts) | RMS 20.1 K, max 33.8 K | RMS 15.5 K, max 25.2 K |
+
+Verification: `twin_core.py` 6/6, `digital_twin_live.py --self-check` 19/19, PyVista
+`--self-check` PASS, re-bake (placeholder key) → `xval_twin.py` A+B PASS, AR rebuilt,
+no `AIzaSy` in either output. Local report script `report_numbers.py` moved to the new keys.
+
+## 2026-10-06 — WP-UI-MIN: leaner HTML twin display (user requests, display only)
+
+No physics change; `xval_twin.py` A+B PASS after every re-bake, AR rebuilt.
+- Telemetry: dropped the duplicate "Current I(t)" and "T_amb" rows (header + left panel
+  already show them); the live ambient is written into the left panel's Live button.
+- Steady-state read-outs removed (no measured steady state yet, see WP-ANCHOR): disc
+  T_mean / T_ss target, the coil/iron "→xx°" arrows and the chart's T_ss line. Disc keeps
+  T_max + Bottom air; "Levitation gap" moved below the Field block. Engine T_ss functions stay.
+- "Why does the disc float?" strip → small (i) button; opens on click, folds back after 8 s.
+- Time History: x-axis spans the WHOLE run (t=0 → now) instead of a rolling 10-min window;
+  over 3600 points the history is decimated ×2 (never truncated), so CSV spacing coarsens
+  on long runs.
+- Scenario / Excitation / Ambient / Disc radius: collapsed to one row with a chip showing
+  the current choice; click opens the options, they close 3 s after the last interaction
+  (held open while hovered). The Scenario chip locks with the scenario row in Sensor mode.
+- Light theme: grey text → cool navy/steel (`--muted #24406e`, `--faint #43608f`); field
+  lines use a blue → navy ramp; callouts, force tags/arrows and the (i) strip get light
+  cards with dark cool text (F_mag dark blue, m·g indigo). Dark theme unchanged.

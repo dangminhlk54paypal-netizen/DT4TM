@@ -11,14 +11,25 @@ this shipped as a real bug (B1-class, 2026-07-11) that this script exists to
 stop from recurring: root-find hA THROUGH the model that actually runs,
 instead of hand-deriving a formula that has to be kept in sync with it.
 
-Target: validation_data.thermal_at_7p8A (params.yaml) — inner=79.00C,
-outer=74.00C at I=7.8A, T_amb=29C. Root-finds (hA_inner, hA_outer) so
-TwinState, run to steady state at that operating point, reproduces those two
-numbers exactly.
+Target: validation_data.thermal_anchor (params.yaml) -- the current, operating
+point, ambient and inner/outer coil temperatures are READ from params.yaml
+(never hardcoded here; until 2026-10-06 this script hardcoded I=7.8A,
+79/74C, which turned out to be a bad current reading AND a non-steady run,
+WP-ANCHOR). Root-finds (hA_inner, hA_outer) so TwinState, run to steady state
+at that operating point, reproduces those two temperatures exactly.
 
-Run: python refit_hA.py
+If the anchor says `steady: false` (the coils were still heating when the run
+stopped) the end temperatures are only a LOWER BOUND on the true steady state,
+so the solved hA is an UPPER bound (the coolest prediction still consistent
+with the data). The script then refuses to run unless `--lower-bound` is
+passed, so nobody mistakes the result for a fitted value.
+
+Run: python refit_hA.py [--lower-bound]
 """
 from __future__ import annotations
+
+import argparse
+import sys
 
 from scipy.optimize import fsolve
 
@@ -28,10 +39,6 @@ from rom import ThermalROM
 from build_twin_html_fem import lumped_physics
 from twin_core import LevCoeffs, LumpedCoeffs, RomCoeffs, TwinState
 
-T_AMB_CAL = 29.0
-I_CAL = 7.8
-T_INNER_TARGET = 79.0
-T_OUTER_TARGET = 74.0
 # Settle time: mirrors twin_core.py's own self-check #2 ("Air-node/network
 # balance") horizon (2000 x 300s = 600,000 simulated seconds) -- the coupled
 # coil/iron/air network's SLOWEST mode is set by (total mass)/(hA_far), not
@@ -46,19 +53,38 @@ _DUMMY_LEV = LevCoeffs(z_gap_5A_mm=1.0, z_decay_mm=1.0, zeta0=0.0, zeta1=0.0,
                         z_gap_exaggeration=1.0, jit_fade_mm=0.5)
 
 
-def _steady_state(cfg, em, rom, hA_inner: float, hA_outer: float) -> tuple[float, float]:
+def _anchor(cfg) -> dict:
+    a = cfg.raw["validation_data"]["thermal_anchor"]
+    return {"I": float(a["I_A"]), "T_amb": float(a["T_amb_C"]),
+            "inner": float(a["inner_coil_C"]), "outer": float(a["outer_coil_C"]),
+            "steady": bool(a.get("steady", False)), "source": str(a.get("source", "?"))}
+
+
+def _steady_state(cfg, em, rom, hA_inner: float, hA_outer: float,
+                  I_cal: float, T_amb_cal: float) -> tuple[float, float]:
     cfg.raw["lumped_thermal"]["hA_inner_W_per_K"] = float(hA_inner)
     cfg.raw["lumped_thermal"]["hA_outer_W_per_K"] = float(hA_outer)
     lumped = LumpedCoeffs.from_source(lumped_physics(cfg, em))
-    twin = TwinState(rom=rom, lumped=lumped, lev=_DUMMY_LEV, T_amb=T_AMB_CAL)
+    twin = TwinState(rom=rom, lumped=lumped, lev=_DUMMY_LEV, T_amb=T_amb_cal)
     for _ in range(N_STEPS):
-        twin.step(I_CAL, DT_STEP)
+        twin.step(I_cal, DT_STEP)
     T = twin.lumped_state.T
     return T["inner"], T["outer"]
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--lower-bound", action="store_true",
+                    help="accept a non-steady anchor; the result is an hA UPPER bound")
+    args = ap.parse_args()
+
     cfg = load_config()
+    a = _anchor(cfg)
+    print(f"Anchor ({a['source']}): I={a['I']}A  T_amb={a['T_amb']}C  "
+          f"inner={a['inner']}C  outer={a['outer']}C  steady={a['steady']}")
+    if not a["steady"] and not args.lower_bound:
+        sys.exit("Anchor is NOT steady state -> only a lower bound on T_ss. Re-run with "
+                 "--lower-bound to solve the matching hA UPPER bound.")
     em = compute_losses(cfg)
     rom = RomCoeffs.from_source(ThermalROM().build(cfg, em_losses=em, verbose=False))
 
@@ -67,19 +93,21 @@ def main() -> None:
     print(f"Starting guess: hA_inner={x0[0]:.4f}  hA_outer={x0[1]:.4f}")
 
     def residual(x):
-        T_inner, T_outer = _steady_state(cfg, em, rom, x[0], x[1])
-        return [T_inner - T_INNER_TARGET, T_outer - T_OUTER_TARGET]
+        T_inner, T_outer = _steady_state(cfg, em, rom, x[0], x[1], a["I"], a["T_amb"])
+        return [T_inner - a["inner"], T_outer - a["outer"]]
 
     sol, info, ier, msg = fsolve(residual, x0, full_output=True, xtol=1e-8)
     hA_inner, hA_outer = float(sol[0]), float(sol[1])
-    T_inner, T_outer = _steady_state(cfg, em, rom, hA_inner, hA_outer)
+    T_inner, T_outer = _steady_state(cfg, em, rom, hA_inner, hA_outer, a["I"], a["T_amb"])
 
     print(f"\nConverged (ier={ier}): {msg.strip()}")
     print(f"hA_inner_W_per_K = {hA_inner:.4f}")
     print(f"hA_outer_W_per_K = {hA_outer:.4f}")
-    print(f"Verify @ I={I_CAL}A T_amb={T_AMB_CAL}C (through TwinState, nonlinear hAEff active):")
-    print(f"  T_inner = {T_inner:.3f} C  (target {T_INNER_TARGET})")
-    print(f"  T_outer = {T_outer:.3f} C  (target {T_OUTER_TARGET})")
+    if not a["steady"]:
+        print("NOTE: non-steady anchor -> these hA are UPPER bounds (coolest consistent model).")
+    print(f"Verify @ I={a['I']}A T_amb={a['T_amb']}C (through TwinState, nonlinear hAEff active):")
+    print(f"  T_inner = {T_inner:.3f} C  (target {a['inner']})")
+    print(f"  T_outer = {T_outer:.3f} C  (target {a['outer']})")
 
 
 if __name__ == "__main__":

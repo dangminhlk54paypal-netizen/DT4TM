@@ -71,8 +71,8 @@ def main(make_figure: bool) -> None:
     say("N4", f"hA_inner = {lt['hA_inner_W_per_K']}, hA_outer = {lt['hA_outer_W_per_K']} W/K (calibrated), "
               f"air C = {lt.get('air_node_C_J_per_K')}, air hA_far = {lt.get('air_node_hA_far_W_per_K')}")
     vd = raw["validation_data"]
-    say("N5", f"IR steady @7.8A: {vd['thermal_at_7p8A']}")
-    say("N6", f"IR ramp: {vd['thermal_ramp_test']['outer_coil_C_vs_t']}")
+    say("N5", f"IR run B @6.175A (NOT steady, lower bound): {vd['thermal_session_B']}")
+    say("N6", f"IR run A (ramp, first): {vd['thermal_session_A']}")
 
     print("=" * 72)
     print("B. EM FEM")
@@ -92,7 +92,7 @@ def main(make_figure: bool) -> None:
     Bpk = B_lin * math.sqrt(2)          # phasor amplitude = cfg.I (loss-chain convention)
     say("E5", f"B_max in iron at phasor amplitude {cfg.I} A: RMS = {B_lin:.3f} T, peak = {Bpk:.3f} T; "
               f"real peak @5A_rms (amp {cfg.I_peak:.2f} A) = {Bpk*cfg.I_peak/cfg.I:.3f} T; "
-              f"@7.8A_rms (amp {7.8*math.sqrt(2):.2f} A) = {Bpk*7.8*math.sqrt(2)/cfg.I:.3f} T; "
+              f"@6.175A_rms (dial max, amp {6.175*math.sqrt(2):.2f} A) = {Bpk*6.175*math.sqrt(2)/cfg.I:.3f} T; "
               f"B_sat (params) = {raw['iron_core'].get('B_sat_T')} T")
     cfg2 = copy.deepcopy(cfg)
     cfg2.raw["excitation"]["current_A"] = 2 * cfg.I
@@ -189,29 +189,29 @@ def main(make_figure: bool) -> None:
     lumped = LumpedCoeffs.from_source(lp)
     lev = LevCoeffs(z_gap_5A_mm=1.0, z_decay_mm=1.0, zeta0=0.0, zeta1=0.0, jit_mm=0.0, jit_freq1=1.0,
                     jit_freq2=1.0, z_gap_exaggeration=1.0, jit_fade_mm=0.5)
-    for I_ss, Ta_ss in ((7.8, 29.0), (5.0, 20.0)):
+    for I_ss, Ta_ss in ((6.175, 29.0), (5.0, 20.0)):
         tw = TwinState(rom=romc, lumped=lumped, lev=lev, T_amb=Ta_ss)
         for _ in range(2000):
             tw.step(I_ss, 300.0)
         Tn = tw.lumped_state.T
         say("L3", f"steady state @{I_ss}A, T_amb={Ta_ss}C: " + ", ".join(f"{k} = {v:.2f}" for k, v in Tn.items())
-                  + f", disc mean = {Ta_ss + tw.rom_state.beta*rom.dT_mean_ref:.1f} C  [IR @7.8A: inner 79, outer 74, core 45, disc 37-40 (unreliable)]")
-    # transient ramp: 5A until 300s, then 7.75A; model outer coil vs IR
-    tw = TwinState(rom=romc, lumped=lumped, lev=lev, T_amb=29.0)
-    meas = vd["thermal_ramp_test"]["outer_coil_C_vs_t"]
-    marks = {int(p["t_s"]): float(p["C"]) for p in meas}
-    got = {}
-    for n in range(1, 451):
-        tw.step(5.0 if n <= 300 else 7.75, 1.0)
-        if n in marks:
-            got[n] = tw.lumped_state.T["outer"]
-    say("L4", f"ramp t = 450 s: inner coil model = {tw.lumped_state.T['inner']:.2f} C (IR 60.75), "
-              f"disc mean model = {29 + tw.rom_state.beta*rom.dT_mean_ref:.1f} C (IR disc-bottom rim 44, unreliable)")
-    rows = [(t, marks[t], got[t], got[t] - marks[t]) for t in sorted(marks)]
-    rms = math.sqrt(sum(d * d for *_, d in rows) / len(rows))
-    for t, m, g, d in rows:
-        say("L4", f"ramp t = {t:3d} s: IR = {m:.2f} C, model = {g:.2f} C, diff = {d:+.2f} K")
-    say("L5", f"ramp RMS error (outer coil, 5 points) = {rms:.2f} K")
+                  + f", disc mean = {Ta_ss + tw.rom_state.beta*rom.dT_mean_ref:.1f} C  [IR run B end @6.175A (not steady): inner 79, outer 67, core 45 (unreliable)]")
+    # transient run A (WP-ANCHOR 2026-10-06): 5.1A 0-300s, then 6.25A to 510s, from 33.7C coils
+    A = vd["thermal_session_A"]
+    tw = TwinState(rom=romc, lumped=lumped, lev=lev, T_amb=float(vd["ambient_C"]))
+    for k in ("inner", "outer", "inner_deep", "outer_deep"):
+        tw.lumped_state.T[k] = float(A["start"]["outer_coil_C"])
+    rows = []
+    for n in range(1, 511):
+        tw.step(5.1 if n <= 300 else 6.25, 1.0)
+        if n == 300:
+            rows.append(("outer", 300, float(A["at_t300s"]["outer_coil_C"]), tw.lumped_state.T["outer"]))
+    for key in ("inner", "outer"):
+        rows.append((key, 510, float(A["at_t510s"][f"{key}_coil_C"]), tw.lumped_state.T[key]))
+    for key, t, m, g in rows:
+        say("L4", f"run A t = {t:3d} s {key} coil: IR = {m:.2f} C, model = {g:.2f} C, diff = {g - m:+.2f} K")
+    rms = math.sqrt(sum((g - m) ** 2 for *_, m, g in rows) / len(rows))
+    say("L5", f"run A RMS error (coils, {len(rows)} points) = {rms:.2f} K")
     tw = TwinState(rom=romc, lumped=lumped, lev=lev, T_amb=20.0)
     N = 20000
     t0 = time.perf_counter()

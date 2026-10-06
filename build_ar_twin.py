@@ -425,7 +425,7 @@ input[type=range]::-webkit-slider-thumb {
     <span class="slider-title">Erregerstrom (RMS)</span>
     <span class="slider-val" id="lblCurrent">0.00 A (0V - Stillstand)</span>
   </div>
-  <input type="range" id="sliderCurrent" min="0" max="7.8" step="0.05" value="0.0">
+  <input type="range" id="sliderCurrent" min="0" max="6.175" step="0.05" value="0.0">
 
   <div class="pills">
     <div class="pill-btn active" id="btnToggleBField">⚡ B-Feld</div>
@@ -1356,6 +1356,12 @@ btnStartAR.addEventListener('click', async () => {
 // ── Interactive UI Controls ───────────────────────────────────────────────────
 const sliderCur = document.getElementById('sliderCurrent');
 const lblCur = document.getElementById('lblCurrent');
+// Slider max = the rig's real max current (params.yaml power_supply, last dial
+// anchor: 270deg -> 6.175 A since WP-ANCHOR 2026-10-06), not a hardcoded value.
+{
+  const psA = PARAMS.power_supply && PARAMS.power_supply.anchors;
+  if (psA && psA.length) sliderCur.max = String(Math.max(5.0, psA[psA.length - 1][1]));
+}
 
 sliderCur.addEventListener('input', (e) => {
   curI = parseFloat(e.target.value);

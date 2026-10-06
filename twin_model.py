@@ -140,10 +140,21 @@ class PlateCache:
 # i_max_for — digital_twin.py:236
 # ---------------------------------------------------------------------------
 def i_max_for(cfg) -> float:
-    """I_MAX covers the rig's real max current (variac dial 270 -> 7.78A
-    measured 2026-07-02, docs/rig_photo.jpg), with headroom over 5.0A."""
+    """I_MAX = the rig's real max current: variac dial 270deg -> 6.175 A
+    (re-measured 2026-10-02/03; the 7.78 A of 2026-07-02 was a bad reading,
+    WP-ANCHOR), never below the 5.0 A operating point."""
     ps = cfg.power_supply
     return max(5.0, cfg.dial_to_current_A(ps["dial_max"])) if ps else 5.0
+
+
+def live_i_max_for(cfg) -> float:
+    """Over-range clamp for the LIVE sensor paths (digital_twin_live.py and the
+    HTML Sensor mode): i_max_for(cfg) + live_sensor.clamp_headroom_A. The extra
+    headroom keeps an un-trimmed sensor/board offset (or a new Arduino not yet
+    in live_sensor.board_offsets) from flattening real max-dial readings into
+    the clamp (user decision 2026-10-06)."""
+    ls = cfg.raw.get("live_sensor") or {}
+    return i_max_for(cfg) + float(ls.get("clamp_headroom_A", 0.0))
 
 
 # ---------------------------------------------------------------------------
