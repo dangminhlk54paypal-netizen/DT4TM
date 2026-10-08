@@ -44,7 +44,8 @@ python refit_hA.py                       # WP-COOL T4: refit lumped_thermal.hA_i
 python gen_qr.py <hosted-url>            # QR code -> outputs/qr_digital_twin.png (URL TBD, see CLAUDE.md)
 python gen_ar_marker.py                  # Printable AprilTag (tag36h11) 2x2 boards: p.1 plate IDs 0-3, p.2 base IDs 4-7 -> outputs/ar_marker.pdf (+ .png previews); print at 100 %
 python build_apriltag_wasm.py            # OPTIONAL, needs Docker: rebuild apriltag_wasm.js from the pinned AprilTag C sources (committed artifact, bit-reproducible)
-python build_ar_twin.py                  # Generate mobile WebAR twin -> outputs/ar_twin.html
+python build_ar_twin.py                  # Generate mobile WebAR twin -> outputs/ar_twin.html (German UI)
+python build_ar_twin.py --lang en        # same page with English UI -> outputs/ar_twin_en.html (--lang all = both; table in ar_i18n.py)
 
 # Optional extension: PyVista desktop 3D twin (~400MB VTK dep, see extensions/README.md)
 python extensions/digital_twin_pyvista.py --self-check          # sanity check, no VTK needed
@@ -78,7 +79,8 @@ data_io.py          # Arduino sensor bridge (serial or mock) -> rom.calibrate_UA
 gen_qr.py           # QR code for the hosted digital_twin_fem.html (URL via CLI arg)
 gen_ar_marker.py    # Printable AprilTag board PDF (vector, A4, plate + base board) + board-geometry constants shared with the AR page
 build_apriltag_wasm.py + apriltag_glue.c  # Docker build -> apriltag_wasm.js + tag36h11_codes.json (committed; inline in ar_twin.html)
-build_ar_twin.py    # Mobile WebAR app builder -> outputs/ar_twin.html
+build_ar_twin.py    # Mobile WebAR app builder -> outputs/ar_twin.html (+ ar_twin_en.html via --lang en)
+ar_i18n.py          # German->English UI table + leftover check for the English AR build (imported by build_ar_twin.py only)
 extensions/         # OPTIONAL add-ons — heavy deps the core avoids; nothing in the root
                     #   imports them, so the pipeline runs with this folder deleted.
                     #   digital_twin_pyvista.py (PyVista/VTK 3D twin). See its README.md.

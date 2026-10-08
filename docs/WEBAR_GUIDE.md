@@ -6,6 +6,7 @@ Diese Anleitung beschreibt, wie der reale Versuchsstand (TEAM 28 Levitator) mit 
 
 ## 1. Übersicht
 
+* **Englische Variante:** `python build_ar_twin.py --lang en` erzeugt `outputs/ar_twin_en.html` (gleiche Seite, englische Oberfläche; Übersetzungstabelle in `ar_i18n.py`).
 * **Keine App-Installation notwendig:** Funktioniert direkt im Webbrowser (Safari auf iOS, Chrome auf Android).
 * **Ausrichtung über ZWEI Marker (WP-AR-DUAL):** Zwei ausgedruckte **AprilTag-Boards** (je 2×2 tag36h11-Tags, 120 × 120 mm, gleiche Größe): der **Platten-Marker** (IDs 0–3) wird mit seiner Mitte auf die Aluminiumplatte geklebt ($r = 0$) und dreht, schwebt und kippt mit ihr; der **Basis-Marker** (IDs 4–7) liegt fest neben dem Prüfstand. Der Unterbau (Spulen, Eisen, Kork, Holzgehäuse, Feldlinien) hängt am Basis-Marker und **bleibt stehen**, die Platte im Modell folgt der echten Platte. Die Kamera muss nicht alle Tags sehen: ab 2 sichtbaren Tags je Board wird getrackt, ein teilweise verdecktes Board bleibt stabil.
 * **Was im Kamerabild sichtbar ist:**

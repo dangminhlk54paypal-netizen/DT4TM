@@ -15,7 +15,9 @@ pins twin_core.py against both pages. Rebuild order: build_twin_html_fem.py firs
 then this script.
 
 Outputs:
-  outputs/ar_twin.html
+  outputs/ar_twin.html      German UI (default, `--lang de`)
+  outputs/ar_twin_en.html   English UI (`--lang en`; `--lang all` builds both). ONE template:
+                            ar_i18n.py translates the template text at build time (engine/data untouched).
 """
 from __future__ import annotations
 import base64
@@ -27,6 +29,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 FEM_HTML = os.path.join(HERE, "outputs", "digital_twin_fem.html")
 OUT_HTML = os.path.join(HERE, "outputs", "ar_twin.html")
+OUT_HTML_EN = os.path.join(HERE, "outputs", "ar_twin_en.html")
 APRILTAG_JS = os.path.join(HERE, "apriltag_wasm.js")   # built by build_apriltag_wasm.py (committed; no Docker needed here)
 sys.path.insert(0, HERE)
 from gen_ar_marker import TAG_EDGE_MM, MARKER_JS_CONFIG   # AprilTag board geometry: one constant block for print + AR
@@ -143,8 +146,8 @@ def extract_data_from_fem_html(html_path: str, stl_dir: str | None = None):
     }
 
 
-def generate_ar_html(data: dict, out_path: str):
-    """Generate the complete mobile WebAR HTML file."""
+def generate_ar_html(data: dict, out_path: str, lang: str = "de"):
+    """Generate the complete mobile WebAR HTML file (lang: 'de' = template as written, 'en' = ar_i18n table)."""
     html_template = """<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -2685,6 +2688,16 @@ window.addEventListener('resize', () => {
 </body>
 </html>
 """
+    if lang == "en":
+        # English UI: translate the TEMPLATE only -- placeholders (engine, PARAMS, base64, WASM) are
+        # still unexpanded here, so none of the baked/verbatim blocks can be touched.
+        import ar_i18n
+        html_template = ar_i18n.translate_template(html_template)
+        left = ar_i18n.find_german_leftovers(html_template)
+        if left:
+            raise RuntimeError("German UI text left in the English build (add to ar_i18n.UI_EN):\n  " + "\n  ".join(left))
+    elif lang != "de":
+        raise ValueError(f"unknown lang {lang!r}")
     # Replace template placeholders
     html = html_template.replace("__TWIN_ENGINE__", data["engine_js"])
     html = html.replace("__T_AMB_FALLBACK_C__", data["t_amb_fallback"])
@@ -2718,11 +2731,16 @@ if __name__ == "__main__":
         sys.exit(1)
 
     import argparse
-    ap = argparse.ArgumentParser(description="Build outputs/ar_twin.html")
+    ap = argparse.ArgumentParser(description="Build outputs/ar_twin.html (German) and/or outputs/ar_twin_en.html (English)")
+    ap.add_argument("--lang", choices=("de", "en", "all"), default="de",
+                    help="UI language: de = outputs/ar_twin.html (default), en = outputs/ar_twin_en.html, all = both")
     ap.add_argument("--stl-dir", default=None,
                     help="folder with the 3D_model_*.stl body meshes (default: sibling "
                          "stl_export_separate_files / maria-dt4tm-stl_export_separate_files, "
                          "or $AR_STL_DIR)")
     args = ap.parse_args()
     extracted = extract_data_from_fem_html(FEM_HTML, resolve_stl_dir(args.stl_dir))
-    generate_ar_html(extracted, OUT_HTML)
+    if args.lang in ("de", "all"):
+        generate_ar_html(extracted, OUT_HTML, "de")
+    if args.lang in ("en", "all"):
+        generate_ar_html(extracted, OUT_HTML_EN, "en")

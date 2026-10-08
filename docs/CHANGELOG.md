@@ -1660,3 +1660,22 @@ block / `build_twin_html_fem.py` untouched (`xval_twin.py` PASS both pages, `twi
   (4) manual capture needs a detection period <= ~167 ms ("zu wenige Bilder" on a very slow phone); (5) round-robin is
   chosen at >= 0.9 m camera distance although the union crop would cost the same; (6)-(8) hardening of `calStore`
   against foreign values, trim clamping, capture label wording.
+
+## WP-AR-EN (2026-10-08) — English UI build of the AR twin (`build_ar_twin.py --lang en`, `ar_i18n.py`)
+Request: an English-UI variant of the AR page. Mechanism (ONE template, no duplicated HTML/JS): `ar_i18n.UI_EN`
+(79 exact German -> English substring pairs, flat sibling module) is applied to the page TEMPLATE only, in a single
+regex pass (longest key first, output never re-translated) BEFORE the `__TWIN_ENGINE__` / `__PARAMS_JSON__` /
+base64 / `__APRILTAG_WASM_JS__` placeholders are expanded, so the engine block, PARAMS and WASM are untouched and
+`xval_twin.py` AR-1/AR-2 hold for the English page too. Every entry must match at least once, otherwise the build
+fails naming the stale entry (`StaleEntryError`); a leftover scan (`find_german_leftovers`: HTML text nodes,
+title/aria attributes, JS string literals with comments stripped, CSS `content:`; umlauts + a German word list)
+fails the build if German UI text survives. Keys carry context (`>Sichtbar</button>`, quotes) so identifiers, ids,
+CSS classes and code compared in JS are never hit; the one German status code, `'unruhig'` (capture status,
+compared in `calUi()`), is deliberately kept in both builds (`ar_i18n.CODE_STRINGS`, ignored by the scan).
+`python build_ar_twin.py` (German) is byte-identical to before (sha256 unchanged); `--lang en` -> `outputs/ar_twin_en.html`
+(`<html lang="en">`, title "TEAM 28 — WebAR Digital Twin"), `--lang all` builds both. `.gitignore`: added
+`!outputs/ar_twin_en.html` next to `ar_twin.html`. Verified: `xval_twin.py` PASS; the same checks (A integrator,
+AR-1 PARAMS, AR-2 engine text, B) PASS pointed at `ar_twin_en.html`; headless Chromium (414x896) loads the EN page
+with 0 console errors and 0 German remnants in the live DOM plus every dynamic state (tracking badge per fusion
+mode, calibration states, measured row, dialogs, toggles); no label clips. Known layout limit (pre-existing, same
+in German): the longest badge states wrap to two lines and squeeze the brand text in the top bar.
