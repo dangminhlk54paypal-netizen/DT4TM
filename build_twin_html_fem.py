@@ -1954,6 +1954,17 @@ for(let i=0;i<positions.length;i+=3){
   positions[i+1]=z; positions[i+2]=-y;
 }
 
+// ==== TWIN_ENGINE_BEGIN ====
+// SINGLE SOURCE OF TRUTH for the twin's physics in the browser. build_ar_twin.py
+// extracts everything between these two markers VERBATIM into ar_twin.html, so
+// the AR page runs exactly this integrator (xval_twin.py pins both pages against
+// twin_core.py). Rules for this block:
+//   * PURE: no DOM, no Three.js, no UI state (paused, targetI, meshes, ...).
+//   * External dependencies are ONLY these four names, defined by the host page
+//     before the block: PARAMS (baked json), ROM (= PARAMS.rom), LUMPED
+//     (= PARAMS.lumped) and T_AMB_JS (ambient baseline [deg C]).
+//   * Anything else (display exaggeration, colours, scenarios, telemetry) lives
+//     OUTSIDE the markers.
 // ── Simulation state (mirrors digital_twin.py DigitalTwin) ───────────────────
 const sim = {
   beta:      0.0,                // total disc amplitude β = f_eddy·β_eddy + f_air·β_air
@@ -1998,30 +2009,6 @@ function coilAirDrive() {
   const num = ai.P_ref * (sim.T.inner - T_AMB_JS) +
               ao.P_ref * (sim.T.outer - T_AMB_JS);
   return Math.max(0.0, num / COIL_DT_SS_REF);
-}
-
-// ── I(t) scenarios (same as digital_twin.py / twin_core.py SCENARIOS) ────────
-// WP-SHIMMER V1 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md V1): `quickstart`
-// is a fast 0->I ramp (PARAMS.quickstart_ramp_s, default 8s) -- same form as
-// `ramp` (60s) but short enough to watch the disc bob on page load instead of
-// snapping straight to its gap the way `step` does. It is the DEFAULT scenario
-// below (was `step`).
-const QUICKSTART_RAMP_S = PARAMS.quickstart_ramp_s || 8.0;
-const SCENARIOS = {
-  quickstart: (I, t) => Math.min(t / QUICKSTART_RAMP_S, 1.0) * I,
-  step:  (I, t) => I,
-  ramp:  (I, t) => Math.min(t / 60.0, 1.0) * I,
-  sine:  (I, t) => Math.max(0, I * 0.6 + I * 0.4 * Math.sin(2 * Math.PI * t / 120)),
-  pulse: (I, t) => (t % 120) < 60 ? I : 0.0,
-};
-let curScenario = 'quickstart';
-let targetI = 5.0;   // from slider
-// Non-null while Sensor mode drives the model: the latest MEASURED I_rms after
-// dead-band/clamp (zero-order hold until the next sample). Scenarios are
-// bypassed -- the rig, not a script, decides the current.
-let sensorDriveI = null;
-function getI() {
-  return sensorDriveI !== null ? sensorDriveI : SCENARIOS[curScenario](targetI, sim.t);
 }
 
 // Nonlinear natural convection (simplified Churchill-Chu): h grows slowly with
@@ -2124,91 +2111,6 @@ function resetSim() {
   sim.hist_I      = [0.0];
   sim.hist_dt     = 1.0;
 }
-
-// ── Color mapping ─────────────────────────────────────────────────────────────
-//  T_amb → blue (HSL 240°),  PARAMS.plate_hot_display_C → red (HSL 0°). Floor
-//  tracks the baked ambient (20 °C per params.yaml) instead of a stale hardcoded
-//  value; ceiling now reads levitating_disc.plate_hot_display_C (WP-HTML fix,
-//  was a JS literal `125`) instead of a hardcoded literal.
-let T_COLOR_LO = T_AMB_JS;   // follows the T_amb selector (setAmbient)
-const T_COLOR_HI = PARAMS.plate_hot_display_C;
-const STRUCT = new THREE.Color(0x5a5a68);   // neutral grey for housing
-function tcol(T) {  // allocating version — for UI swatches / legend only
-  let t = (T - T_COLOR_LO) / (T_COLOR_HI - T_COLOR_LO);
-  t = Math.max(0, Math.min(1, t));
-  const c = new THREE.Color();
-  c.setHSL((1 - t) * 240 / 360, 1, 0.5);
-  return c;
-}
-// Allocation-free HSL→RGB written straight into the color buffer (hot path).
-// s=1, l=0.5 fixed for the thermal ramp → simplified piecewise form.
-function writeRamp(col, idx, tnorm) {
-  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
-  const h = (1 - t) * 240 / 360;       // 0(red)..0.667(blue)
-  const q = 1.0, p = 0.0;              // l=0.5,s=1 → q=1, p=0
-  const tc0 = h + 1/3, tc1 = h, tc2 = h - 1/3;
-  col[idx]   = ramp1(tc0 > 1 ? tc0 - 1 : tc0);
-  col[idx+1] = ramp1(tc1);
-  col[idx+2] = ramp1(tc2 < 0 ? tc2 + 1 : tc2);
-}
-function ramp1(t) {
-  if (t < 1/6) return 6 * t;
-  if (t < 1/2) return 1;
-  if (t < 2/3) return (2/3 - t) * 6;
-  return 0;
-}
-const STRUCT_RGB = [160/255, 100/255, 55/255];   // wood base (plywood housing)
-const METAL_RGB  = [170/255, 175/255, 185/255];  // passive white-grey metal
-
-// Copper/varnish ramp: dark chocolate-brown lacquer at cold → IR-bright yellow at hot.
-// Cold end matched to docs/real_model.png (solid dark-brown varnished mass); hot end
-// matched to docs/thermal_test.png — the HIKMICRO IR image shows the windings as the
-// brightest part of the whole device (yellow-white at ~60°C), so the hot colour must
-// read unambiguously as "glowing", not as a slightly lighter brown.
-const COPPER_COLD = [0.30, 0.14, 0.08];   // dark varnish/rosin over copper wire (cold)
-const COPPER_HOT  = [1.00, 0.80, 0.22];   // IR-bright yellow-orange (hot)
-function writeRampCopper(col, idx, tnorm) {
-  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
-  t = Math.pow(t, 0.65);   // perceptual boost: typical operating tnorm ≈0.4-0.6 on the
-                           // absolute 80°C scale — pow<1 lifts that mid-range into a
-                           // clearly orange band while keeping 0→0 and 1→1 fixed.
-  col[idx]   = COPPER_COLD[0] + (COPPER_HOT[0] - COPPER_COLD[0]) * t;
-  col[idx+1] = COPPER_COLD[1] + (COPPER_HOT[1] - COPPER_COLD[1]) * t;
-  col[idx+2] = COPPER_COLD[2] + (COPPER_HOT[2] - COPPER_COLD[2]) * t;
-}
-
-// Metal/ceramic ramp: brushed silver at cold → warm orange at hot.
-// Used for center core and separator ring (passive parts, ~39-45°C).
-const METAL_COLD = [0.70, 0.72, 0.75];   // brushed aluminum / gray ceramic
-const METAL_HOT  = [0.95, 0.62, 0.18];   // warm orange glow (45°C looks subtle)
-function writeRampMetal(col, idx, tnorm) {
-  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
-  t = Math.sqrt(t);   // perceptual boost: passive parts peak at ~1/3 of the coil
-                       // scale (steady ratio ≈0.32) — sqrt lifts that to a clearly
-                       // visible warm shift while keeping 0→0 and 1→1 fixed.
-  col[idx]   = METAL_COLD[0] + (METAL_HOT[0] - METAL_COLD[0]) * t;
-  col[idx+1] = METAL_COLD[1] + (METAL_HOT[1] - METAL_COLD[1]) * t;
-  col[idx+2] = METAL_COLD[2] + (METAL_HOT[2] - METAL_COLD[2]) * t;
-}
-
-// Eddy-current density ramp: dark purple (low |J_e|) → bright yellow (high).
-// Je_vtx is pre-normalized 0..1 at build time (spatial pattern is static — a
-// single linear EM solve — so no live min/max search is needed, unlike the
-// thermal field which reshapes over time as β_eddy/β_air evolve separately).
-const EDDY_LO = [0.18, 0.00, 0.22], EDDY_HI = [1.00, 0.95, 0.15];
-function writeEddyRamp(col, idx, tnorm) {
-  const t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
-  col[idx]   = EDDY_LO[0] + (EDDY_HI[0] - EDDY_LO[0]) * t;
-  col[idx+1] = EDDY_LO[1] + (EDDY_HI[1] - EDDY_LO[1]) * t;
-  col[idx+2] = EDDY_LO[2] + (EDDY_HI[2] - EDDY_LO[2]) * t;
-}
-
-// Visualization mode: 'thermal' (default) | 'bfield' | 'eddy' | 'combined'.
-// 'bfield'/'combined' show the B-field-line overlay; 'eddy'/'combined' switch
-// the disc's vertex colours from the thermal ramp to the eddy-density ramp.
-let vizMode = 'thermal';
-let fieldLineOpacityPct = 0.70;
-const regionKey = {1:'inner', 2:'outer', 3:'iron'};
 
 // ── Levitation gap physics ────────────────────────────────────────────────────
 // The EM lift force decays ~exponentially with gap height z:
@@ -2346,6 +2248,179 @@ function levStep(I, dt) {
   lev.jit = jitContact + jitLev;
 }
 
+// ── Engine helpers shared by both pages (pure) ───────────────────────────────
+// Per-disc-vertex live temperature: eddy part (fast β_eddy, uniform) + hot-air part
+// (slow β_air, bottom-weighted). The two time constants differ, so the top/bottom
+// gradient GROWS over time as the coils' hot air builds up — not a frozen pattern.
+// M needs .dT (eddy ΔT per vertex) and .dTa (hot-air ΔT per vertex).
+function discVtxT(M, vi) {
+  return T_AMB_JS + ROM.f_eddy * sim.beta_eddy * M.dT[vi]
+                  + ROM.f_air  * sim.beta_air  * M.dTa[vi];
+}
+// Live min/max of the disc temperature field (radial + top/bottom gradient).
+function discTempRange(M) {
+  let lo = Infinity, hi = -Infinity;
+  for (let vi = 0; vi < M.dT.length; vi++) {
+    const T = discVtxT(M, vi);
+    if (T < lo) lo = T;
+    if (T > hi) hi = T;
+  }
+  return [lo, hi];
+}
+function discMeanT(M) {
+  let s = 0;
+  for (let vi = 0; vi < M.dT.length; vi++) s += discVtxT(M, vi);
+  return s / M.dT.length;
+}
+// Levitation-state reset (thermal reset is resetSim()).
+function resetLev() {
+  lev.z = 0; lev.v = 0; lev.jit = 0; lev.jitPhase1 = 0; lev.jitPhase2 = 0;
+  lev.jitLevPhase1 = 0; lev.jitLevPhase2 = 0;
+}
+// Raw-integrator trace (used by xval_twin.py via window.twinDebug.traceRom).
+// Drives romStep/levStep directly, never substeps.
+function engineTrace({I, dt, n, every}) {
+  resetSim();
+  // resetSim() is thermal-only BY DESIGN (matches the "Reset temperatures"
+  // button and the scenario-selector -- neither should yank a currently-
+  // levitating disc back down); a trace needs the explicit lev reset too for
+  // reproducible/deterministic pinning (found by WP-XVAL: two traceRom calls in
+  // the same page gave two different "reset" trajectories otherwise).
+  resetLev();
+  // I: a single number (constant current for all n steps, the original
+  // WP-DEBUG shape) OR an array of n numbers (one per step, added for
+  // WP-XVAL so ramp/sine/pulse/step-transition schedules can be pinned
+  // too) -- Python drives the identical per-step schedule on its side.
+  const Iat = Array.isArray(I) ? (i => I[i - 1]) : (() => I);
+  const out = {t:[], beta:[], beta_eddy:[], beta_air:[], T_inner:[], T_outer:[],
+    T_iron:[], T_air:[], T_inner_deep:[], T_outer_deep:[], z:[], v:[], jit:[]};
+  const sample = () => {
+    out.t.push(sim.t); out.beta.push(sim.beta);
+    out.beta_eddy.push(sim.beta_eddy); out.beta_air.push(sim.beta_air);
+    out.T_inner.push(sim.T.inner); out.T_outer.push(sim.T.outer);
+    out.T_iron.push(sim.T.iron); out.T_air.push(sim.T.air);
+    out.T_inner_deep.push(sim.T.inner_deep); out.T_outer_deep.push(sim.T.outer_deep);
+    out.z.push(lev.z); out.v.push(lev.v); out.jit.push(lev.jit);
+  };
+  sample();
+  for (let i = 1; i <= n; i++) {
+    const Ii = Iat(i);
+    romStep(Math.max(0, Math.min(Ii, 20.0)), dt);   // matches loop()'s I_now clamp
+    levStep(Ii, dt);                                // matches loop()'s unclamped I_display
+    if (i % every === 0) sample();
+  }
+  return out;
+}
+// ==== TWIN_ENGINE_END ====
+
+// ── I(t) scenarios (same as digital_twin.py / twin_core.py SCENARIOS) ────────
+// WP-SHIMMER V1 (2026-07-28, docs/archive/2026-07-28_BUG_REGISTER.md V1): `quickstart`
+// is a fast 0->I ramp (PARAMS.quickstart_ramp_s, default 8s) -- same form as
+// `ramp` (60s) but short enough to watch the disc bob on page load instead of
+// snapping straight to its gap the way `step` does. It is the DEFAULT scenario
+// below (was `step`).
+const QUICKSTART_RAMP_S = PARAMS.quickstart_ramp_s || 8.0;
+const SCENARIOS = {
+  quickstart: (I, t) => Math.min(t / QUICKSTART_RAMP_S, 1.0) * I,
+  step:  (I, t) => I,
+  ramp:  (I, t) => Math.min(t / 60.0, 1.0) * I,
+  sine:  (I, t) => Math.max(0, I * 0.6 + I * 0.4 * Math.sin(2 * Math.PI * t / 120)),
+  pulse: (I, t) => (t % 120) < 60 ? I : 0.0,
+};
+let curScenario = 'quickstart';
+let targetI = 5.0;   // from slider
+// Non-null while Sensor mode drives the model: the latest MEASURED I_rms after
+// dead-band/clamp (zero-order hold until the next sample). Scenarios are
+// bypassed -- the rig, not a script, decides the current.
+let sensorDriveI = null;
+function getI() {
+  return sensorDriveI !== null ? sensorDriveI : SCENARIOS[curScenario](targetI, sim.t);
+}
+
+// ── Color mapping ─────────────────────────────────────────────────────────────
+//  T_amb → blue (HSL 240°),  PARAMS.plate_hot_display_C → red (HSL 0°). Floor
+//  tracks the baked ambient (20 °C per params.yaml) instead of a stale hardcoded
+//  value; ceiling now reads levitating_disc.plate_hot_display_C (WP-HTML fix,
+//  was a JS literal `125`) instead of a hardcoded literal.
+const T_COLOR_LO = T_AMB_JS, T_COLOR_HI = PARAMS.plate_hot_display_C;
+const STRUCT = new THREE.Color(0x5a5a68);   // neutral grey for housing
+function tcol(T) {  // allocating version — for UI swatches / legend only
+  let t = (T - T_COLOR_LO) / (T_COLOR_HI - T_COLOR_LO);
+  t = Math.max(0, Math.min(1, t));
+  const c = new THREE.Color();
+  c.setHSL((1 - t) * 240 / 360, 1, 0.5);
+  return c;
+}
+// Allocation-free HSL→RGB written straight into the color buffer (hot path).
+// s=1, l=0.5 fixed for the thermal ramp → simplified piecewise form.
+function writeRamp(col, idx, tnorm) {
+  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  const h = (1 - t) * 240 / 360;       // 0(red)..0.667(blue)
+  const q = 1.0, p = 0.0;              // l=0.5,s=1 → q=1, p=0
+  const tc0 = h + 1/3, tc1 = h, tc2 = h - 1/3;
+  col[idx]   = ramp1(tc0 > 1 ? tc0 - 1 : tc0);
+  col[idx+1] = ramp1(tc1);
+  col[idx+2] = ramp1(tc2 < 0 ? tc2 + 1 : tc2);
+}
+function ramp1(t) {
+  if (t < 1/6) return 6 * t;
+  if (t < 1/2) return 1;
+  if (t < 2/3) return (2/3 - t) * 6;
+  return 0;
+}
+const STRUCT_RGB = [160/255, 100/255, 55/255];   // wood base (plywood housing)
+const METAL_RGB  = [170/255, 175/255, 185/255];  // passive white-grey metal
+
+// Copper/varnish ramp: dark chocolate-brown lacquer at cold → IR-bright yellow at hot.
+// Cold end matched to docs/real_model.png (solid dark-brown varnished mass); hot end
+// matched to docs/thermal_test.png — the HIKMICRO IR image shows the windings as the
+// brightest part of the whole device (yellow-white at ~60°C), so the hot colour must
+// read unambiguously as "glowing", not as a slightly lighter brown.
+const COPPER_COLD = [0.30, 0.14, 0.08];   // dark varnish/rosin over copper wire (cold)
+const COPPER_HOT  = [1.00, 0.80, 0.22];   // IR-bright yellow-orange (hot)
+function writeRampCopper(col, idx, tnorm) {
+  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  t = Math.pow(t, 0.65);   // perceptual boost: typical operating tnorm ≈0.4-0.6 on the
+                           // absolute 80°C scale — pow<1 lifts that mid-range into a
+                           // clearly orange band while keeping 0→0 and 1→1 fixed.
+  col[idx]   = COPPER_COLD[0] + (COPPER_HOT[0] - COPPER_COLD[0]) * t;
+  col[idx+1] = COPPER_COLD[1] + (COPPER_HOT[1] - COPPER_COLD[1]) * t;
+  col[idx+2] = COPPER_COLD[2] + (COPPER_HOT[2] - COPPER_COLD[2]) * t;
+}
+
+// Metal/ceramic ramp: brushed silver at cold → warm orange at hot.
+// Used for center core and separator ring (passive parts, ~39-45°C).
+const METAL_COLD = [0.70, 0.72, 0.75];   // brushed aluminum / gray ceramic
+const METAL_HOT  = [0.95, 0.62, 0.18];   // warm orange glow (45°C looks subtle)
+function writeRampMetal(col, idx, tnorm) {
+  let t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  t = Math.sqrt(t);   // perceptual boost: passive parts peak at ~1/3 of the coil
+                       // scale (steady ratio ≈0.32) — sqrt lifts that to a clearly
+                       // visible warm shift while keeping 0→0 and 1→1 fixed.
+  col[idx]   = METAL_COLD[0] + (METAL_HOT[0] - METAL_COLD[0]) * t;
+  col[idx+1] = METAL_COLD[1] + (METAL_HOT[1] - METAL_COLD[1]) * t;
+  col[idx+2] = METAL_COLD[2] + (METAL_HOT[2] - METAL_COLD[2]) * t;
+}
+
+// Eddy-current density ramp: dark purple (low |J_e|) → bright yellow (high).
+// Je_vtx is pre-normalized 0..1 at build time (spatial pattern is static — a
+// single linear EM solve — so no live min/max search is needed, unlike the
+// thermal field which reshapes over time as β_eddy/β_air evolve separately).
+const EDDY_LO = [0.18, 0.00, 0.22], EDDY_HI = [1.00, 0.95, 0.15];
+function writeEddyRamp(col, idx, tnorm) {
+  const t = tnorm < 0 ? 0 : (tnorm > 1 ? 1 : tnorm);
+  col[idx]   = EDDY_LO[0] + (EDDY_HI[0] - EDDY_LO[0]) * t;
+  col[idx+1] = EDDY_LO[1] + (EDDY_HI[1] - EDDY_LO[1]) * t;
+  col[idx+2] = EDDY_LO[2] + (EDDY_HI[2] - EDDY_LO[2]) * t;
+}
+
+// Visualization mode: 'thermal' (default) | 'bfield' | 'eddy' | 'combined'.
+// 'bfield'/'combined' show the B-field-line overlay; 'eddy'/'combined' switch
+// the disc's vertex colours from the thermal ramp to the eddy-density ramp.
+let vizMode = 'thermal';
+let fieldLineOpacityPct = 0.70;
+const regionKey = {1:'inner', 2:'outer', 3:'iron'};
+
 // ── Three.js scene ────────────────────────────────────────────────────────────
 const scene    = new THREE.Scene();
 scene.fog      = new THREE.FogExp2(0x0f0f1e, 0.0014);
@@ -2438,13 +2513,7 @@ function makeMesh(sub, roughness=0.45, metalness=0.65, envInt=0.8) {
   return {mesh:m, geo:g, reg:sub.reg, dT:sub.dT, dTa:sub.dTa, je:sub.je, col};
 }
 
-// Per-disc-vertex live temperature: eddy part (fast β_eddy, uniform) + hot-air part
-// (slow β_air, bottom-weighted). The two time constants differ, so the top/bottom
-// gradient GROWS over time as the coils' hot air builds up — not a frozen pattern.
-function discVtxT(M, vi) {
-  return T_AMB_JS + ROM.f_eddy * sim.beta_eddy * M.dT[vi]
-                  + ROM.f_air  * sim.beta_air  * M.dTa[vi];
-}
+// discVtxT() lives in the TWIN_ENGINE block above (shared with ar_twin.html).
 // Split base into passive metal (core, separator), varnished coil windings,
 // wood frame and aluminium disc — each with its own PBR material.
 // Matte, non-reflective materials for the body — only the aluminium disc is a
@@ -2478,13 +2547,7 @@ function updateCoilGlow() {
 // Used both for the disc's relative colour scale and for telemetry.
 let discTlo = T_AMB_JS, discThi = T_AMB_JS;
 function updateDiscRange() {
-  let lo = Infinity, hi = -Infinity;
-  for (let vi = 0; vi < plateM.dT.length; vi++) {
-    const T = discVtxT(plateM, vi);
-    if (T < lo) lo = T;
-    if (T > hi) hi = T;
-  }
-  discTlo = lo; discThi = hi;
+  [discTlo, discThi] = discTempRange(plateM);
 }
 
 // Bounding box from full model
@@ -2715,40 +2778,7 @@ window.twinDebug = {camera, controls, size, plateM, coilInnerM, coilOuterM,
   // only -- they stay module-scoped, not separately exposed on window.
   traceRom({I, dt, n, every}) {
     paused = true;
-    resetSim();
-    // resetSim() is thermal-only BY DESIGN (matches the "Reset temperatures"
-    // button, :2476, and the scenario-selector, :2471 -- neither should yank
-    // a currently-levitating disc back down) -- selectPlateVariant() already
-    // has to reset `lev` manually alongside it for the SAME reason (:2158-
-    // 2159). traceRom needs the same explicit reset for reproducible/
-    // deterministic pinning: without it, a trace's z/v/jit silently inherit
-    // whatever the live render loop (or an earlier traceRom call) left
-    // lev.z/lev.v/... sitting at (found by WP-XVAL: two traceRom calls in the
-    // same page gave two different "reset" trajectories).
-    lev.z = 0; lev.v = 0; lev.jit = 0; lev.jitPhase1 = 0; lev.jitPhase2 = 0; lev.jitLevPhase1 = 0; lev.jitLevPhase2 = 0;
-    // I: a single number (constant current for all n steps, the original
-    // WP-DEBUG shape) OR an array of n numbers (one per step, added for
-    // WP-XVAL so ramp/sine/pulse/step-transition schedules can be pinned
-    // too) -- Python drives the identical per-step schedule on its side.
-    const Iat = Array.isArray(I) ? (i => I[i - 1]) : (() => I);
-    const out = {t:[], beta:[], beta_eddy:[], beta_air:[], T_inner:[], T_outer:[],
-      T_iron:[], T_air:[], T_inner_deep:[], T_outer_deep:[], z:[], v:[], jit:[]};
-    const sample = () => {
-      out.t.push(sim.t); out.beta.push(sim.beta);
-      out.beta_eddy.push(sim.beta_eddy); out.beta_air.push(sim.beta_air);
-      out.T_inner.push(sim.T.inner); out.T_outer.push(sim.T.outer);
-      out.T_iron.push(sim.T.iron); out.T_air.push(sim.T.air);
-      out.T_inner_deep.push(sim.T.inner_deep); out.T_outer_deep.push(sim.T.outer_deep);
-      out.z.push(lev.z); out.v.push(lev.v); out.jit.push(lev.jit);
-    };
-    sample();
-    for (let i = 1; i <= n; i++) {
-      const Ii = Iat(i);
-      romStep(Math.max(0, Math.min(Ii, 20.0)), dt);   // matches loop()'s I_now clamp
-      levStep(Ii, dt);                                // matches loop()'s unclamped I_display
-      if (i % every === 0) sample();
-    }
-    return out;
+    return engineTrace({I, dt, n, every});   // pure engine loop, see TWIN_ENGINE block
   }};   // WP-HTML: module-scoped consts aren't on
                                        // window in a module script -- expose for tests
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
@@ -3033,7 +3063,7 @@ function selectPlateVariant(idx) {
   buildFieldLines(v.field_lines);
 
   resetSim();
-  lev.z = 0; lev.v = 0; lev.jit = 0; lev.jitPhase1 = 0; lev.jitPhase2 = 0; lev.jitLevPhase1 = 0; lev.jitLevPhase2 = 0;
+  resetLev();
 
   // (The plate callout anchor reads the active variant's radius every frame.)
   flLiftY = -1;   // force a field-line re-layout for the new disc on the next frame
@@ -3183,9 +3213,7 @@ function plateTmax() {
   return discThi;   // hottest disc vertex — kept current by updateDiscRange()
 }
 function plateTmean() {
-  let s = 0;
-  for (let vi = 0; vi < plateM.dT.length; vi++) s += discVtxT(plateM, vi);
-  return s / plateM.dT.length;
+  return discMeanT(plateM);
 }
 // T_ss for current I (no sigma correction for speed, close enough for UI)
 // ── Steady-state targets = the ENGINE's own fixed point (2026-09-29) ──────────
@@ -4230,7 +4258,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("stl", nargs="?", default=os.path.join(HERE, "3D_model.stl"),
-                     help="unused (body geometry is 100% procedural) -- kept for CLI compatibility")
+                     help="unused (body geometry is 100%% procedural) -- kept for CLI compatibility")
     ap.add_argument("--plate-radius", type=float, default=None,
                      help="Override plate_material.radius_mm (mm) for this build only "
                           "(params.yaml default is unchanged). E.g. --plate-radius 75 for "

@@ -1,17 +1,17 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>TEAM 28 — WebAR Digitaler Zwilling</title>
+<title>TEAM 28 — WebAR Digital Twin</title>
 
 <!-- Error overlay for mobile debugging -->
 <script>
 window.addEventListener('error', function(e) {
   var b = document.getElementById('msgBox');
   if (b) {
-    document.getElementById('msgTitle').innerHTML = '⚠️ JavaScript Hinweis';
-    document.getElementById('msgBody').innerHTML = '<p style="color:#ff6b6b;font-weight:600;">' + (e.message || 'Skriptfehler') + '</p><p style="font-size:0.75rem;color:#a4b4d4;">' + (e.filename ? e.filename.split('/').pop() : '') + (e.lineno ? (':' + e.lineno) : '') + '</p>';
+    document.getElementById('msgTitle').innerHTML = '⚠️ JavaScript notice';
+    document.getElementById('msgBody').innerHTML = '<p style="color:#ff6b6b;font-weight:600;">' + (e.message || 'Script error') + '</p><p style="font-size:0.75rem;color:#a4b4d4;">' + (e.filename ? e.filename.split('/').pop() : '') + (e.lineno ? (':' + e.lineno) : '') + '</p>';
     b.style.display = 'block';
   }
 });
@@ -659,7 +659,7 @@ input[type=range]::-webkit-slider-thumb {
   box-shadow: 0 0 20px rgba(0, 210, 255, 0.2);
 }
 #targetGuide::after {
-  content: "Kamera auf Platten- und Basis-Marker richten"; position: absolute; bottom: -28px; left: -20px; right: -20px;
+  content: "Point the camera at the plate and base markers"; position: absolute; bottom: -28px; left: -20px; right: -20px;
   text-align: center; font-size: 0.72rem; font-weight: 600; color: #00d2ff;
   background: rgba(11, 13, 25, 0.75); padding: 3px 6px; border-radius: 6px;
 }
@@ -692,9 +692,9 @@ input[type=range]::-webkit-slider-thumb {
 
 <!-- Message Box -->
 <div id="msgBox">
-  <h3 id="msgTitle">Hinweis</h3>
+  <h3 id="msgTitle">Notice</h3>
   <div id="msgBody"></div>
-  <button class="btn-primary" id="btnCloseMsg">Verstanden</button>
+  <button class="btn-primary" id="btnCloseMsg">Got it</button>
 </div>
 
 <!-- Header -->
@@ -703,26 +703,26 @@ input[type=range]::-webkit-slider-thumb {
     <span>🧲 DT4TM</span>
     <span class="badge">WebAR</span>
   </div>
-  <div id="trackingBadge">🟡 3D-Vorschau</div>
+  <div id="trackingBadge">🟡 3D preview</div>
 </div>
 
 <!-- Telemetry + colour scale -->
 <div id="topStack">
 <div id="telemetryBar">
   <div class="t-item">
-    <span class="t-label">Strom I</span>
+    <span class="t-label">Current I</span>
     <span class="t-val" id="valCurrent">0.00 A</span>
   </div>
   <div class="t-item">
-    <span class="t-label">Platte T</span>
+    <span class="t-label">Plate T</span>
     <span class="t-val" id="valTPlate">-- °C</span>
   </div>
   <div class="t-item">
-    <span class="t-label">Spule T</span>
+    <span class="t-label">Coil T</span>
     <span class="t-val" id="valTCoil">-- °C</span>
   </div>
   <div class="t-item">
-    <span class="t-label">Spalt Modell</span>
+    <span class="t-label">Gap (model)</span>
     <span class="t-val" id="valZLev">0.0 mm</span>
   </div>
   <div class="t-meas" id="valMeas"></div>
@@ -740,76 +740,76 @@ input[type=range]::-webkit-slider-thumb {
 
 <!-- Banner -->
 <div id="startBanner">
-  <h3>Kamera-Überlagerung (AR)</h3>
-  <p>Starte die Kamera und richte sie auf die beiden AprilTag-Marker (PDF mit 100 % / Originalgröße drucken): <b>Seite 1 = Platten-Marker</b> auf die Platte kleben, <b>Seite 2 = Basis-Marker</b> fest neben den Prüfstand. Der Unterbau bleibt dann stehen, während die Platte dreht und schwebt.</p>
-  <button class="btn-primary" id="btnStartAR">📷 Kamera starten</button>
+  <h3>Camera overlay (AR)</h3>
+  <p>Start the camera and point it at the two AprilTag markers (print the PDF at 100 % / actual size): <b>page 1 = plate marker</b> goes on the plate, <b>page 2 = base marker</b> goes fixed next to the test rig. The base then stays put while the plate spins and levitates.</p>
+  <button class="btn-primary" id="btnStartAR">📷 Start camera</button>
 </div>
 
 <!-- Bottom Control Card -->
 <div id="bottomCard">
   <div class="slider-row">
-    <span class="slider-title">Erregerstrom (RMS)</span>
-    <span class="slider-val" id="lblCurrent">0.00 A (0V - Stillstand)</span>
+    <span class="slider-title">Excitation current (RMS)</span>
+    <span class="slider-val" id="lblCurrent">0.00 A (0V - standstill)</span>
   </div>
   <input type="range" id="sliderCurrent" min="0" max="6.175" step="0.05" value="0.0">
 
   <!-- Sim-time speed (log slider, same range/default as the FEM page's "Time speed"):
        the real thermal time constants are minutes, so 1x is real time. -->
   <div class="slider-row">
-    <span class="slider-title">Sim-Geschwindigkeit</span>
+    <span class="slider-title">Sim speed</span>
     <span class="slider-val" id="lblSpeed">1.0× · t = 0 s</span>
   </div>
   <input type="range" id="sliderSpeed" min="0" max="2.301" step="0.01" value="0">
 
   <div class="pills">
-    <div class="pill-btn active" id="btnToggleBField">⚡ B-Feld</div>
+    <div class="pill-btn active" id="btnToggleBField">⚡ B-field</div>
     <div class="pill-btn active" id="btnToggleThermal">🌡️ Temp</div>
-    <div class="pill-btn" id="btnToggleAlpha">👁️ Röntgen</div>
+    <div class="pill-btn" id="btnToggleAlpha">👁️ X-ray</div>
     <div class="pill-btn" id="btnPreset5A">🚀 5.0A</div>
     <div class="pill-btn" id="btnResetSim">↺ Reset</div>
-    <div class="pill-btn" id="btnToggleCalib">⚙️ Anpassen</div>
+    <div class="pill-btn" id="btnToggleCalib">⚙️ Adjust</div>
   </div>
 
   <!-- Calibration Dropdown Panel -->
   <div id="calibPanel">
     <div class="calib-row">
-      <span class="calib-title">Unterbau (Basis-Marker)</span>
-      <span class="calib-val" id="lblCalStatus" style="min-width:0; text-align:right; font-size:0.72rem;">noch nicht</span>
+      <span class="calib-title">Base (base marker)</span>
+      <span class="calib-val" id="lblCalStatus" style="min-width:0; text-align:right; font-size:0.72rem;">not yet</span>
     </div>
     <div class="calib-row">
       <div class="calib-controls" style="width:100%; gap:6px;">
-        <button class="pill-btn active" id="btnCalBase" style="padding: 6px 8px; font-size: 0.74rem;">📏 Unterbau einmessen (Platte liegt auf)</button>
-        <button class="pill-btn" id="btnCalReset" style="flex: 0 0 auto; padding: 6px 8px; font-size: 0.72rem;">zurücksetzen</button>
+        <button class="pill-btn active" id="btnCalBase" style="padding: 6px 8px; font-size: 0.74rem;">📏 Calibrate base (plate resting)</button>
+        <button class="pill-btn" id="btnCalReset" style="flex: 0 0 auto; padding: 6px 8px; font-size: 0.72rem;">Reset</button>
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Auto-Ausrichten</span>
+      <span class="calib-title">Auto-align</span>
       <div class="calib-controls">
         <button class="pill-btn active" id="btnAutoAlign" style="padding: 5px 12px; font-size: 0.74rem;">
-          📐 Kante zu mir einrasten
+          📐 Snap edge toward me
         </button>
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Drehwinkel (Ecken)</span>
+      <span class="calib-title">Rotation (corners)</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnYawDec">-1°</button>
         <span class="calib-val" id="lblYaw">+22.5°</span>
         <button class="btn-mini" id="btnYawInc">+1°</button>
-        <button class="btn-mini" id="btnYawSnap" style="min-width:44px;" title="Winkel umschalten">⟲ 22.5°</button>
+        <button class="btn-mini" id="btnYawSnap" style="min-width:44px;" title="Switch angle">⟲ 22.5°</button>
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Neigung (Pitch)</span>
+      <span class="calib-title">Tilt (pitch)</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnPitchDec">-1°</button>
         <span class="calib-val" id="lblPitch">0.0°</span>
         <button class="btn-mini" id="btnPitchInc">+1°</button>
-        <button class="btn-mini" id="btnPitchReset" style="min-width:32px;" title="Zurücksetzen">0°</button>
+        <button class="btn-mini" id="btnPitchReset" style="min-width:32px;" title="Reset">0°</button>
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Modellgröße</span>
+      <span class="calib-title">Model size</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnScaleDec">-1%</button>
         <span class="calib-val" id="lblScale">100%</span>
@@ -817,7 +817,7 @@ input[type=range]::-webkit-slider-thumb {
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Position X (seitlich)</span>
+      <span class="calib-title">Position X (lateral)</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnXDec">◀</button>
         <span class="calib-val" id="lblXOffset">0 mm</span>
@@ -825,7 +825,7 @@ input[type=range]::-webkit-slider-thumb {
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Position Y (Tiefe)</span>
+      <span class="calib-title">Position Y (depth)</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnYDec">▼</button>
         <span class="calib-val" id="lblYOffset">0 mm</span>
@@ -833,7 +833,7 @@ input[type=range]::-webkit-slider-thumb {
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">AR-Deckkraft</span>
+      <span class="calib-title">AR opacity</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnAlphaDec">-</button>
         <span class="calib-val" id="lblAlpha">38%</span>
@@ -841,19 +841,19 @@ input[type=range]::-webkit-slider-thumb {
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Platten-Overlay</span>
+      <span class="calib-title">Plate overlay</span>
       <div class="calib-controls">
-        <button class="pill-btn active" id="btnTogglePlate" style="padding: 4px 8px; font-size: 0.72rem;">Sichtbar</button>
+        <button class="pill-btn active" id="btnTogglePlate" style="padding: 4px 8px; font-size: 0.72rem;">Visible</button>
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Holzgehäuse</span>
+      <span class="calib-title">Wooden housing</span>
       <div class="calib-controls">
-        <button class="pill-btn active" id="btnToggleHousing" style="padding: 4px 8px; font-size: 0.72rem;">Sichtbar</button>
+        <button class="pill-btn active" id="btnToggleHousing" style="padding: 4px 8px; font-size: 0.72rem;">Visible</button>
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Marker-Größe (Tag)</span>
+      <span class="calib-title">Marker size (tag)</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnSizeDec">-</button>
         <span class="calib-val" id="lblMarkerSize">48 mm</span>
@@ -861,7 +861,7 @@ input[type=range]::-webkit-slider-thumb {
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Höhentrimmung (Z)</span>
+      <span class="calib-title">Height trim (Z)</span>
       <div class="calib-controls">
         <button class="btn-mini" id="btnZDec">-</button>
         <span class="calib-val" id="lblZOffset">0 mm</span>
@@ -869,9 +869,9 @@ input[type=range]::-webkit-slider-thumb {
       </div>
     </div>
     <div class="calib-row">
-      <span class="calib-title">Levitation simulieren</span>
+      <span class="calib-title">Simulate levitation</span>
       <div class="calib-controls">
-        <button class="pill-btn" id="btnToggleLev" style="padding: 4px 8px; font-size: 0.72rem;">Aus (0mm)</button>
+        <button class="pill-btn" id="btnToggleLev" style="padding: 4px 8px; font-size: 0.72rem;">Off (0mm)</button>
       </div>
     </div>
   </div>
@@ -1349,7 +1349,7 @@ function updateTelemetry(time) {
   valZLvEl.textContent = lev.z.toFixed(1) + ' mm';                          // engine gap, always
   // camera-measured plate state (approx.: pinhole guess for f, no lens distortion) -- display only, physics untouched
   const M = FUS.meas, showMeas = isArActive && FUS.mode === 'both' && M.valid;
-  if (showMeas) valMeasEl.textContent = `Spalt gemessen ≈ ${M.gapMm.toFixed(1)} mm (Modell ${lev.z.toFixed(1)}) · Kipp ≈ ${M.tiltDeg.toFixed(1)}° · Dreh ≈ ${Math.round(M.spinRpm)} U/min`;
+  if (showMeas) valMeasEl.textContent = `Measured gap ≈ ${M.gapMm.toFixed(1)} mm (model ${lev.z.toFixed(1)}) · tilt ≈ ${M.tiltDeg.toFixed(1)}° · spin ≈ ${Math.round(M.spinRpm)} rpm`;
   if (showMeas !== measShown) { measShown = showMeas; valMeasEl.style.display = showMeas ? 'block' : 'none'; }
   updateSpeedLabel();
   if (scaleNeedle) {
@@ -2342,15 +2342,15 @@ const calBtnEl = document.getElementById('btnCalBase'), calLblEl = document.getE
 function calUi() {
   const c = FUS.capture, F = FUS;
   let t, cls = '';
-  let bTxt = '📏 Unterbau einmessen (Platte liegt auf)';
-  if (c && !c.done) { bTxt = `⏳ Messe … (${c.samples.length})`; t = c.status === 'unruhig' ? 'zu unruhig – Kamera ruhig halten' : 'beide Marker im Bild halten'; cls = 'warn'; }
+  let bTxt = '📏 Calibrate base (plate resting)';
+  if (c && !c.done) { bTxt = `⏳ Measuring … (${c.samples.length})`; t = c.status === 'unruhig' ? 'too unsteady – hold the camera steady' : 'keep both markers in view'; cls = 'warn'; }
   else {
-    if (c && c.status === 'fail') { t = `zu unruhig (${c.jitterMm == null ? '?' : c.jitterMm.toFixed(1)} mm) – nochmal`; cls = 'warn'; }
-    else if (c && c.status === 'sparse') { t = 'zu wenige Bilder – beide Marker ruhig im Bild halten, nochmal'; cls = 'warn'; }
-    else if (c && c.status === 'nomarker') { t = 'beide Marker nicht gleichzeitig erkannt'; cls = 'warn'; }
-    else if (F.cal && F.cal.provisional) { t = 'vorläufig (automatisch) – bitte einmessen'; cls = 'warn'; }
-    else if (F.cal) { t = `eingemessen ✓${F.cal.stored ? ' (gespeichert)' : ''}` + (F.cal.jitterMm != null ? ` σ ${F.cal.jitterMm.toFixed(2)} mm` : ''); cls = 'ok'; }
-    else { t = 'noch nicht (beide Marker zeigen)'; }
+    if (c && c.status === 'fail') { t = `too unsteady (${c.jitterMm == null ? '?' : c.jitterMm.toFixed(1)} mm) – try again`; cls = 'warn'; }
+    else if (c && c.status === 'sparse') { t = 'too few frames – hold both markers steady in view, try again'; cls = 'warn'; }
+    else if (c && c.status === 'nomarker') { t = 'both markers not detected at the same time'; cls = 'warn'; }
+    else if (F.cal && F.cal.provisional) { t = 'provisional (automatic) – please calibrate'; cls = 'warn'; }
+    else if (F.cal) { t = `calibrated ✓${F.cal.stored ? ' (saved)' : ''}` + (F.cal.jitterMm != null ? ` σ ${F.cal.jitterMm.toFixed(2)} mm` : ''); cls = 'ok'; }
+    else { t = 'not yet (show both markers)'; }
   }
   if (calBtnEl.textContent !== bTxt) calBtnEl.textContent = bTxt;
   if (calLblEl.textContent !== t) calLblEl.textContent = t;
@@ -2456,12 +2456,12 @@ let badgeKey = '';
 function trkBadge() {
   const F = FUS, tp = BOARDS.plate.ntags, tb = BOARDS.base.ntags, prov = F.cal && F.cal.provisional;
   switch (F.mode) {
-    case 'both':      return ['tracked', `🟢 Platte ${tp}/4 + Basis ${tb}/4 Tags${prov ? ' · vorläufig' : ''}`];
-    case 'baseOnly':  return ['tracked', `🟢 Basis ${tb}/4 Tags · Platte: Modell`];
-    case 'plateOnly': return ['', `🟠 Nur Platte ${tp}/4 · Basis kamerafest`];
-    case 'baseUncal': return ['', '🟠 Basis erkannt – Platten-Marker zum Einmessen zeigen'];
-    case 'hold':      return ['', '🟡 Marker verdeckt – halte Pose'];
-    default:          return ['camera-on', '🟡 Suche Marker...'];
+    case 'both':      return ['tracked', `🟢 Tracking: both markers (${tp}/4 + ${tb}/4)${prov ? ' · provisional' : ''}`];
+    case 'baseOnly':  return ['tracked', `🟢 Tracking: base ${tb}/4 · plate from model`];
+    case 'plateOnly': return ['', `🟠 Plate only ${tp}/4 – base locked to camera`];
+    case 'baseUncal': return ['', '🟠 Base detected – show plate marker to calibrate'];
+    case 'hold':      return ['', '🟡 Marker hidden – holding pose'];
+    default:          return ['camera-on', '🟡 Searching for marker…'];
   }
 }
 function trkApply() {
@@ -2610,23 +2610,23 @@ btnStartAR.addEventListener('click', async () => {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     const isLocal = window.location.protocol === 'file:';
     showMessage(
-      "🔒 Kamera nicht verfügbar",
+      "🔒 Camera unavailable",
       isLocal
-        ? `<p>Du hast die Datei als <b>lokale Datei oder im Datei-Viewer</b> geöffnet.</p>
-           <p>Apple Safari und Android Chrome verlangen aus Sicherheitsgründen eine <b>verschlüsselte HTTPS-Adresse</b> für den Kamerazugriff.</p>
+        ? `<p>You opened this page as a <b>local file or in a file viewer</b>.</p>
+           <p>For security reasons, Apple Safari and Android Chrome require an <b>encrypted HTTPS address</b> for camera access.</p>
            <ul class="help-list">
-             <li><b>Dauerhafte Lösung:</b> Auf <b>GitHub Pages</b> hosten: <code>https://&lt;user&gt;.github.io/DT4TM/outputs/ar_twin.html</code></li>
-             <li><b>WLAN-Test:</b> Am PC <code>python serve_ar.py</code> starten und QR-Code scannen.</li>
-             <li><b>Hinweis:</b> Im 3D-Vorschaumodus kannst du die gesamte Simulation hier bereits interaktiv mit Touch bedienen!</li>
+             <li><b>Permanent solution:</b> host it on <b>GitHub Pages</b>: <code>https://&lt;user&gt;.github.io/DT4TM/outputs/ar_twin_en.html</code></li>
+             <li><b>Wi-Fi test:</b> run <code>python serve_ar.py</code> on the PC and scan the QR code.</li>
+             <li><b>Note:</b> In 3D preview mode you can already use the whole simulation here by touch!</li>
            </ul>`
-        : `<p>Dieser Browser unterstützt keinen Kamerazugriff oder die Berechtigung wurde blockiert.</p>
-           <p>Bitte überprüfe in den Browser-Einstellungen, ob der Kamerazugriff erlaubt ist.</p>`
+        : `<p>This browser does not support camera access, or the permission was blocked.</p>
+           <p>Please check in the browser settings that camera access is allowed.</p>`
     );
     return;
   }
 
   btnStartAR.disabled = true;
-  btnStartAR.textContent = "⌛ Kamera wird gestartet...";
+  btnStartAR.textContent = "⌛ Starting camera...";
 
   try {
     // Request environment camera with ideal 1280x720 resolution
@@ -2650,7 +2650,7 @@ btnStartAR.addEventListener('click', async () => {
     startTrackingLoop();
     startBanner.style.display = 'none';
     targetGuide.style.display = 'block';
-    trackingBadge.textContent = "🟡 Suche Marker...";
+    trackingBadge.textContent = "🟡 Searching for marker…";
     trackingBadge.className = "camera-on";
 
     // Set camera projection for AR
@@ -2665,15 +2665,15 @@ btnStartAR.addEventListener('click', async () => {
   } catch (err) {
     console.error("Camera error:", err);
     btnStartAR.disabled = false;
-    btnStartAR.textContent = "📷 Kamera starten";
+    btnStartAR.textContent = "📷 Start camera";
     showMessage(
-      "⚠️ Kamera-Zugriff fehlgeschlagen",
-      `<p>Fehlermeldung: <b>${err.message || err.name}</b></p>
-       <p>Mögliche Ursachen:</p>
+      "⚠️ Camera access failed",
+      `<p>Error message: <b>${err.message || err.name}</b></p>
+       <p>Possible causes:</p>
        <ul class="help-list">
-         <li>Kamera-Berechtigung im Browser abgelehnt (in den Website-Einstellungen auf "Erlauben" setzen).</li>
-         <li>Die Kamera wird bereits von einer anderen App blockiert.</li>
-         <li>Keine sichere HTTPS-Verbindung (z. B. <code>http://</code> statt <code>https://</code>).</li>
+         <li>Camera permission was denied in the browser (set it to "Allow" in the site settings).</li>
+         <li>The camera is already in use by another app.</li>
+         <li>No secure HTTPS connection (e.g. <code>http://</code> instead of <code>https://</code>).</li>
        </ul>`
     );
   }
@@ -2770,7 +2770,7 @@ if (btnTogglePlate) {
   btnTogglePlate.addEventListener('click', () => {
     plateGroup.visible = !plateGroup.visible;
     btnTogglePlate.classList.toggle('active', plateGroup.visible);
-    btnTogglePlate.textContent = plateGroup.visible ? 'Sichtbar' : 'Aus';
+    btnTogglePlate.textContent = plateGroup.visible ? 'Visible' : 'Off';
   });
 }
 
@@ -2779,7 +2779,7 @@ if (btnToggleHousing && housingM) {
   btnToggleHousing.addEventListener('click', () => {
     housingM.mesh.visible = !housingM.mesh.visible;
     btnToggleHousing.classList.toggle('active', housingM.mesh.visible);
-    btnToggleHousing.textContent = housingM.mesh.visible ? 'Sichtbar' : 'Aus';
+    btnToggleHousing.textContent = housingM.mesh.visible ? 'Visible' : 'Off';
   });
 }
 
@@ -2821,9 +2821,9 @@ if (btnAutoAlign) {
     manualYawDeg = Math.round(delta * 10) / 10;
     updateModelTransform();
 
-    btnAutoAlign.textContent = `✅ Eingerastet (${manualYawDeg > 0 ? '+' : ''}${manualYawDeg.toFixed(1)}°)`;
+    btnAutoAlign.textContent = `✅ Snapped (${manualYawDeg > 0 ? '+' : ''}${manualYawDeg.toFixed(1)}°)`;
     setTimeout(() => {
-      btnAutoAlign.textContent = "📐 Kante zu mir einrasten";
+      btnAutoAlign.textContent = "📐 Snap edge toward me";
     }, 2200);
   });
 }
@@ -2924,7 +2924,7 @@ if (btnYInc) {
 
 // Unterbau einmessen: plate resting on the coils -> rig frame = plate-board frame; stores base-board -> rig.
 document.getElementById('btnCalBase').addEventListener('click', () => {
-  if (!isArActive) { showMessage('📏 Unterbau einmessen', '<p>Kamera starten, <b>beide Marker</b> (Platte + Basis) ins Bild nehmen, Platte liegt auf den Spulen (kein Strom), dann erneut tippen.</p>'); return; }
+  if (!isArActive) { showMessage('📏 Calibrate base', '<p>Start the camera, get <b>both markers</b> (plate + base) in view with the plate resting on the coils (no current), then tap again.</p>'); return; }
   calStart();
 });
 document.getElementById('btnCalReset').addEventListener('click', () => calClear());
@@ -2953,7 +2953,7 @@ const btnToggleLev = document.getElementById('btnToggleLev');
 btnToggleLev.addEventListener('click', () => {
   enableLevitation = !enableLevitation;
   btnToggleLev.classList.toggle('active', enableLevitation);
-  btnToggleLev.textContent = enableLevitation ? 'Ein (Sim-Gap)' : 'Aus (0mm)';
+  btnToggleLev.textContent = enableLevitation ? 'On (sim gap)' : 'Off (0mm)';
 });
 
 window.addEventListener('resize', () => {
