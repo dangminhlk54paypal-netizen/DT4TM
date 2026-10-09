@@ -1395,7 +1395,6 @@ to the pre-move baseline), `--screenshot outputs/twin_pv.png --no-show` renders
 the device correctly from the new location, `python twin_core.py` 6/6 PASS,
 `python xval_twin.py` PASS, 192 doc/extension path references all resolve,
 `compileall` clean.
-
 ---
 
 ## WP-ACS (2026-08-31) — ACS712-only firmware path + two real bugs found in the current-sensing chain
@@ -1788,3 +1787,288 @@ No physics change; `xval_twin.py` A+B PASS after every re-bake, AR rebuilt.
 - Light theme: grey text → cool navy/steel (`--muted #24406e`, `--faint #43608f`); field
   lines use a blue → navy ramp; callouts, force tags/arrows and the (i) strip get light
   cards with dark cool text (F_mag dark blue, m·g indigo). Dark theme unchanged.
+---
+## WP-AR-SSOT (2026-09-28) — the AR twin now runs the FEM page's engine, not its own
+
+Divergence found: `build_ar_twin.py` copied PARAMS out of `outputs/digital_twin_fem.html`
+(so the coefficients matched) but drove them with a private ~60-line display model,
+`stepPhysics()`: `T_AMB_DISP=29`, a 2.5 s first-order lag to `T_amb + dT_cal·(I/5)²` per
+node, no deep winding nodes / air node / iron conduction / nonlinear `hAEff` / σ(T) /
+f_eddy-f_air gating, a heuristic plate field `0.35·dT_mean + 0.65·dT_max·Je^1.25`, and
+levitation `z = z5A·sqrt(I/5)` with no lift-off. Net effect: AR heated/cooled in ~10 s
+instead of minutes, plate ~+25 % too hot at 7.8 A, wrong gap at every current but 5 A. It
+was also outside `xval_twin.py`, so nothing could catch it.
+
+Fix (single source of truth, no third copy of the physics):
+- `build_twin_html_fem.py` JS template: the pure engine (sim state, AIR consts,
+  `coilAirDrive`, `hAEff`, `romStep`, `resetSim`, lev constants + `levGapEqMm/levZeta/
+  levStep`, plus new pure helpers `discVtxT`, `discTempRange`, `discMeanT`, `resetLev`,
+  `engineTrace`) now sits between `// ==== TWIN_ENGINE_BEGIN ====` / `_END ====` markers.
+  Its only external names are `PARAMS`, `ROM`, `LUMPED`, `T_AMB_JS` (stated in the block
+  header). SCENARIOS/getI and the colour-ramp block moved outside (below) the markers; no
+  behaviour change (xval A/B PASS unchanged). `traceRom` now delegates to `engineTrace`.
+- `build_ar_twin.py` extracts that block VERBATIM (raises if markers are missing) plus
+  `T_AMB_FALLBACK_C`, and injects it in a first `<script>` that runs before Three.js, so
+  `window.twinDebug` exists at load without camera/CDN. `stepPhysics` now only substeps
+  `romStep`/`levStep` exactly like the FEM `loop()` (`nSub=ceil(dt_sim/(tau*0.05))`,
+  I clamp 20 A for romStep) and paints engine state. Plate vertex T = `discVtxT`.
+  Levitation renders `lev.z + lev.jit` in true mm (no `Z_GAP_EXAG`: overlay on a real
+  mockup); `enableLevitation` stays a render-only toggle (default off), engine always runs.
+  New UI: sim-speed slider (same log range/default 1× as the FEM page — real τ is minutes,
+  so heating is only visible with the multiplier) and a Reset pill. Iron meshes now glow
+  from `sim.T.iron`. No API key/live weather in AR (ambient = the FEM fallback constant).
+- `build_ar_twin.py` also gains `--stl-dir` / `$AR_STL_DIR` and a
+  `maria-dt4tm-stl_export_separate_files` sibling candidate. `build_twin_html_fem.py`: fixed
+  an argparse `100%` help string that crashes on Python 3.14 (`100%%`).
+- `xval_twin.py` now opens BOTH pages: assertion A (abs 1e-9, 7 schedules) on each, plus
+  AR-1 (AR PARAMS/T_AMB_JS == FEM's) and AR-2 (engine block text identical). jsdelivr
+  added to the local CDN cache; CDN/camera load errors tolerated on the AR page only.
+
+Verified: `python twin_core.py` 6/6, `python xval_twin.py` PASS (FEM + AR, all diffs ≤1.3e-15).
+AR @7.8 A, T_amb 29: inner coil 50.26 °C at t=450 s, 79.000 / 74.000 °C steady;
+gap 0 mm @3 A, 11.94 mm @5 A, 22.43 mm @7.8 A.
+
+## WP-AR-TRACK (2026-09-28) — AR tracking smoothing + performance pass (`build_ar_twin.py`)
+
+User complaint: slight hops in the AR overlay. Audit: hand-rolled jsQR tracker on the main
+thread every rAF (60 Hz on a 30 fps stream), 4-corner homography where jsQR's bottom-right
+corner is an extrapolation, corner EMA + pose lerp/slerp with STEPPED alphas (the 0.40 step
+on >25 mm jumps made the overlay chase outliers), canvas sized to the cover-scaled video
+(5.7 MP), 385 draw calls, blur backdrops. Engine block / `build_twin_html_fem.py` untouched
+(`xval_twin.py` PASS, `twin_core.py` 6/6).
+
+- **Scan**: only NEW video frames (`requestVideoFrameCallback`; fallback = frame counter
+  poll). Search scan long side 640 px, canvas dims set only on change; every 2nd failed search
+  frame also a 1024 px scan (measured: at 640 px a 60 mm marker is lost beyond ~30 cm, 768 →
+  ~40, 1024 → ~45 cm). While tracked: native-res ROI crop around the last quad, downscaled to
+  ~4.5 px/module (jsQR cost ~ area), margin 0.4 + 2.5x last frame shift; a failed ROI decode is
+  retried on the next frames (no second full-frame pass until 3 misses in a row).
+- **Canvas = viewport** (pixelRatio ≤ 2) + `camera.setViewOffset()` reproduces the cover crop:
+  backbuffer 5.71 → 1.48 MP on 414x896 @2x. Projected overlay coords equal the analytic
+  pinhole+cover mapping to 0.000 px; the OLD code was up to 0.87 px off it (integer rounding of
+  canvas size/offset), so old-vs-new differs by ≤0.87 px, never the other way round.
+- **Field lines**: 432 `THREE.Line` → ONE `LineSegments` (37 104 segments), per-line amplitude
+  factor baked into vertex ALPHA (rgb * material.opacity * vertexAlpha == old per-line opacity),
+  `lineDistance` written per polyline as before. Draw calls 385 → 14 (whole scene).
+- **Renderer**: `preserveDrawingBuffer:false`, `powerPreference:'high-performance'`;
+  `backdrop-filter` removed (panel alpha 0.88 → 0.93).
+- **Pose**: jsQR finder-pattern edges are re-fitted to sub-pixel lines in the scan luminance
+  (12 outer-corner correspondences + 3 finder centres + jsQR's alignment centre only when it
+  agrees with the finder-only fit, i.e. is not jsQR's parallelogram guess) → normalised-DLT
+  homography → reprojection RMS (video px) = confidence. NOTE jsQR's 4 corners are *derived*
+  from 4 measured points (3 finder centres + alignment), so adding them to a DLT adds nothing
+  (residual 0); the edge fit is what actually adds information. Pixel-centre convention: jsQR
+  coordinates are top-left based; sampling uses `p - 0.5` (mixing the two cost ~1° of bias).
+- **Gates**: residual > `MAX_RESIDUAL_PX`, non-convex / tiny quad, payload ≠ payload locked on
+  the first good detection, 4-corner-only fit while a refined one is < 400 ms old.
+- **Filter**: time-based One Euro (dt from timestamps) replaces both EMA layers: lateral (x,y),
+  depth (z, own cutoffs: 3–5x noisier) and quaternion (geodesic, sign-continuous); `minCutoff`
+  scaled 0.5..1 by confidence. Jump hysteresis: > `JUMP_MM`/`JUMP_DEG` from the filtered pose
+  held back until `ACCEPT_N`=3 consecutive mutually-consistent measurements, then re-init.
+  0.8 s brief-occlusion hold and initial snap kept (time based now).
+- **Marker size**: `gen_ar_marker.py` saved the PNG at a FIXED 300 dpi, so the printed QR
+  symbol was ~29.5 mm (whole image 51 mm) for the default URL while the annotation and
+  docs/WEBAR_GUIDE.md claimed 60 mm and the AR default was 45 mm — three different numbers.
+  Now `--size` / `MARKER_SYMBOL_MM = 60.0` is the SYMBOL width (modules only, no quiet zone;
+  what jsQR's corners bound), DPI metadata is derived from it (any QR version prints exactly
+  that size at 100 %), and `build_ar_twin.py` imports the same constant as the AR default.
+  ⚠️ An already printed old marker is NOT 60 mm: measure its black module area with a ruler
+  and set that value with the −/+ buttons (Anpassen → QR-Code Größe).
+  **Follow-up same day:** `MARKER_SYMBOL_MM` 60.0 → **45.0** (user request). The 60 mm default
+  made the rendered model 25 % smaller on screen than before (pose depth ∝ assumed marker
+  size); 45 mm restores the historic AR default, and new prints now come out at 45 mm so
+  print and AR still agree. Tracking logic unchanged.
+- **Test hooks**: `window.twinDebug.tracking = {processDetection(location,payload,tMs,vw,vh[,scanImg]),
+  processFrame(src,tMs,vw,vh), onMiss, reset, config (= TRK, all tuning constants), stats}`.
+- **Not done**: planar-pose ambiguity (IPPE second solution) — pose still comes from the
+  symmetric-Gram-Schmidt homography decomposition; flips are only caught by the jump gate.
+  Focal guess `f = 1.05*videoHeight` (portrait streams: long side) unchanged — overlay and pose
+  use the same f, so it only biases depth/tilt.
+
+Evidence (synthetic 30 fps 1280x720 sequences, real printed marker rendered with OpenCV +
+blur + noise + JPEG + ~7 % corrupted frames; known pose; OLD = e47ec9a logic run at 60 Hz
+(as shipped) / 30 Hz): at 300 mm static err vs truth 0.99 mm/0.49° (old 6.2 mm/2.8°), handheld
+err 2.0 mm/0.9° (5.1/1.8), fast-move settle ≈1 frame = 33 ms (old 300–530 ms), scan+track 10.6 ms per
+video frame (old 42 @60 Hz / 23 @30 Hz), worst frame 91 ms (old 280). At 400 mm old is smoother
+when still (0.10 vs 0.33 mm) but 13 mm/6.8° biased and 1.5 s laggy. 10 % injected corner
+outliers: new jitter 0.19 mm (old 0.72). 450 mm: old/640px-only never acquire, new tracks.
+
+## WP-AR-APRILTAG (2026-09-28) — QR tracker replaced by an AprilTag 36h11 board (official C library as WASM)
+
+Why: a 45 mm QR symbol was only acquired up to ~30 cm (60 mm: ~45 cm), pose noise was dominated by
+jsQR's derived corners (static 0.17 mm / 0.15 deg @300 mm), and the QR payload lock / finder refit
+were QR-specific. Engine block / `build_twin_html_fem.py` untouched (`xval_twin.py` PASS, `twin_core.py` 6/6).
+
+- **Marker**: 2x2 board, tag36h11 IDs 0 1 / 2 3, tag black-square edge 48 mm (module 6 mm), gap 12 mm
+  (2 modules), white margin 6 mm (1 module) => board exactly 120.0 mm; >= 1 module white round every tag.
+  Origin = board centre, x right / y up, "top" = tags 0+1 (same convention as the QR symbol, so the placement
+  calibration keeps its meaning). All geometry lives in ONE constant block in `gen_ar_marker.py`
+  (`TAG_EDGE_MM`, `GAP_RATIO`, `MARGIN_RATIO`, `TAG_CENTERS_UNIT`, `CORNER_UNIT`, `MARKER_JS_CONFIG`) and is
+  baked into the page; the UI "Marker-Größe" = tag edge in mm (board scales with it), default 48.
+- **Print**: `gen_ar_marker.py` (no args, URL arg ignored with a notice) -> `outputs/ar_marker.pdf`, A4, VECTOR
+  (tags = filled squares from `tag36h11_codes.json`, which `build_apriltag_wasm.py` extracts from the pinned
+  tag36h11.c -- nothing hand-typed), 100 mm scale bar with ticks, DE+EN "print at 100 %" text, ID labels and a
+  TOP arrow outside the board, cut marks at the 120 mm outline; PNG preview at 150 dpi.
+  `.gitignore` now re-includes `outputs/ar_marker.pdf`.
+- **Detector**: AprilRobotics/apriltag v3.4.5 (94be783), emsdk 4.0.10 in a `docker run --rm` container
+  (`build_apriltag_wasm.py`, glue `apriltag_glue.c`; pose module not linked), `-O3 -flto --closure`,
+  single-file output `apriltag_wasm.js` = 158 KB (wasm inlined as base64), rebuild verified bit-identical.
+  Inlined in `ar_twin.html` as `<script type="text/plain" id="apriltag-src">` (page is offline-capable except
+  Three.js; HTML 1.20 -> 1.37 MB, jsQR CDN script removed). Corner convention verified against the PDF's exact
+  vector geometry: reported corners are corner-origin (pixel i covers [i,i+1)); wasm-vs-truth RMS 0.02-0.05 px,
+  wasm-vs-pupil-apriltags 0.21 px max (pupil's older bundled apriltag is the less exact one, 0.17 px RMS).
+- **Pose**: hamming <= 1 (36h11 min distance 11), decision margin >= 20, on-board IDs, area, convexity ->
+  ONE normalised DLT over all corners of all visible tags in board mm (reprojection RMS = confidence; >= 3 tags
+  with a poor fit: leave-one-tag-out outlier search; 2 inconsistent tags: retry each alone against the filter) ->
+  IPPE two-solution plane pose (y-flip handled; verified exact to 1e-14 on 400 random poses) + 3 Gauss-Newton
+  iterations -> choose by reprojection error, or by closeness to the filtered pose when the two errors are
+  within 1.6x+0.25 px (planar ambiguity). Unit test: single tag @1000 mm flips 18-25 % of the time without a
+  prior, 0 % with it; 4 tags 0 %; therefore tracking never STARTS on 1 tag (`MIN_TAGS_ACQUIRE=2`) and 1-tag
+  frames are ignored for 400 ms after a multi-tag one. One Euro filter / jump hysteresis / 0.8 s hold kept; the
+  cutoffs were RETUNED for the much cleaner measurement (0.5/0.4/0.4 Hz -> 2.0/1.5/1.5, betas 0.15/0.02/3.0):
+  raw jitter is 0.03 mm / 0.01 deg @450 mm, the old cutoffs only added lag (handheld err 2.1 -> 0.83 mm).
+- **Performance**: gray = green channel into the wasm heap (no per-frame Uint8Array; `getImageData` still
+  allocates one ImageData per scan -- 2D-canvas API limit). Search passes cycle 960 px/decimate 2 and 1280 px/
+  decimate 1.5; while tracked a ROI crop (tag ~64 px, decimate 1.5; decimate 1.0 cost 2.5x with no accuracy gain).
+  Detection runs in a Web Worker (inline Blob, wasm instance inside; fallback = main thread); the worker path
+  drops frames while busy, the main thread only does scan + pose (~0.5 + 0.4 ms at 1x). Measured (headless
+  Chromium): tracked frame scan+detect+track 5.1 ms @450 mm / 1.9 ms @1000 mm (1x), 12.2 / 5.0 ms at 4x CPU
+  throttle -> > 8 ms, hence the worker; search passes 8 ms (960/2) and 20 ms (1280/1.5) at 1x, 38 / 100 ms at 4x.
+- **Hooks**: `twinDebug.tracking = {processDetection(dets,tMs,vw,vh), processFrame (SYNC main-thread
+  detector; `await initMainDetector()` first), config (= TRK), stats, worker, detect, ippe, board, ...}`.
+
+Evidence (synthetic 30 fps 1280x720, real board geometry rendered 2x-supersampled + blur + noise + JPEG +
+~7 % corrupted frames + one/two/three tags covered; QR = committed tracker 0d0fa49):
+static jitter / err vs truth / max hop (static+pan) / handheld err / peak err in fast move --
+QR45 @300 mm 0.17 mm 0.16 deg / 0.71 mm 1.56 deg / 1.1 mm 1.2 deg / 1.95 mm 0.90 deg / 6.5 mm, acquires ONLY
+at 300 mm (QR60: 450 mm ok, 700+ never); AprilTag @300/450/700/1000 mm: 0.008/0.008/0.028/0.085 mm
+(0.004-0.015 deg), 0.13/0.20/0.35/0.48 mm (0.03 deg), 0.30/0.30/1.25/0.94 mm (0.07-0.44 deg),
+0.83-0.94 mm (0.40 deg), 3.1-3.3 mm. Acquisition (each frame forced through a search pass) 99.8/99.8/98.6/98.2 %;
+0 frames with rot err > 15 deg or pos err > 30 mm at every distance and at 3x noise; fast-move settle 1 frame
+(33 ms); tag cover: 1 tag off 0.6-0.9 mm, 2 off 0.4-1.5 mm, 3 off (1 tag left) 1-6 mm.
+PDF round trip: `ar_marker.pdf` rasterised at 300 dpi -> pupil-apriltags finds IDs 0-3 (hamming 0, margin 216-239),
+tag edge 48.02 +- 0.03 mm, PDF vector squares exactly 48.000 mm, cut marks 120.000 mm apart, scale bar 100.000 mm.
+- **Needs on-device testing**: real camera noise/rolling shutter (filter cutoffs), focal guess (f = 1.05*vh
+  unchanged), Web Worker + Blob under iOS Safari, print scale, glare on the printed board.
+
+## WP-AR-SPIN (2026-10-06) — marker spin is followed instantly (`build_ar_twin.py`)
+User report: a fast-turning marker was not followed directly. Cause: the One Euro rotation filter
+lagged ~3° at 300°/s and, worse, lag + per-frame step exceeded `JUMP_DEG=12°`, so frames were HELD
+as "jumps" (2 held, 3rd re-snaps → stutter). Fix: new `TRK.ROT_SMOOTHING` (`'tilt'` default / `'all'`
+= old / `'none'`). In `'tilt'` mode the rotation step is split swing-twist about the board normal
+(`quatSwingTwistZ`): the spin (twist) passes through RAW and is ignored by the jump gate; only the
+tilt (direction of the board normal — the noisy, flip-prone part of a planar pose) is still smoothed
+and gated. Position smoothing unchanged. Unit check (headless): 300°/s spin lag 3.2° → 0.0°, 60°/s
+tilt lag unchanged 1.5°; a 40° spin step counts 0° for the gate, a 20° tilt step still 20°.
+`xval_twin.py` PASS. Not tested on a device (motion blur limits how fast a tag can still be decoded).
+
+## WP-AR-DUAL (2026-10-06) — two markers: fixed BASE stays put, PLATE follows the real plate (`build_ar_twin.py`, `gen_ar_marker.py`)
+Why: the real plate on top spins / levitates / wobbles, the substructure does not. A tag stuck on the plate cannot
+tell "plate spins" from "camera orbits", so with ONE board the whole model (base too) spun with the tag. Engine
+block / `build_twin_html_fem.py` untouched (`xval_twin.py` PASS both pages, `twin_core.py` 6/6).
+
+- **Markers** (`gen_ar_marker.py`, one constant block `BOARD_IDS`): PLATE board IDs 0-3 (the already printed one,
+  page 1 byte-compatible: all non-text drawing ops identical to HEAD, tag edge 48.00 mm) + BASE board IDs 4-7 (same
+  family/layout/size, page 2). `outputs/ar_marker.pdf` is now 2 pages, each titled DE+EN ("Platten-Marker (dreht mit)"
+  / "Basis-Marker (fest)"); previews `ar_marker.png` + `ar_marker_base.png`. Page 2 verified with pupil-apriltags on a
+  600 dpi rasterised page: IDs 4-7, tag edge 48.006 mm (47.994..48.018), centres +-30.0 mm. One marker-size setting applies to both.
+- **Trackers**: one instance per board (`BOARDS.plate/base`: filter, jump hysteresis, IPPE prior, ROI outline, `raw` =
+  unfiltered pose of the last frame). One detector call returns all tags, partitioned by ID. Plate board
+  `ROT_SMOOTHING='tilt'` (spin raw); base board `'all'` with `BASE_ROT_MIN_CUTOFF_HZ=4.0` (the base sits ~200 mm off the axis:
+  rotation lag/noise is multiplied by the lever arm; swept 1.5/4/8 Hz: base position error 0.75 / 0.49 / 0.45 mm, yaw
+  0.22 / 0.11 / 0.07 deg under hand tremor + orbit; synthetic noise is low, so 4 Hz is a compromise to retune on a device).
+- **ROI/scan** (`trkPlan`, chosen by measurement, 1280x720, worker detect ms/frame at 1x / 4x CPU throttle): union crop of
+  both boards 6.2 / 30.0 (used while a tag stays >= `UNION_MIN_TAG_PX`=40 px); alternating single-board crops 2.7 / 13.5
+  (but only one board per frame: gap error 0.32 mm vs 0.04, plate rot 1.7 vs 0.55 deg) = fallback when the union is too big
+  (rhythm `RR_SEQ` plate/plate/base/**joint**, the joint step = a union crop anyway, see review fixes);
+  full-frame every frame 16 / 81. One board tracked: its ROI + a full-frame pass every 4th frame (`SEARCH_EVERY`)
+  re-acquires the other board (measured: back within 1 frame after a 3 s occlusion). Calibration capture forces
+  native full-frame passes (both boards in one detection).
+- **Scene graph**: `twinRoot` = rig frame (base bodies + field lines in `twinModel`, manual X/Y/Z/pitch/yaw/scale on top);
+  `plateRoot` (new, scene-level) = plate-tag frame, follows the plate board; scale only. The manual alignment now moves the
+  BASE against the plate (documented change). The old "Marker auf der Scheibe/auf dem Tisch" option no longer exists in the page
+  (removed earlier); the guide text was stale and is rewritten: plate marker always on the plate, base marker always fixed.
+- **Calibration** (rig frame = plate-board frame while the plate RESTS; C = pose of the rig in the base-board frame):
+  button "Unterbau einmessen (Platte liegt auf)" = sliding 0.5 s window of RAW simultaneous poses (both boards >= 2 tags,
+  conf >= 0.4), accepted when scatter <= 1.0 mm / 0.8 deg, 4 s timeout; auto PROVISIONAL calibration (mean of the first 8
+  CONSECUTIVE agreeing frames with both boards, badge "vorläufig") the first time both are seen; persisted in localStorage (key
+  `dt4tm.dualcal.v1`, per marker size, try/catch), "zurücksetzen" clears it. Repeatability on a resting clip (9 captures at
+  different start frames): std 0.024 mm / 0.010 deg, error vs truth 0.156 mm / 0.015 deg, capture takes 13 frames (0.43 s).
+- **Fusion** (`trkFuse`, `FUS`; board "live" = fresh measurement <= `LIVE_MS`=150 ms): `both` base = B*C, plate = P (measured);
+  `baseOnly` base exact, plate at its last rig-relative pose 1.5 s then model state (resting / model lev.z), spin frozen;
+  `plateOnly` (camera-locked fallback) base position + normal from the plate plane, lowered by the last measured gap (kept until a new one
+  arrives or the plate tracker resets, else model lev.z if levitation display is on, else 0), yaw = camera-right vector projected into the plate plane turned by a CONSTANT
+  psi0 chosen at mode entry so the yaw is continuous (from a displayed rig: keep it; no history: tag yaw); `hold`/`none` as before
+  (hold 0.8 s, then hide); B only without any calibration: hidden + hint. One marker alone = `plateOnly` (documented change: the
+  base no longer spins with the tag).
+- **No visible hops** (`trkDisplay`, per render frame): every pose has a source key (calibrated-base / camera-locked /
+  measured / hold / model + tracker epoch); at a source switch the difference is stored as an offset in the camera frame and decays
+  with `BLEND_TAU_MS`=250 ms. Measured target jumps at switches: both->plateOnly 2.3 mm / 0.2 deg (static camera), plateOnly->both
+  after a 30 deg orbit 29.5 deg (the camera-locked yaw drift, glides in at <= 3.7 deg/frame), plate hold->model 8 mm.
+- **Measured plate state** (mode `both`, from the SAME frame's raw poses so filter lag cannot leak in): gap along the rig axis, tilt, spin
+  rate (low-passed, unwrapped), lateral offset; telemetry row "Spalt gemessen ≈ … (Modell …) · Kipp ≈ … · Dreh ≈ …", `twinDebug.tracking.fusion.meas`.
+  Display only. Telemetry label "Schwebe z" -> "Spalt Modell".
+- **Verification** (synthetic 1280x720/30 fps clips, `gen_frames_dual.py`: static base board on the table 205 mm beside the rig, plate board
+  spinning, lifting 0->8 mm over 2.5 s, +-1 deg wobble, plate motion blur 1/60 s, noise, JPEG, hand tremor + 30 deg orbit): mode `both`, base yaw
+  error mean/max 0.11/0.28 deg (does NOT follow the spin at 30/120/300 deg/s), base position 0.49/0.88 mm, spin tracking error <= 0.03 deg mean
+  (0.23 max at 300 deg/s), measured gap error 0.02-0.09 mm mean (0.3 max), spin-rate error <= 0.03 rpm of 5/20/50. Fallback (B hidden 3 s, plate spinning
+  120 deg/s): static camera yaw drift 0.0 deg (+-0.2, max 1.5 from plate wobble), orbit 30 deg during the hide -> base yaw error 29.5 deg (= orbit, as designed).
+  Focal-length guess (page assumes f = 1.05*vh): true f 15 % too long, SAME viewpoint as the calibration: gap error 0.33 mm; after a 30 deg orbit:
+  +2.2 mm (5 %), 6.2 mm (15 %), -4.8 mm (-10 %). Unit checks (`twinDebug`): provisional/manual calibration, mode state machine incl. hold/none, continuity, plate-only yaw.
+- Cost (worker detect / main-thread scan+track per frame; 1x | 4x throttle): single-board HEAD 4.2 / 1.1 ms | 22.7 / 6.7 ms; dual `both` (union crop) 6.9 / 1.2 ms | 33.9 / 5.7 ms;
+  dual with only the plate marker (ROI + 1/4 full passes) 6.5 / 1.0 ms | 30.1 / 4.4 ms.
+- Not tested on a device: real focal length / lens distortion (guess effect above), real motion blur, hand-held noise level (retune `BASE_*`/`POS_*` cutoffs), iPhone 11 timing.
+- **Review fixes (same day; repros = reviewer scripts rev1-4, numbers before -> after, synthetic detections unless noted)**:
+  1. Fallback base hopped by the full gap 10 s after the base board vanished (`GAP_RECENT_MS` expiry): 8.28 mm -> 0.10 mm (noise). The last measured gap is now kept
+     until a new measurement or a plate-tracker reset (`!P.filt` clears `meas.t`); the lift source (`:m`/`:g`) is part of `rigSrc`, so any remaining change is blended.
+  2. Measured gap/tilt/spin only from SAME-DETECTION plate+base pairs (`joint` in `trkFuse`; `MEAS_SYNC_MS` removed). Camera moving up/down at 30 / 80 mm/s (single-board crops): gap
+     4.5-4.8 / 2.1-2.8 mm instead of 6.0 -> 6.00 / 6.00. Round-robin gets a union-crop `'joint'` step every 4th detection (union crop capped at `ROI_MAX_PX`: 6.7 ms vs 12.7 ms full-frame 960 /
+     32 ms full-frame 1280, measured, so the crop is the cheaper joint pass). `MEAS_VALID_MS` stays (reachable: joint passes are sparse in round-robin).
+  3. No (or only provisional) calibration + both boards tracked => `trkPlan` always plans the union crop, so calibration gets pairs: stuck `plateOnly` forever -> `both` after 8 frames.
+  4. Liveness window `max(LIVE_MS, LIVE_FRAMES * measured detection period)`: mode flapping at 10/12 fps round-robin 58 switches/90 frames -> 0.
+  5. `calRev` (calibration revision) in `rigSrc`: re-calibration hop 35.7 mm in one frame -> blended (4.5 mm/frame glide at tau 250 ms).
+  6. Provisional calibration = 8 CONSECUTIVE frames (gap > `CAL_GAP_MS` drops them) whose scatter is <= the manual limits: a spinning plate no longer yields one (14 deg yaw error ->
+     none until the plate rests); at rest identical numbers. Cost: the very first sighting needs 8 frames (0.27 s) before `both`.
+  7. Idle search back-off removed (`SEARCH_EVERY_IDLE`, `SEARCH_IDLE_AFTER_MS`, `trkPlan` `tMs`): one cadence (every 4th frame) instead of every 8th in production.
+  8. Manual capture: `CAL_MIN_SAMPLES` 6 -> 4 with the existing span >= 0.8 x window test: now succeeds down to 6 fps (failed below 9); new status `sparse` ("zu wenige Bilder")
+     vs `fail` ("zu unruhig").
+  9. Stored calibration validated on load (3 + 4 finite numbers, |q| = 1, finite jitter) else the entry is deleted: bad storage no longer gives NaN poses / a throwing `calUi()`.
+  10. The manual alignment trims (X/Y/Z/yaw/pitch/scale) are stored in the calibration record and restored on load (also updated whenever a trim changes while a calibration is stored): the
+      stored C contains the plate board's arbitrary rest yaw, so it is meaningless without them.
+  Over-engineering pass 2: `DISP.switches` log, dead `trkResult` fields (`role/fresh/tracked/lost`) + the `lost` plumbing, the redundant ID gate in `trkGateDetections`, `MARKER_FAMILY` and
+  the `family`/`edgeMm` keys of `MARKER_JS_CONFIG`, `meas.spinDps`, duplicate initialisers (`trkNewBoard`/`trkResetBoard`, `FUS`/`fusReset`, `DISP`/`dispReset`), always-true conditions
+  (levitation-flag re-check, `liveB && B.raw`, `&& F.plateRel`, `calUi` null guard + per-call `getElementById`, per-step `plateGroup.position.z`), `#topStack.meas` + wrapper div removed.
+  Unchanged: bench (`d_s30/120/300`, `d_fb_*`) base yaw 0.11 deg / pos 0.49 mm / gap 0.02-0.09 mm, fallback entry hop 0.57 mm / 0.18 deg; calibration repeatability identical.
+  Cost per tracked frame (bench, sync detector, ms): union `both` 7.8 (1x) / 40.5 (4x throttle); forced round-robin incl. joint step 5.2 / 25.5.
+- **Known limitations (not fixed)**: (a) the camera-locked yaw in `plateOnly` follows camera PAN/ROLL in place, not only orbit (10 deg pan -> 10 deg base yaw error, 10 deg roll -> 8 deg);
+  (b) a single-tag frame is ignored for `SINGLE_TAG_GRACE_MS` after a multi-tag one, so a board seen with one tag only is non-live (mode drops to the other board) for ~250 ms;
+  (c) the provisional calibration assumes the plate rests at first sight (a plate already levitating, steady, gives a provisional C that absorbs the gap until "Unterbau einmessen");
+  (d) in round-robin mode the spin measurement is sampled every 4th detection: unambiguous up to 180 deg per interval (~225 rpm at 30 fps, vs ~900 rpm with the union crop).
+- **Second correctness review (fresh reviewer): SHIP, no CRITICAL/MAJOR. Open MINOR follow-ups, not fixed:**
+  (1) with NO calibration and boards far apart (tags ~11 px in the forced union crop, e.g. 1.4 m apart at 1080p) the plate
+  can starve and no provisional calibration is reached — nominal layouts at 1280x720 are fine; (2) `baseUncal` hides the
+  overlay for a few frames while the plate is only in hold; (3) a gap measured before the base board was hidden stays as
+  the fallback lift if the plate lands meanwhile (not observable from one board), and survives a pause > `HOLD_MS`;
+  (4) manual capture needs a detection period <= ~167 ms ("zu wenige Bilder" on a very slow phone); (5) round-robin is
+  chosen at >= 0.9 m camera distance although the union crop would cost the same; (6)-(8) hardening of `calStore`
+  against foreign values, trim clamping, capture label wording.
+
+## WP-AR-EN (2026-10-08) — English UI build of the AR twin (`build_ar_twin.py --lang en`, `ar_i18n.py`)
+Request: an English-UI variant of the AR page. Mechanism (ONE template, no duplicated HTML/JS): `ar_i18n.UI_EN`
+(79 exact German -> English substring pairs, flat sibling module) is applied to the page TEMPLATE only, in a single
+regex pass (longest key first, output never re-translated) BEFORE the `__TWIN_ENGINE__` / `__PARAMS_JSON__` /
+base64 / `__APRILTAG_WASM_JS__` placeholders are expanded, so the engine block, PARAMS and WASM are untouched and
+`xval_twin.py` AR-1/AR-2 hold for the English page too. Every entry must match at least once, otherwise the build
+fails naming the stale entry (`StaleEntryError`); a leftover scan (`find_german_leftovers`: HTML text nodes,
+title/aria attributes, JS string literals with comments stripped, CSS `content:`; umlauts + a German word list)
+fails the build if German UI text survives. Keys carry context (`>Sichtbar</button>`, quotes) so identifiers, ids,
+CSS classes and code compared in JS are never hit; the one German status code, `'unruhig'` (capture status,
+compared in `calUi()`), is deliberately kept in both builds (`ar_i18n.CODE_STRINGS`, ignored by the scan).
+`python build_ar_twin.py` (German) is byte-identical to before (sha256 unchanged); `--lang en` -> `outputs/ar_twin_en.html`
+(`<html lang="en">`, title "TEAM 28 — WebAR Digital Twin"), `--lang all` builds both. `.gitignore`: added
+`!outputs/ar_twin_en.html` next to `ar_twin.html`. Verified: `xval_twin.py` PASS; the same checks (A integrator,
+AR-1 PARAMS, AR-2 engine text, B) PASS pointed at `ar_twin_en.html`; headless Chromium (414x896) loads the EN page
+with 0 console errors and 0 German remnants in the live DOM plus every dynamic state (tracking badge per fusion
+mode, calibration states, measured row, dialogs, toggles); no label clips. Known layout limit (pre-existing, same
+in German): the longest badge states wrap to two lines and squeeze the brand text in the top bar.
+

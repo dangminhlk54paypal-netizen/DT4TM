@@ -1,6 +1,12 @@
 """xval_twin.py — pins twin_core.py's ported integrators against the ACTUAL
-baked JS engine in outputs/digital_twin_fem.html, via Playwright and the
-window.twinDebug.traceRom() hook (build_twin_html_fem.py, WP-HOOK/WP-XVAL).
+baked JS engine in outputs/digital_twin_fem.html AND outputs/ar_twin.html, via
+Playwright and the window.twinDebug.traceRom() hook (build_twin_html_fem.py,
+WP-HOOK/WP-XVAL; the AR page gets the same hook from build_ar_twin.py, which
+injects the FEM page's TWIN_ENGINE block verbatim).
+
+Assertion A runs against EACH page; overall PASS needs both. Two extra AR-vs-FEM
+guards (AR-1 PARAMS identical, AR-2 engine block text identical) catch an AR page
+that was built from an older FEM html (rebuild order: fem html -> ar html).
 
 Two INDEPENDENT assertions, each with its own error message (they catch
 different failure modes and must never be conflated):
@@ -71,6 +77,7 @@ from twin_core import LevCoeffs, LumpedCoeffs, RomCoeffs, SCENARIOS, TwinState
 
 ROOT = Path(__file__).resolve().parent
 HTML_PATH = ROOT / "outputs" / "digital_twin_fem.html"
+AR_HTML_PATH = ROOT / "outputs" / "ar_twin.html"
 CACHE_DIR = ROOT / "outputs" / ".jscache"
 
 TOL_INTEGRATOR_ABS = 1e-9   # assertion A — see module docstring, do not raise casually
@@ -94,7 +101,7 @@ def _route(route) -> None:
     if url.startswith("file://"):
         route.continue_()
         return
-    if "unpkg.com" not in url:
+    if "unpkg.com" not in url and "cdn.jsdelivr.net" not in url:
         route.abort()   # MANDATORY network block: nothing else may reach the network
         return
     cpath = _cache_path_for(url)
@@ -104,8 +111,12 @@ def _route(route) -> None:
         route.fulfill(status=200, content_type=ctype, body=cpath.read_bytes())
         return
     # First run only: fetch the real module once and cache it to disk.
-    response = route.fetch()
-    body = response.body()
+    try:
+        response = route.fetch()
+        body = response.body()
+    except Exception:
+        route.abort()   # offline first run: AR page tolerates the missing CDN script
+        return
     ctype = response.headers.get("content-type", "application/javascript; charset=utf-8")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cpath.write_bytes(body)
@@ -113,24 +124,38 @@ def _route(route) -> None:
     route.fulfill(response=response)
 
 
-def _open_page(pw):
-    if not HTML_PATH.exists():
-        sys.exit(f"{HTML_PATH} not found -- run `python build_twin_html_fem.py` first.")
+# Console noise that only means "a CDN/camera resource did not load" -- tolerated on the
+# AR page (its engine script runs BEFORE Three.js and needs neither, so twinDebug
+# exists regardless). Anything else (SyntaxError, redeclaration, ...) is a real bug.
+_AR_TOLERATED = ("Failed to load resource", "net::ERR", "THREE is not defined",
+                 "THREE.OrbitControls", "jsQR", "getUserMedia")
+
+
+def _open_page(pw, html_path: Path = HTML_PATH, *, tolerate_load_errors: bool = False):
+    if not html_path.exists():
+        builder = "build_ar_twin.py" if html_path == AR_HTML_PATH else "build_twin_html_fem.py"
+        sys.exit(f"{html_path} not found -- run `python {builder}` first.")
     browser = pw.chromium.launch()
     page = browser.new_page()
     console_errors: list[str] = []
     page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
     page.on("pageerror", lambda e: console_errors.append(str(e)))
     page.route("**/*", _route)
-    page.goto(HTML_PATH.as_uri())
+    page.goto(html_path.as_uri())
     page.wait_for_function(
         "() => window.twinDebug && typeof window.twinDebug.traceRom === 'function'",
         timeout=15_000,
     )
+    if tolerate_load_errors:
+        skipped = [e for e in console_errors if any(t in e for t in _AR_TOLERATED)]
+        console_errors = [e for e in console_errors if e not in skipped]
+        if skipped:
+            print(f"  [{html_path.name}] tolerated {len(skipped)} resource-load console error(s) "
+                  f"(CDN/camera, engine unaffected)")
     if console_errors:
         browser.close()
         sys.exit(
-            "outputs/digital_twin_fem.html raised console errors on load -- "
+            f"outputs/{html_path.name} raised console errors on load -- "
             "fix the HTML before trusting any xval result:\n  " + "\n  ".join(console_errors)
         )
     return browser, page
@@ -308,41 +333,67 @@ def run_assertion_b(params: dict) -> tuple[bool, dict]:
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
+def _engine_block(path: Path) -> str:
+    txt = path.read_text(encoding="utf-8")
+    a, b = "// ==== TWIN_ENGINE_BEGIN ====", "// ==== TWIN_ENGINE_END ===="
+    assert txt.count(a) == 1 and txt.count(b) == 1, f"{path.name}: TWIN_ENGINE markers missing/duplicated"
+    return txt[txt.index(a): txt.index(b) + len(b)]
+
+
+def _run_page(pw, label: str, html_path: Path, *, tolerate: bool):
+    """Open one page, seed twin_core from ITS live PARAMS, run assertion A."""
+    browser, page = _open_page(pw, html_path, tolerate_load_errors=tolerate)
+    try:
+        params = page.evaluate("() => window.twinDebug.PARAMS")
+        T_amb_js = page.evaluate("() => window.twinDebug.T_AMB_JS")
+        twin = _twin_from_params(params, T_amb_js)
+        print(f"[{label}] Seeded from live page: T_amb_js={T_amb_js}  (params['rom']['T_amb']="
+              f"{params['rom']['T_amb']}, deliberately different -- see module docstring)")
+        print(f"[{label}] I_ref={twin.rom.I_ref}A  tau={twin.rom.tau:.2f}s  "
+              f"I_LEV_MIN={twin.lev.I_lev_min:.3f}A\n")
+
+        ok_a, rows = run_assertion_a(page, twin, twin.rom.I_ref, twin.lev.I_lev_min)
+
+        header = f"{'case':<24}{'samples':>8}  " + "  ".join(f"{q:>13}" for q in QUANTITIES)
+        print(header)
+        print("-" * len(header))
+        for r in rows:
+            line = f"{r['case']:<24}{r['n_samples']:>8}  " + "  ".join(
+                f"{r['diffs'][q]:>13.3e}" for q in QUANTITIES)
+            print(line + ("  PASS" if r["ok"] else "  FAIL"))
+        print()
+        substeps_ok = _check_public_step_substeps(twin)
+        print()
+    finally:
+        browser.close()
+    return params, T_amb_js, ok_a, substeps_ok
+
+
 def main() -> int:
     with sync_playwright() as pw:
-        browser, page = _open_page(pw)
-        try:
-            params = page.evaluate("() => window.twinDebug.PARAMS")
-            T_amb_js = page.evaluate("() => window.twinDebug.T_AMB_JS")
-
-            twin = _twin_from_params(params, T_amb_js)
-            print(f"Seeded from live page: T_amb_js={T_amb_js}  (params['rom']['T_amb']="
-                  f"{params['rom']['T_amb']}; may differ in a live-weather build -- see _twin_from_params)")
-            print(f"I_ref={twin.rom.I_ref}A  tau={twin.rom.tau:.2f}s  I_LEV_MIN={twin.lev.I_lev_min:.3f}A\n")
-
-            ok_a, rows = run_assertion_a(page, twin, twin.rom.I_ref, twin.lev.I_lev_min)
-
-            header = f"{'case':<24}{'samples':>8}  " + "  ".join(f"{q:>13}" for q in QUANTITIES)
-            print(header)
-            print("-" * len(header))
-            for r in rows:
-                line = f"{r['case']:<24}{r['n_samples']:>8}  " + "  ".join(
-                    f"{r['diffs'][q]:>13.3e}" for q in QUANTITIES)
-                print(line + ("  PASS" if r["ok"] else "  FAIL"))
-            print()
-
-            substeps_ok = _check_public_step_substeps(twin)
-            print()
-        finally:
-            browser.close()
+        print("=== digital_twin_fem.html ===")
+        params, T_amb_js, ok_a, substeps_ok = _run_page(pw, "FEM", HTML_PATH, tolerate=False)
+        print("=== ar_twin.html ===")
+        ar_params, ar_T_amb, ok_a_ar, _ = _run_page(pw, "AR", AR_HTML_PATH, tolerate=True)
 
     ok_b, b_info = run_assertion_b(params)
 
-    print(f"[A] Integrator match (tol={TOL_INTEGRATOR_ABS:g} abs): "
+    ar_params_same = ar_params == params and ar_T_amb == T_amb_js
+    ar_engine_same = _engine_block(AR_HTML_PATH) == _engine_block(HTML_PATH)
+
+    print(f"[A] FEM page integrator match (tol={TOL_INTEGRATOR_ABS:g} abs): "
           f"{'PASS' if ok_a else 'FAIL'}")
     if not ok_a:
         print("    INTEGRATOR MISMATCH -- twin_core.py has diverged from the baked JS engine "
               "(a real port bug, not a tolerance issue -- see module docstring).")
+    print(f"[A] AR  page integrator match (tol={TOL_INTEGRATOR_ABS:g} abs): "
+          f"{'PASS' if ok_a_ar else 'FAIL'}")
+    if not ok_a_ar:
+        print("    AR page diverges from twin_core.py -- rebuild: build_twin_html_fem.py then build_ar_twin.py.")
+    print(f"[AR-1] AR PARAMS + T_AMB_JS identical to FEM page: {'PASS' if ar_params_same else 'FAIL'}")
+    print(f"[AR-2] AR engine block text identical to FEM page: {'PASS' if ar_engine_same else 'FAIL'}")
+    if not (ar_params_same and ar_engine_same):
+        print("    ar_twin.html is STALE vs digital_twin_fem.html -- re-run python build_ar_twin.py")
 
     print(f"[B] Bake freshness (tol={TOL_STALE_REL:g} rel): "
           f"lumped worst={b_info['lumped_rel']:.3e} @ {b_info['lumped_worst_path']}  "
@@ -350,7 +401,7 @@ def main() -> int:
     if not ok_b:
         print("    outputs/digital_twin_fem.html is STALE -- re-run python build_twin_html_fem.py")
 
-    all_ok = ok_a and ok_b and substeps_ok
+    all_ok = ok_a and ok_a_ar and ar_params_same and ar_engine_same and ok_b and substeps_ok
     print(f"\n{'PASS' if all_ok else 'FAIL'}")
     return 0 if all_ok else 1
 

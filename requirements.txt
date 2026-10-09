@@ -7,6 +7,8 @@ matplotlib>=3.7
 # 3D visualisation + AR export (Phase 4-5)
 trimesh>=4.0          # GLB export (phase 4) — pip install trimesh
 qrcode>=7.4           # phase 5 QR code — gen_qr.py
+reportlab>=4.0        # gen_ar_marker.py: vector PDF of the AprilTag board
+pillow>=10.0          # gen_ar_marker.py: PNG preview (also pulled in by qrcode)
 
 # PyVista desktop 3D twin (extensions/digital_twin_pyvista.py) — OPTIONAL, ~400MB (VTK).
 # NOT required for the solvers, digital_twin.py (matplotlib), or
